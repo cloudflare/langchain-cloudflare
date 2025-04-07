@@ -10,7 +10,8 @@ pip install -U langchain-cloudflare
 
 And you should configure credentials by setting the following environment variables:
 
-* TODO: fill this out
+- CF_ACCOUNT_ID
+- CF_API_TOKEN
 
 ## Chat Models
 
