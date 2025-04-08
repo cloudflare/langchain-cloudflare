@@ -23,7 +23,6 @@ class TestChatCloudflareWorkersAI(ChatModelIntegrationTests):
         return {
             "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
             "temperature": 0.7,
-            "ai_gateway": "langchain-test"
         }
 
     @property
