@@ -18,7 +18,7 @@ And you should configure credentials by setting the following environment variab
 `ChatCloudflareWorkersAI` class exposes chat models from CloudflareWorkersAI.
 
 ```python
-from langchain_cloudflare import ChatCloudflareWorkersAI
+from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
 
 llm = ChatCloudflareWorkersAI()
 llm.invoke("Sing a ballad of LangChain.")
@@ -29,18 +29,18 @@ llm.invoke("Sing a ballad of LangChain.")
 `CloudflareWorkersAIEmbeddings` class exposes embeddings from CloudflareWorkersAI.
 
 ```python
-from langchain_cloudflare import CloudflareWorkersAIEmbeddings
+from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 
 embeddings = CloudflareWorkersAIEmbeddings()
 embeddings.embed_query("What is the meaning of life?")
 ```
 
-## LLMs
+## VectorStores
 `CloudflareWorkersAILLM` class exposes LLMs from CloudflareWorkersAI.
 
 ```python
-from langchain_cloudflare import CloudflareWorkersAILLM
+from langchain_cloudflare.vectorstores import CloudflareVectorize
 
-llm = CloudflareWorkersAILLM()
-llm.invoke("The meaning of life is")
+vst = CloudflareVectorize()
+vst.create_index(index_name="my-cool-vectorstore")
 ```
