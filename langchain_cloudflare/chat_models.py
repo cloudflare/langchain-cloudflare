@@ -73,7 +73,7 @@ from pydantic import (
 from typing_extensions import Self
 
 # from langchain_cloudflare.version import __version__
-__version__ = "0.0.1"
+__version__ = "0.1.1"
 
 
 class ChatCloudflareWorkersAI(BaseChatModel):

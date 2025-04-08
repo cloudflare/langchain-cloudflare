@@ -46,7 +46,7 @@ vst.create_index(index_name="my-cool-vectorstore")
 ```
 
 ## Release Notes
-v0.1.0 (2025-04-08)
+v0.1.1 (2025-04-08)
 
 ### Initial release
 - Added ChatCloudflareWorkersAI integration
