@@ -72,9 +72,6 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-# from langchain_cloudflare.version import __version__
-__version__ = "0.0.1"
-
 
 class ChatCloudflareWorkersAI(BaseChatModel):
     """`Cloudflare Workers AI` Chat large language models API.
@@ -161,7 +158,6 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     """Number of chat completions to generate for each prompt."""
     max_tokens: Optional[int] = None
     """Maximum number of tokens to generate."""
-    default_headers: Union[Mapping[str, str], None] = None
     default_query: Union[Mapping[str, object], None] = None
     # Configure a custom httpx client. See the
     # [httpx documentation](https://www.python-httpx.org/api/#client) for more details.
@@ -224,10 +220,6 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 "CF_ACCOUNT_ID environment variable."
             )
 
-        default_headers = {"User-Agent": f"langchain/{__version__}"} | dict(
-            self.default_headers or {}
-        )
-
         try:
             import httpx
 
@@ -249,7 +241,6 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     timeout=self.request_timeout,  # type: ignore
                     headers={
                         "Authorization": f"Bearer {self.api_token.get_secret_value()}",
-                        **default_headers,
                     },
                 )
 
@@ -259,7 +250,6 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     timeout=self.request_timeout,  # type: ignore
                     headers={
                         "Authorization": f"Bearer {self.api_token.get_secret_value()}",
-                        **default_headers,
                     },
                 )
 
