@@ -8,15 +8,15 @@ version = "0.1.0"
 description = "An integration package connecting CloudflareWorkersAI and LangChain"
 authors = []
 readme = "README.md"
-repository = "https://github.com/langchain-ai/langchain"
+repository = "https://github.com/cloudflare/langchain-cloudflare"
 license = "MIT"
 
 [tool.mypy]
 disallow_untyped_defs = "True"
 
 [tool.poetry.urls]
-"Source Code" = "https://github.com/langchain-ai/langchain/tree/master/libs/partners/cloudflare"
-"Release Notes" = "https://github.com/langchain-ai/langchain/releases?q=tag%3A%22cloudflare%3D%3D0%22&expanded=true"
+"Source Code" = "https://github.com/cloudflare/langchain-cloudflare"
+"Release Notes" = "https://github.com/cloudflare/langchain-cloudflare/blob/main/README.md"
 
 [tool.poetry.dependencies]
 python = ">=3.9,<4.0"
