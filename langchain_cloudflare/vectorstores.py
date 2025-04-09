@@ -96,16 +96,134 @@ class VectorizeRecord:
 
 # MARK: - CloudflareVectorize
 class CloudflareVectorize(VectorStore):
-    """Cloudflare Vectorize vector store.
+    """CloudflareVectorize vector store integration.
 
-    To use this, you need:
-    1. Cloudflare Account ID
-    2. Cloudflare API Token with appropriate permissions (Workers AI, Vectorize, D1).
-        Optional if using separate tokens for each service.
-    3. Index name (Optional)
-    4. D1 Database ID (Optional if using Vectorize only)
-    Reference: https://developers.cloudflare.com/api/resources/vectorize/
-    """
+    Setup:
+      Install ``langchain-cloudflare``.
+      
+      .. code-block:: bash
+
+        pip install -qU langchain-cloudflare
+
+    Key init args - indexing params:
+        embedding: Embeddings 
+            Embeddings instance for converting texts to vectors
+        index_name: str
+            Optional name for the default Vectorize index
+
+    Key init args - client params:
+        account_id: str
+            Cloudflare account ID
+        api_token: str
+            Optional global API token for all Cloudflare services
+        base_url: str
+            Base URL for Cloudflare API (default: "https://api.cloudflare.com/client/v4")
+        d1_database_id: str
+            Optional D1 database ID for storing text data
+
+    See full list of supported init args and their descriptions in the params section.
+
+    Instantiate:
+        .. code-block:: python
+    
+            from langchain_cloudflare.embeddings import (
+                CloudflareWorkersAIEmbeddings,
+            )
+            from langchain_cloudflare.vectorstores import (
+                CloudflareVectorize,
+            )
+            
+            MODEL_WORKERSAI = "@cf/baai/bge-large-en-v1.5"
+            
+            embedder = CloudflareWorkersAIEmbeddings(
+                account_id=cf_acct_id, api_token=cf_ai_token, model_name=MODEL_WORKERSAI
+            )
+    
+            cfVect = CloudflareVectorize(
+                embedding=embedder,
+                account_id=cf_acct_id,
+                d1_api_token=cf_d1_token,  # (Optional if using global token)
+                vectorize_api_token=cf_vectorize_token,  # (Optional if using global token)
+                d1_database_id=d1_database_id,  # (Optional if not using D1)
+            )
+
+    Add Documents:
+        .. code-block:: python
+        
+            from langchain_core.documents import Document
+
+            document_1 = Document(page_content="foo", metadata={"baz": "bar"})
+            document_2 = Document(page_content="bar", metadata={"foo": "baz"})
+            document_3 = Document(page_content="to be deleted")
+
+            documents = [document_1, document_2, document_3]
+            ids = ["1", "2", "3"]
+            vectorize_index_name = f"test-langchain-cloudflare"
+            
+            cfVect.create_index(
+                index_name=vectorize_index_name,
+                wait=True
+            )
+        
+            r = cfVect.add_documents(
+                index_name=vectorize_index_name,
+                documents=documents,
+                ids=ids
+            )
+
+    Update Documents:
+      .. code-block:: python
+      
+          updated_document = Document(
+                id="3",
+                page_content="This is an updated document!",
+            )
+            
+            r = cfVect.add_documents(
+                index_name=vectorize_index_name,
+                documents=[updated_document],
+                upsert=True
+            )
+      
+    Delete Documents:
+        .. code-block:: python
+        
+            r = cfVect.delete(
+                index_name=vectorize_index_name, 
+                ids=["3"]
+            )
+
+    Search:
+        .. code-block:: python
+      
+            results = cfVect.similarity_search(
+                index_name=vectorize_index_name,
+                query="foo",
+                return_metadata="all",
+                k=1
+            )
+
+    Search with score:
+        .. code-block:: python
+      
+            results = cfVect.similarity_search_with_score(
+                index_name=vectorize_index_name,
+                query="foo",
+                k=1,
+                return_metadata="all"
+            )
+
+    Use as Retriever:
+          .. code-block:: python
+    
+            retriever = cfVect.as_retriever(
+                search_type="similarity",
+                search_kwargs={"k": 1, "index_name": vectorize_index_name},
+            )
+            
+            r = retriever.get_relevant_documents("foo")
+
+    """  # noqa: E501
 
     def __init__(
         self,

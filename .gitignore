@@ -99,3 +99,4 @@ dmypy.json
 
 # Test sample data that shouldn't be published
 testdata/
+testing/
