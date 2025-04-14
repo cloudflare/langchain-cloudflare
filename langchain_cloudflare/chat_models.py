@@ -100,6 +100,26 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             Sampling temperature. Ranges from 0.0 to 1.0.
         max_tokens: Optional[int]
             Max number of tokens to generate.
+        top_p: Optional[float]
+            Adjusts the creativity of the AI's responses
+            by controlling how many possible words it considers.
+            Lower values make outputs more predictable;
+            higher values allow for more varied and creative responses.
+            Ranges from 0.0 to 2.0.
+        top_k: Optional[int]
+            Limits the AI to choose from the top 'k' most probable words.
+            Lower values make responses more focused;
+            higher values introduce more variety and potential surprises.
+            Ranges from 1 to 50
+        frequency_penalty: Optional[float]
+            Decreases the likelihood of the model repeating the same lines verbatim.
+            Ranges from 0.0 to 2.0.
+        presence_penalty: Optional[float]
+            Increases the likelihood of the model introducing new topics.
+            Ranges from 0.0 to 2.0.
+        repetition_penalty: Optional[float]
+            Penalty for repeated tokens.
+            Ranges from 0.0 to 2.0.
         model_kwargs: Dict[str, Any]
             Holds any model parameters valid for API call not
             explicitly specified.
@@ -126,6 +146,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     """Model name to use."""
     temperature: float = 0.7
     """What sampling temperature to use."""
+    top_p: Optional[float] = None
+    """Controls creativity."""
+    top_k: Optional[int] = None
+    """Controls diversity by limiting to top k tokens, higher values = more diverse."""
+    frequency_penalty: Optional[float] = None
+    """Penalizes repeated lines verbatim. Range from 0.0 to 2.0."""
+    presence_penalty: Optional[float] = None
+    """Penalizes repeated topics. Range from 0.0 to 2.0."""
+    repetition_penalty: Optional[float] = None
+    """Penalty for repeated tokens. Range from 0.0 to 2.0."""
     stop: Optional[Union[List[str], str]] = Field(default=None, alias="stop_sequences")
     """Default stop sequences."""
     model_kwargs: Dict[str, Any] = Field(default_factory=dict)
@@ -865,6 +895,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         }
         if self.max_tokens is not None:
             params["max_tokens"] = self.max_tokens
+        if self.top_p is not None:
+            params["top_p"] = self.top_p
+        if self.top_k is not None:
+            params["top_k"] = self.top_k
+        if self.repetition_penalty is not None:
+            params["repetition_penalty"] = self.repetition_penalty
+        if self.frequency_penalty is not None:
+            params["frequency_penalty"] = self.frequency_penalty
+        if self.presence_penalty is not None:
+            params["presence_penalty"] = self.presence_penalty
         return params
 
     def _create_chat_result(self, response: Dict[str, Any]) -> ChatResult:

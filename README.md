@@ -67,3 +67,7 @@ v0.1.3 (2025-04-10)
 
 - Added AI Gateway support for CloudflareWorkersAIEmbeddings
 - Added Async support for CloudflareWorkersAIEmbeddings
+
+v0.1.4 (2025-04-14)
+
+- Added support for additional model parameters as explicit class attributes for ChatCloudflareWorkersAI
