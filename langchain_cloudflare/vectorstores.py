@@ -15,7 +15,6 @@ from typing import (
     Sequence,
     Type,
     TypeVar,
-    Union,
     cast,
 )
 
@@ -23,7 +22,7 @@ import requests
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from typing_extensions import TypedDict
 
 MAX_INSERT_SIZE = 5000
@@ -265,18 +264,23 @@ class CloudflareVectorize(VectorStore):
         self.index_name = index_name
         self.default_wait_seconds = kwargs.get("default_wait_seconds", DEFAULT_WAIT_SECONDS)
 
-        # Use the provided API token or get from class level
-        self.api_token = api_token
-        self.vectorize_api_token = kwargs.get("vectorize_api_token", None)
-        self.d1_api_token = kwargs.get("d1_api_token", None)
+        # Use the provided API token or get from class level - convert to SecretStr
+        self.api_token = SecretStr(api_token) if api_token else None
+        
+        # Extract and convert token kwargs to SecretStr
+        vectorize_token = kwargs.get("vectorize_api_token")
+        self.vectorize_api_token = SecretStr(vectorize_token) if vectorize_token else None
+        
+        d1_token = kwargs.get("d1_api_token")
+        self.d1_api_token = SecretStr(d1_token) if d1_token else None
 
-        # Set headers for Vectorize and D1
+        # Set headers for Vectorize and D1 using get_secret_value() for the tokens
         self._headers = {
-            "Authorization": f"Bearer {self.vectorize_api_token or self.api_token}",
+            "Authorization": f"Bearer {self.vectorize_api_token.get_secret_value() if self.vectorize_api_token else self.api_token.get_secret_value() if self.api_token else ''}",
             "Content-Type": "application/json",
         }
         self.d1_headers = {
-            "Authorization": f"Bearer {self.d1_api_token or self.api_token}",
+            "Authorization": f"Bearer {self.d1_api_token.get_secret_value() if self.d1_api_token else self.api_token.get_secret_value() if self.api_token else ''}",
             "Content-Type": "application/json",
         }
 
@@ -2397,9 +2401,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2482,9 +2487,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2539,9 +2545,10 @@ class CloudflareVectorize(VectorStore):
         """
         # Use provided token or get class level token
         token = self.api_token or self.vectorize_api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2571,9 +2578,10 @@ class CloudflareVectorize(VectorStore):
         """
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2622,9 +2630,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2671,9 +2680,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -3129,3 +3139,4 @@ class CloudflareVectorize(VectorStore):
             include_d1=include_d1,
             **kwargs,
         )
+
