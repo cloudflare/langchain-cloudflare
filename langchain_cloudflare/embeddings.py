@@ -116,7 +116,9 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
                     f"{self.account_id}/{self.ai_gateway}/workers-ai/run/{self.model_name}"
                 )
         else:
-            self._inference_url = f"{self.api_base_url}/{self.account_id}/ai/run/{self.model_name}"
+            self._inference_url = (
+                f"{self.api_base_url}/{self.account_id}/ai/run/{self.model_name}"
+            )
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 

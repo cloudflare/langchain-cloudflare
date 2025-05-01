@@ -22,12 +22,13 @@ import requests
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
+from pydantic import SecretStr
 from typing_extensions import TypedDict
 
 MAX_INSERT_SIZE = 5000
 DEFAULT_WAIT_SECONDS = 5
 DEFAULT_TOP_K = 20
-DEFAULT_TOP_K_WITH_MD_VALUES = 20
+MAX_TOP_K = 100
 DEFAULT_DIMENSIONS = 1024
 DEFAULT_METRIC = "cosine"
 
@@ -261,20 +262,37 @@ class CloudflareVectorize(VectorStore):
         self.d1_base_url = base_url
         self.d1_database_id = d1_database_id
         self.index_name = index_name
-        self.default_wait_seconds = kwargs.get("default_wait_seconds", DEFAULT_WAIT_SECONDS)
+        self.default_wait_seconds = (
+            kwargs.get("default_wait_seconds", DEFAULT_WAIT_SECONDS)
+        )
 
-        # Use the provided API token or get from class level
-        self.api_token = api_token
-        self.vectorize_api_token = kwargs.get("vectorize_api_token", None)
-        self.d1_api_token = kwargs.get("d1_api_token", None)
+        # Use the provided API token or get from class level - convert to SecretStr
+        self.api_token = SecretStr(api_token) if api_token else None
+        
+        # Extract and convert token kwargs to SecretStr
+        vectorize_token = kwargs.get("vectorize_api_token")
+        self.vectorize_api_token = (
+            SecretStr(vectorize_token) if vectorize_token else None
+        )
+        
+        d1_token = kwargs.get("d1_api_token")
+        self.d1_api_token = SecretStr(d1_token) if d1_token else None
 
-        # Set headers for Vectorize and D1
+        # Set headers for Vectorize and D1 using get_secret_value() for the tokens
         self._headers = {
-            "Authorization": f"Bearer {self.vectorize_api_token or self.api_token}",
+            "Authorization": (
+                f"""Bearer {self.vectorize_api_token.get_secret_value() 
+                if self.vectorize_api_token 
+                else self.api_token.get_secret_value() if self.api_token else ''}"""
+            ),
             "Content-Type": "application/json",
         }
         self.d1_headers = {
-            "Authorization": f"Bearer {self.d1_api_token or self.api_token}",
+            "Authorization": (
+                f"""Bearer {self.d1_api_token.get_secret_value() 
+                if self.d1_api_token 
+                else self.api_token.get_secret_value() if self.api_token else ''}"""
+            ),
             "Content-Type": "application/json",
         }
 
@@ -381,12 +399,13 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If index_name is not provided
         """
+        top_k = DEFAULT_TOP_K if return_metadata == "all" or return_values else k
+        top_k = min(top_k, MAX_TOP_K)
+
         # Prepare search request
         search_request = {
             "vector": query_embedding,
-            "topK": min(k, DEFAULT_TOP_K_WITH_MD_VALUES)
-            if return_metadata != "none" or return_values
-            else k,
+            "topK": top_k
         }
 
         if namespace:
@@ -620,8 +639,11 @@ class CloudflareVectorize(VectorStore):
             Response data with query results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
 
         table_schema = f"""
         CREATE TABLE IF NOT EXISTS '{table_name}' (
@@ -653,8 +675,11 @@ class CloudflareVectorize(VectorStore):
             Response data with query results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
 
         table_schema = f"""
         CREATE TABLE IF NOT EXISTS '{table_name}' (
@@ -691,8 +716,12 @@ class CloudflareVectorize(VectorStore):
             Response data with query results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
         drop_query = f"DROP TABLE IF EXISTS '{table_name}'"
 
         filtered_kwargs = self._filter_request_kwargs(kwargs)
@@ -717,7 +746,14 @@ class CloudflareVectorize(VectorStore):
 
         Returns:
             Response data with query results
+
+        Raises:
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
         import httpx
 
         drop_query = f"DROP TABLE IF EXISTS '{table_name}'"
@@ -757,8 +793,12 @@ class CloudflareVectorize(VectorStore):
             Response data with query results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
         if not data:
             return {"success": True, "changes": 0}
 
@@ -802,6 +842,9 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If index_name is not provided
         """
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
         if not data:
             return {"success": True, "changes": 0}
 
@@ -840,8 +883,12 @@ class CloudflareVectorize(VectorStore):
             Response data with query results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
         # query D1 for raw results
         placeholders = ",".join(
             ["?"] * len(ids)
@@ -885,8 +932,11 @@ class CloudflareVectorize(VectorStore):
             Response data with query results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
 
         # query D1 for raw results
         placeholders = ",".join(
@@ -923,6 +973,144 @@ class CloudflareVectorize(VectorStore):
 
         return d1_results_records
 
+
+    # MARK: - d1_metadata_query
+    def d1_metadata_query(
+            self,
+            table_name: str,
+            metadata_filters: Dict[str, List[str]],
+            operation: Optional[str] = "AND",
+            **kwargs: Any
+    ):
+        """Retrieve text data from a D1 database table with a metadata query.
+
+        Args:
+            table_name: Name of the table to retrieve data from
+            metadata_filters: Dictionary of filters to apply to the query
+            operation: Operation to combine query conditions. "AND" (Default) or "OR"
+            **kwargs: Additional keyword arguments to pass to the requests call
+
+        Returns:
+            Response data with query results
+
+        Raises:
+            ValueError: If table_name is not provided
+        """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
+        clauses: list[str] = []
+        params: list = []
+
+        for key, values in metadata_filters.items():
+            if not values:
+                continue
+
+            in_placeholders = ",".join("?" * len(values))
+
+            clauses.append(
+                f"""EXISTS (
+                          SELECT 1
+                          FROM   json_each('{table_name}'.metadata, ?)
+                          WHERE  json_each.value IN ({in_placeholders})
+                        )"""
+            )
+
+            params.append(f"$.{key}")
+            params.extend(values)
+
+        where_clause = f" {operation} ".join(clauses)
+        sql = f"SELECT * FROM '{table_name}' WHERE {where_clause}"
+
+        filtered_kwargs = self._filter_request_kwargs(kwargs)
+        response = requests.post(
+            self._get_d1_url(f"database/{self.d1_database_id}/query"),
+            headers=self.d1_headers,
+            json={"sql": sql, "params": params},
+            **filtered_kwargs,
+        )
+
+        response.raise_for_status()
+        response_data = response.json()
+        d1_results = response_data.get("result", {})
+        if len(d1_results) == 0:
+            return []
+
+        d1_results_records = d1_results[0].get("results", [])
+        return d1_results_records
+
+
+    # MARK: - ad1_metadata_query
+    async def ad1_metadata_query(
+            self,
+            table_name: str,
+            metadata_filters: Dict[str, List[str]],
+            operation: Optional[str] = "AND",
+            **kwargs: Any
+    ):
+        """Retrieve text data from a D1 database table with a metadata query.
+
+        Args:
+            table_name: Name of the table to retrieve data from
+            metadata_filters: Dictionary of filters to apply to the query
+            operation: Operation to combine query conditions. "AND" (Default) or "OR"
+            **kwargs: Additional keyword arguments to pass to the requests call
+
+        Returns:
+            Response data with query results
+
+        Raises:
+            ValueError: If table_name is not provided
+        """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
+        clauses: list[str] = []
+        params: list = []
+
+        for key, values in metadata_filters.items():
+            if not values:
+                continue
+
+            in_placeholders = ",".join("?" * len(values))
+
+            clauses.append(
+                f"""EXISTS (
+                          SELECT 1
+                          FROM   json_each('{table_name}'.metadata, ?)
+                          WHERE  json_each.value IN ({in_placeholders})
+                        )"""
+            )
+
+            params.append(f"$.{key}")
+            params.extend(values)
+
+        where_clause = f" {operation} ".join(clauses)
+        sql = f"SELECT * FROM '{table_name}' WHERE {where_clause}"
+
+        import httpx
+
+        filtered_kwargs = self._filter_request_kwargs(kwargs)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                self._get_d1_url(f"database/{self.d1_database_id}/query"),
+                headers=self.d1_headers,
+                json={"sql": sql, "params": params},
+                **filtered_kwargs,
+            )
+            response.raise_for_status()
+            response_data = response.json()
+
+        d1_results = response_data.get("result", {})
+        if len(d1_results) == 0:
+            return []
+
+        d1_results_records = d1_results[0].get("results", [])
+
+        return d1_results_records
+
     # MARK: - d1_delete
     def d1_delete(
         self,
@@ -942,6 +1130,10 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If index_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
         # query D1 for raw results
         placeholders = ",".join(
             ["?"] * len(ids)
@@ -976,8 +1168,12 @@ class CloudflareVectorize(VectorStore):
             Response data with deletion results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
+
+        if not table_name:
+            raise ValueError("table_name must be provided")
+
         # query D1 for raw results
         placeholders = ",".join(
             ["?"] * len(ids)
@@ -2217,9 +2413,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2302,9 +2499,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2359,9 +2557,10 @@ class CloudflareVectorize(VectorStore):
         """
         # Use provided token or get class level token
         token = self.api_token or self.vectorize_api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2391,9 +2590,10 @@ class CloudflareVectorize(VectorStore):
         """
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2442,9 +2642,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2491,9 +2692,10 @@ class CloudflareVectorize(VectorStore):
 
         # Use provided token or get class level token
         token = self.vectorize_api_token or self.api_token
+        token_value = token.get_secret_value() if token else ""
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {token_value}",
             "Content-Type": "application/json",
         }
 
@@ -2949,3 +3151,4 @@ class CloudflareVectorize(VectorStore):
             include_d1=include_d1,
             **kwargs,
         )
+

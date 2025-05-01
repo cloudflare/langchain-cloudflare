@@ -71,3 +71,8 @@ v0.1.3 (2025-04-10)
 v0.1.4 (2025-04-14)
 
 - Added support for additional model parameters as explicit class attributes for ChatCloudflareWorkersAI
+
+v0.1.6 (2025-05-01)
+
+- Added Standalone D1 Metadata Filtering Methods
+- Update Docs for more clarity around D1 Table/Vectorize Index Names
