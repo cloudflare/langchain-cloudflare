@@ -22,7 +22,7 @@ import requests
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
-from pydantic import BaseModel, SecretStr
+from pydantic import SecretStr
 from typing_extensions import TypedDict
 
 MAX_INSERT_SIZE = 5000
@@ -262,25 +262,37 @@ class CloudflareVectorize(VectorStore):
         self.d1_base_url = base_url
         self.d1_database_id = d1_database_id
         self.index_name = index_name
-        self.default_wait_seconds = kwargs.get("default_wait_seconds", DEFAULT_WAIT_SECONDS)
+        self.default_wait_seconds = (
+            kwargs.get("default_wait_seconds", DEFAULT_WAIT_SECONDS)
+        )
 
         # Use the provided API token or get from class level - convert to SecretStr
         self.api_token = SecretStr(api_token) if api_token else None
         
         # Extract and convert token kwargs to SecretStr
         vectorize_token = kwargs.get("vectorize_api_token")
-        self.vectorize_api_token = SecretStr(vectorize_token) if vectorize_token else None
+        self.vectorize_api_token = (
+            SecretStr(vectorize_token) if vectorize_token else None
+        )
         
         d1_token = kwargs.get("d1_api_token")
         self.d1_api_token = SecretStr(d1_token) if d1_token else None
 
         # Set headers for Vectorize and D1 using get_secret_value() for the tokens
         self._headers = {
-            "Authorization": f"Bearer {self.vectorize_api_token.get_secret_value() if self.vectorize_api_token else self.api_token.get_secret_value() if self.api_token else ''}",
+            "Authorization": (
+                f"""Bearer {self.vectorize_api_token.get_secret_value() 
+                if self.vectorize_api_token 
+                else self.api_token.get_secret_value() if self.api_token else ''}"""
+            ),
             "Content-Type": "application/json",
         }
         self.d1_headers = {
-            "Authorization": f"Bearer {self.d1_api_token.get_secret_value() if self.d1_api_token else self.api_token.get_secret_value() if self.api_token else ''}",
+            "Authorization": (
+                f"""Bearer {self.d1_api_token.get_secret_value() 
+                if self.d1_api_token 
+                else self.api_token.get_secret_value() if self.api_token else ''}"""
+            ),
             "Content-Type": "application/json",
         }
 
@@ -975,7 +987,7 @@ class CloudflareVectorize(VectorStore):
         Args:
             table_name: Name of the table to retrieve data from
             metadata_filters: Dictionary of filters to apply to the query
-            operation: Operation to combine query conditions. Either "AND" (Default) or "OR"
+            operation: Operation to combine query conditions. "AND" (Default) or "OR"
             **kwargs: Additional keyword arguments to pass to the requests call
 
         Returns:
@@ -1042,7 +1054,7 @@ class CloudflareVectorize(VectorStore):
         Args:
             table_name: Name of the table to retrieve data from
             metadata_filters: Dictionary of filters to apply to the query
-            operation: Operation to combine query conditions. Either "AND" (Default) or "OR"
+            operation: Operation to combine query conditions. "AND" (Default) or "OR"
             **kwargs: Additional keyword arguments to pass to the requests call
 
         Returns:
