@@ -101,13 +101,13 @@ class CloudflareVectorize(VectorStore):
 
     Setup:
       Install ``langchain-cloudflare``.
-      
+
       .. code-block:: bash
 
         pip install -qU langchain-cloudflare
 
     Key init args - indexing params:
-        embedding: Embeddings 
+        embedding: Embeddings
             Embeddings instance for converting texts to vectors
         index_name: str
             Optional name for the default Vectorize index
@@ -126,20 +126,20 @@ class CloudflareVectorize(VectorStore):
 
     Instantiate:
         .. code-block:: python
-    
+
             from langchain_cloudflare.embeddings import (
                 CloudflareWorkersAIEmbeddings,
             )
             from langchain_cloudflare.vectorstores import (
                 CloudflareVectorize,
             )
-            
+
             MODEL_WORKERSAI = "@cf/baai/bge-large-en-v1.5"
-            
+
             embedder = CloudflareWorkersAIEmbeddings(
                 account_id=cf_acct_id, api_token=cf_ai_token, model_name=MODEL_WORKERSAI
             )
-    
+
             cfVect = CloudflareVectorize(
                 embedding=embedder,
                 account_id=cf_acct_id,
@@ -150,7 +150,7 @@ class CloudflareVectorize(VectorStore):
 
     Add Documents:
         .. code-block:: python
-        
+
             from langchain_core.documents import Document
 
             document_1 = Document(page_content="foo", metadata={"baz": "bar"})
@@ -160,12 +160,12 @@ class CloudflareVectorize(VectorStore):
             documents = [document_1, document_2, document_3]
             ids = ["1", "2", "3"]
             vectorize_index_name = f"test-langchain-cloudflare"
-            
+
             cfVect.create_index(
                 index_name=vectorize_index_name,
                 wait=True
             )
-        
+
             r = cfVect.add_documents(
                 index_name=vectorize_index_name,
                 documents=documents,
@@ -174,29 +174,29 @@ class CloudflareVectorize(VectorStore):
 
     Update Documents:
       .. code-block:: python
-      
+
           updated_document = Document(
                 id="3",
                 page_content="This is an updated document!",
             )
-            
+
             r = cfVect.add_documents(
                 index_name=vectorize_index_name,
                 documents=[updated_document],
                 upsert=True
             )
-      
+
     Delete Documents:
         .. code-block:: python
-        
+
             r = cfVect.delete(
-                index_name=vectorize_index_name, 
+                index_name=vectorize_index_name,
                 ids=["3"]
             )
 
     Search:
         .. code-block:: python
-      
+
             results = cfVect.similarity_search(
                 index_name=vectorize_index_name,
                 query="foo",
@@ -206,7 +206,7 @@ class CloudflareVectorize(VectorStore):
 
     Search with score:
         .. code-block:: python
-      
+
             results = cfVect.similarity_search_with_score(
                 index_name=vectorize_index_name,
                 query="foo",
@@ -216,12 +216,12 @@ class CloudflareVectorize(VectorStore):
 
     Use as Retriever:
           .. code-block:: python
-    
+
             retriever = cfVect.as_retriever(
                 search_type="similarity",
                 search_kwargs={"k": 1, "index_name": vectorize_index_name},
             )
-            
+
             r = retriever.get_relevant_documents("foo")
 
     """  # noqa: E501
@@ -262,36 +262,44 @@ class CloudflareVectorize(VectorStore):
         self.d1_base_url = base_url
         self.d1_database_id = d1_database_id
         self.index_name = index_name
-        self.default_wait_seconds = (
-            kwargs.get("default_wait_seconds", DEFAULT_WAIT_SECONDS)
+        self.default_wait_seconds = kwargs.get(
+            "default_wait_seconds", DEFAULT_WAIT_SECONDS
         )
 
         # Use the provided API token or get from class level - convert to SecretStr
         self.api_token = SecretStr(api_token) if api_token else None
-        
+
         # Extract and convert token kwargs to SecretStr
         vectorize_token = kwargs.get("vectorize_api_token")
         self.vectorize_api_token = (
             SecretStr(vectorize_token) if vectorize_token else None
         )
-        
+
         d1_token = kwargs.get("d1_api_token")
         self.d1_api_token = SecretStr(d1_token) if d1_token else None
 
         # Set headers for Vectorize and D1 using get_secret_value() for the tokens
         self._headers = {
             "Authorization": (
-                f"""Bearer {self.vectorize_api_token.get_secret_value() 
-                if self.vectorize_api_token 
-                else self.api_token.get_secret_value() if self.api_token else ''}"""
+                f"""Bearer {
+                    self.vectorize_api_token.get_secret_value()
+                    if self.vectorize_api_token
+                    else self.api_token.get_secret_value()
+                    if self.api_token
+                    else ""
+                }"""
             ),
             "Content-Type": "application/json",
         }
         self.d1_headers = {
             "Authorization": (
-                f"""Bearer {self.d1_api_token.get_secret_value() 
-                if self.d1_api_token 
-                else self.api_token.get_secret_value() if self.api_token else ''}"""
+                f"""Bearer {
+                    self.d1_api_token.get_secret_value()
+                    if self.d1_api_token
+                    else self.api_token.get_secret_value()
+                    if self.api_token
+                    else ""
+                }"""
             ),
             "Content-Type": "application/json",
         }
@@ -403,10 +411,7 @@ class CloudflareVectorize(VectorStore):
         top_k = min(top_k, MAX_TOP_K)
 
         # Prepare search request
-        search_request = {
-            "vector": query_embedding,
-            "topK": top_k
-        }
+        search_request = {"vector": query_embedding, "topK": top_k}
 
         if namespace:
             search_request["namespace"] = namespace
@@ -973,15 +978,14 @@ class CloudflareVectorize(VectorStore):
 
         return d1_results_records
 
-
     # MARK: - d1_metadata_query
     def d1_metadata_query(
-            self,
-            table_name: str,
-            metadata_filters: Dict[str, List[str]],
-            operation: Optional[str] = "AND",
-            **kwargs: Any
-    ):
+        self,
+        table_name: str,
+        metadata_filters: Dict[str, List[str]],
+        operation: Optional[str] = "AND",
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
         """Retrieve text data from a D1 database table with a metadata query.
 
         Args:
@@ -1040,15 +1044,14 @@ class CloudflareVectorize(VectorStore):
         d1_results_records = d1_results[0].get("results", [])
         return d1_results_records
 
-
     # MARK: - ad1_metadata_query
     async def ad1_metadata_query(
-            self,
-            table_name: str,
-            metadata_filters: Dict[str, List[str]],
-            operation: Optional[str] = "AND",
-            **kwargs: Any
-    ):
+        self,
+        table_name: str,
+        metadata_filters: Dict[str, List[str]],
+        operation: Optional[str] = "AND",
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
         """Retrieve text data from a D1 database table with a metadata query.
 
         Args:

@@ -1,8 +1,8 @@
 """Test chat model integration using standard integration tests."""
 
 from typing import Type
-import pytest
 
+import pytest
 from langchain_core.language_models import BaseChatModel
 from langchain_tests.integration_tests.chat_models import ChatModelIntegrationTests
 

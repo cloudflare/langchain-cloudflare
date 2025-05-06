@@ -112,9 +112,9 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         if self.ai_gateway:
             self._inference_url = (
-                    f"https://gateway.ai.cloudflare.com/v1/"
-                    f"{self.account_id}/{self.ai_gateway}/workers-ai/run/{self.model_name}"
-                )
+                f"https://gateway.ai.cloudflare.com/v1/"
+                f"{self.account_id}/{self.ai_gateway}/workers-ai/run/{self.model_name}"
+            )
         else:
             self._inference_url = (
                 f"{self.api_base_url}/{self.account_id}/ai/run/{self.model_name}"
@@ -135,7 +135,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             texts = [text.replace("\n", " ") for text in texts]
 
         batches = [
-            texts[i: i + self.batch_size]
+            texts[i : i + self.batch_size]
             for i in range(0, len(texts), self.batch_size)
         ]
         embeddings = []
@@ -166,7 +166,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             texts = [text.replace("\n", " ") for text in texts]
 
         batches = [
-            texts[i: i + self.batch_size]
+            texts[i : i + self.batch_size]
             for i in range(0, len(texts), self.batch_size)
         ]
 
