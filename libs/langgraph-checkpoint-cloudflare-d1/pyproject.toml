@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "langgraph-checkpoint-cloudflare-d1"
-version = "0.1.1"
+version = "0.1.2"
 description = "LangGraph Checkpoint implementation for Cloudflare D1"
 authors = []
 readme = "README.md"
@@ -45,3 +45,7 @@ disallow_incomplete_defs = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = "langgraph.*"
+ignore_missing_imports = true

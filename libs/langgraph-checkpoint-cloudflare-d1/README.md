@@ -1,8 +1,16 @@
-# Usage
+# langgraph-checkpoint-cloudflare-d1
+
+## Installation
+
+```bash
+pip install -U langgraph-checkpoint-cloudflare-d1
+```
+
+## Usage
 
 This package provides both synchronous and asynchronous interfaces for saving and retrieving LangGraph checkpoints in Cloudflare D1.
 
-# Synchronous
+### Synchronous
 
 ```python
 from langgraph_checkpoint_cloudflare_d1 import CloudflareD1Saver
@@ -62,21 +70,8 @@ with CloudflareD1Saver(
     checkpoints = list(checkpointer.list(read_config))
 ```
 
-You can also use a connection string to initialize the saver:
 
-```python
-from langgraph_checkpoint_cloudflare_d1 import CloudflareD1Saver
-
-# Connection string format: "account_id:database_id:api_token"
-conn_string = "your-account-id:your-database-id:your-api-token" 
-
-# Use the saver with a connection string
-with CloudflareD1Saver.from_conn_string(conn_string) as checkpointer:
-    # Your code here
-    checkpointer.setup()
-    # ...
-
-# Async
+### Async
 
 ```python
 from langgraph_checkpoint_cloudflare_d1 import AsyncCloudflareD1Saver
@@ -142,28 +137,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-You can also use a connection string to initialize the async saver:
-
-```python
-from langgraph_checkpoint_cloudflare_d1 import AsyncCloudflareD1Saver
-import asyncio
-
-async def main():
-    # Connection string format: "account_id:database_id:api_token"
-    conn_string = "your-account-id:your-database-id:your-api-token" 
-    
-    # Use the async saver with a connection string
-    async with await AsyncCloudflareD1Saver.from_conn_string(conn_string) as checkpointer:
-        # Your code here
-        # Setup is automatic when using context manager
-        # ...
-
-# For local execution
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-## Integration with LangGraph
+### Integration with LangGraph
 
 To use this checkpoint saver with LangGraph, you can pass it when compiling your graph:
 
@@ -192,3 +166,9 @@ graph = builder.compile(checkpointer=checkpointer)
 config = {"configurable": {"thread_id": "my-thread-1"}}
 result = graph.invoke(3, config)
 ```
+
+## Release Notes
+
+v0.1.2 (2025-05-11)
+
+- Added support for environmental variables
