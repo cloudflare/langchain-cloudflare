@@ -17,6 +17,7 @@ from typing import (
 
 import requests
 from langchain_core.runnables import RunnableConfig
+from langchain_core.utils import from_env, secret_from_env
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
     BaseCheckpointSaver,
@@ -43,9 +44,12 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
     database service through their REST API.
 
     Args:
-        account_id (str): Your Cloudflare account ID.
-        database_id (str): The ID of your D1 database.
-        api_token (str): Your Cloudflare API token with D1 permissions.
+        account_id (str): Your Cloudflare account ID. If not provided, will be read from
+            the CF_ACCOUNT_ID environment variable.
+        database_id (str): The ID of your D1 database. If not provided, will be read from
+            the CF_D1_DATABASE_ID environment variable.
+        api_token (str): Your Cloudflare API token with D1 permissions. If not provided, will be read from
+            the CF_D1_API_TOKEN environment variable.
         serde (Optional[SerializerProtocol]): The serializer to use for serializing and deserializing checkpoints.
 
     Examples:
@@ -56,7 +60,9 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         >>> builder.add_node("add_one", lambda x: x + 1)
         >>> builder.set_entry_point("add_one")
         >>> builder.set_finish_point("add_one")
-        >>> # Create a new CloudflareD1Saver instance
+        >>> # Create a new CloudflareD1Saver instance using environment variables
+        >>> checkpointer = CloudflareD1Saver()
+        >>> # Or with explicit credentials
         >>> checkpointer = CloudflareD1Saver(
         ...     account_id="account_id",
         ...     database_id="database_id",
@@ -73,17 +79,50 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
 
     def __init__(
         self,
-        account_id: str,
-        database_id: str,
-        api_token: str,
+        account_id: Optional[str] = None,
+        database_id: Optional[str] = None,
+        api_token: Optional[str] = None,
         *,
         serde: Optional[SerializerProtocol] = None,
     ) -> None:
         super().__init__(serde=serde)
         self.jsonplus_serde = JsonPlusSerializer()
+        
+        # Check environment variables if parameters not provided
+        if account_id is None:
+            account_id = from_env("CF_ACCOUNT_ID", "")
         self.account_id = account_id
+        
+        if database_id is None:
+            database_id = from_env("CF_D1_DATABASE_ID", "")
         self.database_id = database_id
+        
+        if api_token is None:
+            api_token = from_env("CF_D1_API_TOKEN", "")
         self.api_token = api_token
+        
+        # Validate credentials
+        if not self.account_id:
+            raise ValueError(
+                "A Cloudflare account ID must be provided either through "
+                "the account_id parameter or "
+                "CF_ACCOUNT_ID environment variable."
+            )
+            
+        if not self.database_id:
+            raise ValueError(
+                "A Cloudflare D1 database ID must be provided either through "
+                "the database_id parameter or "
+                "CF_D1_DATABASE_ID environment variable."
+            )
+            
+        if not self.api_token:
+            raise ValueError(
+                "A Cloudflare API token must be provided either through "
+                "the api_token parameter or "
+                "CF_D1_API_TOKEN environment variable."
+            )
+            
         self.base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}"
         self.headers = {
             "Authorization": f"Bearer {api_token}",

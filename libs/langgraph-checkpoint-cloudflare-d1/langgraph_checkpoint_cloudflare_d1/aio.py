@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar, cast
 
 import httpx
 from langchain_core.runnables import RunnableConfig
+from langchain_core.utils import from_env, secret_from_env
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
     BaseCheckpointSaver,
@@ -42,9 +43,12 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
     offers better performance for I/O-bound operations compared to synchronous alternatives.
 
     Attributes:
-        account_id (str): Your Cloudflare account ID.
-        database_id (str): The ID of your D1 database.
-        api_token (str): Your Cloudflare API token with D1 permissions.
+        account_id (str): Your Cloudflare account ID. If not provided, will be read from
+            the CF_ACCOUNT_ID environment variable.
+        database_id (str): The ID of your D1 database. If not provided, will be read from
+            the CF_D1_DATABASE_ID environment variable.
+        api_token (str): Your Cloudflare API token with D1 permissions. If not provided, will be read from
+            the CF_D1_API_TOKEN environment variable.
         serde (SerializerProtocol): The serializer used for encoding/decoding checkpoints.
 
     Note:
@@ -65,6 +69,12 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
         >>>     builder.add_node("add_one", lambda x: x + 1)
         >>>     builder.set_entry_point("add_one")
         >>>     builder.set_finish_point("add_one")
+        >>>     # Using environment variables
+        >>>     async with AsyncCloudflareD1Saver.from_connection_params() as memory:
+        >>>         graph = builder.compile(checkpointer=memory)
+        >>>         coro = graph.ainvoke(1, {"configurable": {"thread_id": "thread-1"}})
+        >>>         print(await asyncio.gather(coro))
+        >>>     # Or with explicit credentials
         >>>     async with AsyncCloudflareD1Saver.from_connection_params(
         >>>         account_id="account_id",
         >>>         database_id="database_id",
@@ -86,17 +96,50 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
 
     def __init__(
         self,
-        account_id: str,
-        database_id: str,
-        api_token: str,
+        account_id: Optional[str] = None,
+        database_id: Optional[str] = None,
+        api_token: Optional[str] = None,
         *,
         serde: Optional[SerializerProtocol] = None,
     ):
         super().__init__(serde=serde)
         self.jsonplus_serde = JsonPlusSerializer()
+        
+        # Check environment variables if parameters not provided
+        if account_id is None:
+            account_id = from_env("CF_ACCOUNT_ID", "")
         self.account_id = account_id
+        
+        if database_id is None:
+            database_id = from_env("CF_D1_DATABASE_ID", "")
         self.database_id = database_id
+        
+        if api_token is None:
+            api_token = from_env("CF_D1_API_TOKEN", "")
         self.api_token = api_token
+        
+        # Validate credentials
+        if not self.account_id:
+            raise ValueError(
+                "A Cloudflare account ID must be provided either through "
+                "the account_id parameter or "
+                "CF_ACCOUNT_ID environment variable."
+            )
+            
+        if not self.database_id:
+            raise ValueError(
+                "A Cloudflare D1 database ID must be provided either through "
+                "the database_id parameter or "
+                "CF_D1_DATABASE_ID environment variable."
+            )
+            
+        if not self.api_token:
+            raise ValueError(
+                "A Cloudflare API token must be provided either through "
+                "the api_token parameter or "
+                "CF_D1_API_TOKEN environment variable."
+            )
+            
         self.base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}"
         self.headers = {
             "Authorization": f"Bearer {api_token}",
@@ -111,18 +154,21 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
     @asynccontextmanager
     async def from_connection_params(
         cls,
-        account_id: str,
-        database_id: str,
-        api_token: str,
+        account_id: Optional[str] = None,
+        database_id: Optional[str] = None,
+        api_token: Optional[str] = None,
         *,
         serde: Optional[SerializerProtocol] = None,
     ) -> AsyncIterator["AsyncCloudflareD1Saver"]:
         """Create a new AsyncCloudflareD1Saver instance from connection parameters.
 
         Args:
-            account_id: Your Cloudflare account ID.
-            database_id: The ID of your D1 database.
-            api_token: Your Cloudflare API token with D1 permissions.
+            account_id: Your Cloudflare account ID. If not provided, will be read from
+                the CF_ACCOUNT_ID environment variable.
+            database_id: The ID of your D1 database. If not provided, will be read from
+                the CF_D1_DATABASE_ID environment variable.
+            api_token: Your Cloudflare API token with D1 permissions. If not provided, will be read from
+                the CF_D1_API_TOKEN environment variable.
             serde: Optional serializer for encoding/decoding checkpoints.
 
         Yields:

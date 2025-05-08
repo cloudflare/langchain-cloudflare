@@ -2,7 +2,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from langchain_core.embeddings import Embeddings
-from pydantic import BaseModel, ConfigDict, PrivateAttr
+from langchain_core.utils import from_env, secret_from_env
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
 DEFAULT_MODEL_NAME = "@cf/baai/bge-base-en-v1.5"
 
@@ -33,10 +34,12 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
     Key init args — completion params:
         account_id: str
-            Cloudflare account ID
+            Cloudflare account ID. If not specified, will be read from
+            the CF_ACCOUNT_ID environment variable.
             
         api_token: str
-            Cloudflare Workers AI API token
+            Cloudflare Workers AI API token. If not specified, will be read from
+            the CF_API_TOKEN environment variable.
             
         model_name: str
             Embeddings model name on Workers AI (default: "@cf/baai/bge-base-en-v1.5")
@@ -48,6 +51,10 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
             from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 
+            # From environment variables
+            cf = CloudflareWorkersAIEmbeddings()
+            
+            # Or with explicit credentials
             account_id = "my_account_id"
             api_token = "my_secret_api_token"
             model_name = "@cf/baai/bge-small-en-v1.5"
@@ -94,13 +101,13 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
     """
 
     api_base_url: str = "https://api.cloudflare.com/client/v4/accounts"
-    account_id: str
-    api_token: str
+    account_id: str = Field(default_factory=from_env("CF_ACCOUNT_ID", default=""))
+    api_token: SecretStr = Field(default_factory=secret_from_env("CF_API_TOKEN", default=""))
     model_name: str = DEFAULT_MODEL_NAME
     batch_size: int = 50
     strip_new_lines: bool = True
     headers: Dict[str, str] = {"Authorization": "Bearer "}
-    ai_gateway: Optional[str] = None
+    ai_gateway: Optional[str] = Field(default_factory=from_env("AI_GATEWAY", default=None))
 
     _inference_url: str = PrivateAttr()
 
@@ -108,7 +115,22 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         """Initialize the Cloudflare Workers AI client."""
         super().__init__(**kwargs)
 
-        self.headers = {"Authorization": f"Bearer {self.api_token}"}
+        # Validate credentials
+        if not self.account_id:
+            raise ValueError(
+                "A Cloudflare account ID must be provided either through "
+                "the account_id parameter or "
+                "CF_ACCOUNT_ID environment variable."
+            )
+
+        if not self.api_token or self.api_token.get_secret_value() == "":
+            raise ValueError(
+                "A Cloudflare API token must be provided either through "
+                "the api_token parameter or "
+                "CF_API_TOKEN environment variable."
+            )
+
+        self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}
 
         if self.ai_gateway:
             self._inference_url = (
