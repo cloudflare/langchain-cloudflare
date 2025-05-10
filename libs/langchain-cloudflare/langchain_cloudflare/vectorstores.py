@@ -23,7 +23,7 @@ from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import from_env, secret_from_env
 from langchain_core.vectorstores import VectorStore
-from pydantic import Field, SecretStr
+from pydantic import SecretStr
 from typing_extensions import TypedDict
 
 MAX_INSERT_SIZE = 5000
@@ -118,18 +118,20 @@ class CloudflareVectorize(VectorStore):
             Cloudflare account ID. If not specified, will be read from
             the CF_ACCOUNT_ID environment variable.
         api_token: str
-            Optional global API token for all Cloudflare services. If not specified, 
-            will be read from the CF_API_TOKEN environment variable.
+            Optional global API token for all Cloudflare services.
+            If not specified, will be read from the
+            CF_API_TOKEN environment variable.
         base_url: str
             Base URL for Cloudflare API (default: "https://api.cloudflare.com/client/v4")
         d1_database_id: str
-            Optional D1 database ID for storing text data. If not specified, 
-            will be read from the CF_D1_DATABASE_ID environment variable.
+            Optional D1 database ID for storing text data.
+            If not specified, will be read from the
+            CF_D1_DATABASE_ID environment variable.
         vectorize_api_token: str
-            Optional API token for Vectorize service. If not specified, 
+            Optional API token for Vectorize service. If not specified,
             will be read from the CF_VECTORIZE_API_TOKEN environment variable.
         d1_api_token: str
-            Optional API token for D1 database service. If not specified, 
+            Optional API token for D1 database service. If not specified,
             will be read from the CF_D1_API_TOKEN environment variable.
 
     See full list of supported init args and their descriptions in the params section.
@@ -257,20 +259,22 @@ class CloudflareVectorize(VectorStore):
             embedding: Embeddings instance for converting texts to vectors
             account_id: Cloudflare account ID. If not specified, will be read from
                 the CF_ACCOUNT_ID environment variable.
-            api_token: Optional global API token for all Cloudflare services. If not specified, 
-                will be read from the CF_API_TOKEN environment variable.
+            api_token: Optional global API token for all Cloudflare services.
+                If not specified, will be read from the
+                CF_API_TOKEN environment variable.
             base_url: Base URL for Cloudflare API (default: "https://api.cloudflare.com/client/v4")
-            d1_database_id: Optional D1 database ID for storing text data. If not specified, 
-                will be read from the CF_D1_DATABASE_ID environment variable.
+            d1_database_id: Optional D1 database ID for storing text data.
+                If not specified, will be read from the
+                CF_D1_DATABASE_ID environment variable.
             index_name: Optional name for the default Vectorize index
             **kwargs:
                 Additional arguments including:
-                - vectorize_api_token: Token for Vectorize service,
-                    if api_token not global scoped. If not specified, 
-                    will be read from the CF_VECTORIZE_API_TOKEN environment variable.
-                - d1_api_token: Token for D1 database service,
-                    if api_token not global scoped. If not specified, 
-                    will be read from the CF_D1_API_TOKEN environment variable.
+                - vectorize_api_token: Token for Vectorize service, if api_token not
+                    global scoped. If not specified, will be read from the
+                    CF_VECTORIZE_API_TOKEN environment variable.
+                - d1_api_token: Token for D1 database service, if api_token not
+                    global scoped. If not specified, will be read from the
+                    CF_D1_API_TOKEN environment variable.
                 - default_wait_seconds: # seconds to wait between mutation checks
 
         Raises:
@@ -283,30 +287,34 @@ class CloudflareVectorize(VectorStore):
         self.default_wait_seconds = kwargs.get(
             "default_wait_seconds", DEFAULT_WAIT_SECONDS
         )
-        
+
         # Check environment variables if parameters not provided
         if account_id is None:
-            account_id = from_env("CF_ACCOUNT_ID", "")
+            account_id = from_env("CF_ACCOUNT_ID", default="")()
         self.account_id = account_id
-        
+
         if d1_database_id is None:
-            d1_database_id = from_env("CF_D1_DATABASE_ID", None)
+            d1_database_id = from_env("CF_D1_DATABASE_ID", default="")()
         self.d1_database_id = d1_database_id
 
         # Use the provided API token or get from environment - convert to SecretStr
-        self.api_token = SecretStr(api_token) if api_token else secret_from_env("CF_API_TOKEN", "")
+        self.api_token = (
+            SecretStr(api_token)
+            if api_token
+            else secret_from_env("CF_API_TOKEN", default=None)()
+        )
 
         # Extract and convert token kwargs to SecretStr
         vectorize_token = kwargs.get("vectorize_api_token")
         if vectorize_token is None:
-            vectorize_token = from_env("CF_VECTORIZE_API_TOKEN", "")
+            vectorize_token = from_env("CF_VECTORIZE_API_TOKEN", default=None)()
         self.vectorize_api_token = (
             SecretStr(vectorize_token) if vectorize_token else None
         )
 
         d1_token = kwargs.get("d1_api_token")
         if d1_token is None:
-            d1_token = from_env("CF_D1_API_TOKEN", "")
+            d1_token = from_env("CF_D1_API_TOKEN", default=None)()
         self.d1_api_token = SecretStr(d1_token) if d1_token else None
 
         # Validate the account ID
@@ -343,14 +351,21 @@ class CloudflareVectorize(VectorStore):
             "Content-Type": "application/json",
         }
 
-        if (not self.api_token or not self.api_token.get_secret_value()) and not self.vectorize_api_token:
+        if (
+            not self.api_token or not self.api_token.get_secret_value()
+        ) and not self.vectorize_api_token:
             raise ValueError(
                 "Not enough API token values provided."
                 "Please provide a global `api_token` or `vectorize_api_token` "
-                "through parameters or environment variables (CF_API_TOKEN, CF_VECTORIZE_API_TOKEN)."
+                "through parameters or environment variables "
+                "(CF_API_TOKEN, CF_VECTORIZE_API_TOKEN)."
             )
 
-        if self.d1_database_id and (not self.api_token or not self.api_token.get_secret_value()) and not self.d1_api_token:
+        if (
+            self.d1_database_id
+            and (not self.api_token or not self.api_token.get_secret_value())
+            and not self.d1_api_token
+        ):
             raise ValueError(
                 "`d1_database_id` provided, but no global `api_token` provided "
                 "and no `d1_api_token` provided. Please set these through parameters "
@@ -2790,15 +2805,24 @@ class CloudflareVectorize(VectorStore):
             ids: List of unique identifiers for the texts
             namespaces: List of namespaces for the texts
             upsert: Whether to upsert the texts into the vectorstore
-            account_id: Cloudflare account ID
-            d1_database_id: D1 database ID
-            index_name: Name for the new index
-            dimensions: Number of dimensions for the vector embeddings
-            metric:
-                Distance metric to use (e.g., "cosine", "euclidean", default: "cosine")
-            api_token:
-                Cloudflare API token, optional if using separate tokens for each service
-            **kwargs: Additional keyword arguments to pass to the requests call
+            account_id: Cloudflare account ID. If not specified, will be read from
+                the CF_ACCOUNT_ID environment variable.
+            api_token: Optional global API token for all Cloudflare services. If not
+                specified, will be read from the CF_API_TOKEN environment variable.
+            base_url: Base URL for Cloudflare API (default:
+                "https://api.cloudflare.com/client/v4")
+            d1_database_id: Optional D1 database ID for storing text data. If not
+                specified, will be read from the CF_D1_DATABASE_ID environment variable.
+            index_name: Optional name for the default Vectorize index
+            **kwargs:
+                Additional arguments including:
+                - vectorize_api_token: Token for Vectorize service, if api_token not
+                    global scoped. If not specified, will be read from the
+                    CF_VECTORIZE_API_TOKEN environment variable.
+                - d1_api_token: Token for D1 database service, if api_token not
+                    global scoped. If not specified, will be read from the
+                    CF_D1_API_TOKEN environment variable.
+                - default_wait_seconds: # seconds to wait between mutation checks
 
         Returns:
             CloudflareVectorize: A new CloudflareVectorize vectorstore
@@ -2875,9 +2899,15 @@ class CloudflareVectorize(VectorStore):
             ids: List of unique identifiers for the texts
             namespaces: List of namespaces for the texts
             upsert: Whether to upsert the texts into the vectorstore
-            account_id: Cloudflare account ID
-            d1_database_id: D1 database ID
-            index_name: Name for the new index
+            account_id: Cloudflare account ID. If not specified, will be read from
+                the CF_ACCOUNT_ID environment variable.
+            api_token: Optional global API token for all Cloudflare services. If not
+                specified, will be read from the CF_API_TOKEN environment variable.
+            base_url: Base URL for Cloudflare API (default:
+                "https://api.cloudflare.com/client/v4")
+            d1_database_id: Optional D1 database ID for storing text data. If not
+                specified, will be read from the CF_D1_DATABASE_ID environment variable.
+            index_name: Optional name for the default Vectorize index
             dimensions: Number of dimensions for the vector embeddings
             metric:
                 Distance metric to use (e.g., "cosine", "euclidean", default: "cosine")
@@ -3195,4 +3225,3 @@ class CloudflareVectorize(VectorStore):
             include_d1=include_d1,
             **kwargs,
         )
-

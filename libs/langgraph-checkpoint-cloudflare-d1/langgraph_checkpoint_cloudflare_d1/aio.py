@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar, cast
 
 import httpx
 from langchain_core.runnables import RunnableConfig
-from langchain_core.utils import from_env, secret_from_env
+from langchain_core.utils import from_env
 from langgraph.checkpoint.base import (
     WRITES_IDX_MAP,
     BaseCheckpointSaver,
@@ -104,20 +104,20 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
     ):
         super().__init__(serde=serde)
         self.jsonplus_serde = JsonPlusSerializer()
-        
+
         # Check environment variables if parameters not provided
         if account_id is None:
-            account_id = from_env("CF_ACCOUNT_ID", "")
+            account_id = from_env("CF_ACCOUNT_ID", default="")()
         self.account_id = account_id
-        
+
         if database_id is None:
-            database_id = from_env("CF_D1_DATABASE_ID", "")
+            database_id = from_env("CF_D1_DATABASE_ID", default="")()
         self.database_id = database_id
-        
+
         if api_token is None:
-            api_token = from_env("CF_D1_API_TOKEN", "")
+            api_token = from_env("CF_D1_API_TOKEN", default="")()
         self.api_token = api_token
-        
+
         # Validate credentials
         if not self.account_id:
             raise ValueError(
@@ -125,21 +125,21 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
                 "the account_id parameter or "
                 "CF_ACCOUNT_ID environment variable."
             )
-            
+
         if not self.database_id:
             raise ValueError(
                 "A Cloudflare D1 database ID must be provided either through "
                 "the database_id parameter or "
                 "CF_D1_DATABASE_ID environment variable."
             )
-            
+
         if not self.api_token:
             raise ValueError(
                 "A Cloudflare API token must be provided either through "
                 "the api_token parameter or "
                 "CF_D1_API_TOKEN environment variable."
             )
-            
+
         self.base_url = f"https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}"
         self.headers = {
             "Authorization": f"Bearer {api_token}",

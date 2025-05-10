@@ -39,7 +39,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             
         api_token: str
             Cloudflare Workers AI API token. If not specified, will be read from
-            the CF_API_TOKEN environment variable.
+            the CF_AI_API_TOKEN environment variable.
             
         model_name: str
             Embeddings model name on Workers AI (default: "@cf/baai/bge-base-en-v1.5")
@@ -102,12 +102,16 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
     api_base_url: str = "https://api.cloudflare.com/client/v4/accounts"
     account_id: str = Field(default_factory=from_env("CF_ACCOUNT_ID", default=""))
-    api_token: SecretStr = Field(default_factory=secret_from_env("CF_API_TOKEN", default=""))
+    api_token: SecretStr = Field(
+        default_factory=secret_from_env("CF_AI_API_TOKEN", default="")
+    )
     model_name: str = DEFAULT_MODEL_NAME
     batch_size: int = 50
     strip_new_lines: bool = True
     headers: Dict[str, str] = {"Authorization": "Bearer "}
-    ai_gateway: Optional[str] = Field(default_factory=from_env("AI_GATEWAY", default=None))
+    ai_gateway: Optional[str] = Field(
+        default_factory=from_env("AI_GATEWAY", default=None)
+    )
 
     _inference_url: str = PrivateAttr()
 
@@ -127,7 +131,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             raise ValueError(
                 "A Cloudflare API token must be provided either through "
                 "the api_token parameter or "
-                "CF_API_TOKEN environment variable."
+                "CF_AI_API_TOKEN environment variable."
             )
 
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}

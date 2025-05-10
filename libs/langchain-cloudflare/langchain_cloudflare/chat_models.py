@@ -77,7 +77,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     """`Cloudflare Workers AI` Chat large language models API.
 
     To use, you should have the
-    environment variables ``CF_API_TOKEN`` and ``CF_ACCOUNT_ID``
+    environment variables ``CF_AI_API_TOKEN`` and ``CF_ACCOUNT_ID``
     set with your API token and account ID.
 
     Any parameters that are valid to be passed to the Cloudflare Workers AI API call
@@ -89,7 +89,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         .. code-block:: bash
 
             pip install -U langchain-cloudflare
-            export CF_API_TOKEN="your-api-token"
+            export CF_AI_API_TOKEN="your-api-token"
             export CF_ACCOUNT_ID="your-account-id"
 
     Key init args — completion params:
@@ -131,7 +131,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             Max number of retries.
         api_token: Optional[str]
             Cloudflare API token. If not passed in will be read
-            from env var CF_API_TOKEN.
+            from env var CF_AI_API_TOKEN.
         account_id: Optional[str]
             Cloudflare account ID. If not passed in will be read
             from env var CF_ACCOUNT_ID.
@@ -162,9 +162,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     """Holds any model parameters valid for API call not explicitly specified."""
     api_token: Optional[SecretStr] = Field(
         alias="cloudflare_api_token",
-        default_factory=secret_from_env("CF_API_TOKEN", default=None),
+        default_factory=secret_from_env("CF_AI_API_TOKEN", default=None),
     )
-    """Automatically inferred from env var `CF_API_TOKEN` if not provided."""
+    """Automatically inferred from env var `CF_AI_API_TOKEN` if not provided."""
     account_id: Optional[str] = Field(
         alias="cloudflare_account_id",
         default_factory=from_env("CF_ACCOUNT_ID", default=None),
@@ -240,7 +240,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             raise ValueError(
                 "A Cloudflare API token must be provided either through "
                 "the api_token parameter or "
-                "CF_API_TOKEN environment variable."
+                "CF_AI_API_TOKEN environment variable."
             )
 
         if not self.account_id:
@@ -296,7 +296,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     #
     @property
     def lc_secrets(self) -> Dict[str, str]:
-        return {"api_token": "CF_API_TOKEN"}
+        return {"api_token": "CF_AI_API_TOKEN"}
 
     @classmethod
     def is_lc_serializable(cls) -> bool:

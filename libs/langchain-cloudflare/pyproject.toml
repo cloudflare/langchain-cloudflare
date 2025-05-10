@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "langchain-cloudflare"
-version = "0.1.7"
+version = "0.1.8"
 description = "Langchain Integrations for Cloudflare's WorkersAI and Vectorize"
 authors = []
 readme = "README.md"
@@ -75,3 +75,6 @@ ruff = "^0.5"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "^1.10"
+types-requests = "^2.31.0"
+pytest-mypy-plugins = "^3.0.0"
+types-langchain-tests = "v0.3.17"
