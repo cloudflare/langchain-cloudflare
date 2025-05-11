@@ -166,3 +166,9 @@ graph = builder.compile(checkpointer=checkpointer)
 config = {"configurable": {"thread_id": "my-thread-1"}}
 result = graph.invoke(3, config)
 ```
+
+## Release Notes
+
+v0.1.2 (2025-05-11)
+
+- Added support for environmental variables

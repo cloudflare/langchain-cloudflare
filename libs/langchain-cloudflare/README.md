@@ -76,3 +76,7 @@ v0.1.6 (2025-05-01)
 
 - Added Standalone D1 Metadata Filtering Methods
 - Update Docs for more clarity around D1 Table/Vectorize Index Names
+
+v0.1.8 (2025-05-11)
+
+- Added support for environmental variables (embeddings, vectorstores)
