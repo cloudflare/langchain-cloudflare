@@ -10,8 +10,18 @@ pip install -U langchain-cloudflare
 
 And you should configure credentials by setting the following environment variables:
 
-- CF_ACCOUNT_ID
-- CF_API_TOKEN
+- `CF_ACCOUNT_ID`
+
+AND
+
+- `CF_API_TOKEN` (if using a single token scoped for all services)
+
+OR (if using separately scoped tokens)
+
+- `CF_AI_API_TOKEN`
+- `CF_VECTORIZE_API_TOKEN` (CloudflareVectorize)
+- `CF_D1_API_TOKEN` (CloudflareVectorize)
+- `CF_D1_DATABASE_ID` (CloudflareVectorize)
 
 ## Chat Models
 
@@ -32,8 +42,6 @@ llm.invoke("Sing a ballad of LangChain.")
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 
 embeddings = CloudflareWorkersAIEmbeddings(
-    account_id="YOUR_ACCOUNT_ID",
-    api_token="YOUR_API_TOKEN",
     model_name="@cf/baai/bge-base-en-v1.5"
 )
 embeddings.embed_query("What is the meaning of life?")
@@ -46,12 +54,7 @@ embeddings.embed_query("What is the meaning of life?")
 from langchain_cloudflare.vectorstores import CloudflareVectorize
 
 vst = CloudflareVectorize(
-    embedding=embeddings,
-    account_id="YOUR_ACCOUNT_ID",
-    # api_token="GLOBAL_API_TOKEN",
-    d1_api_token="D1_API_TOKEN",  # (Optional if using global token)
-    vectorize_api_token="VECTORIZE_API_TOKEN",  # (Optional if using global token)
-    d1_database_id="YOUR_D1 DB_ID",  # (Optional if not using D1)
+    embedding=embeddings
 )
 vst.create_index(index_name="my-cool-vectorstore")
 ```
