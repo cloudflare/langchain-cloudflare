@@ -18,14 +18,14 @@ AND
 
 OR (if using separately scoped tokens)
 
-- `CF_AI_API_TOKEN`
+- `CF_AI_API_TOKEN` (CloudflareWorkersAI and CloudflareWorkersAIEmbeddings)
 - `CF_VECTORIZE_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_DATABASE_ID` (CloudflareVectorize)
 
 ## Chat Models
 
-`ChatCloudflareWorkersAI` class exposes chat models from CloudflareWorkersAI.
+`ChatCloudflareWorkersAI` class exposes chat models from [CloudflareWorkersAI](https://developers.cloudflare.com/workers-ai/).
 
 ```python
 from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
@@ -36,7 +36,7 @@ llm.invoke("Sing a ballad of LangChain.")
 
 ## Embeddings
 
-`CloudflareWorkersAIEmbeddings` class exposes embeddings from CloudflareWorkersAI.
+`CloudflareWorkersAIEmbeddings` class exposes embeddings from [CloudflareWorkersAI](https://developers.cloudflare.com/workers-ai/).
 
 ```python
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
@@ -48,7 +48,7 @@ embeddings.embed_query("What is the meaning of life?")
 ```
 
 ## VectorStores
-`CloudflareWorkersAILLM` class exposes LLMs from CloudflareWorkersAI.
+`CloudflareVectorize` class exposes vectorstores from Cloudflare [Vectorize](https://developers.cloudflare.com/vectorize/).
 
 ```python
 from langchain_cloudflare.vectorstores import CloudflareVectorize

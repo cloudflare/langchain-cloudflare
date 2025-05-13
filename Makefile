@@ -7,6 +7,8 @@ all: help
 TEST_FILE ?= tests/unit_tests/
 integration_test integration_tests: TEST_FILE = tests/integration_tests/
 
+# Auto-detect the package name based on current directory
+PACKAGE_NAME := $(shell find . -maxdepth 1 -type d -name "*langchain*" -o -name "*langgraph*" | head -1 | sed 's|^\./||')
 
 # unit tests are run with the --disable-socket flag to prevent network calls
 test tests:
@@ -28,7 +30,7 @@ PYTHON_FILES=.
 MYPY_CACHE=.mypy_cache
 lint format: PYTHON_FILES=.
 lint_diff format_diff: PYTHON_FILES=$(shell git diff --relative=libs/partners/cloudflare --name-only --diff-filter=d master | grep -E '\.py$$|\.ipynb$$')
-lint_package: PYTHON_FILES=langchain_cloudflare
+lint_package: PYTHON_FILES=$(PACKAGE_NAME)
 lint_tests: PYTHON_FILES=tests
 lint_tests: MYPY_CACHE=.mypy_cache_test
 
@@ -47,8 +49,8 @@ spell_check:
 spell_fix:
 	poetry run codespell --toml pyproject.toml -w
 
-check_imports: $(shell find langchain_cloudflare -name '*.py')
-	poetry run python ./scripts/check_imports.py $^
+check_imports: $(shell find $(PACKAGE_NAME) -name '*.py' 2>/dev/null || echo "")
+	[ "$(PACKAGE_NAME)" = "" ] || poetry run python ./scripts/check_imports.py $^
 
 ######################
 # HELP
