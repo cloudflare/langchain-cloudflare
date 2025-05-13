@@ -36,11 +36,11 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         account_id: str
             Cloudflare account ID. If not specified, will be read from
             the CF_ACCOUNT_ID environment variable.
-            
+
         api_token: str
             Cloudflare Workers AI API token. If not specified, will be read from
             the CF_AI_API_TOKEN environment variable.
-            
+
         model_name: str
             Embeddings model name on Workers AI (default: "@cf/baai/bge-base-en-v1.5")
 
@@ -53,7 +53,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
             # From environment variables
             cf = CloudflareWorkersAIEmbeddings()
-            
+
             # Or with explicit credentials
             account_id = "my_account_id"
             api_token = "my_secret_api_token"

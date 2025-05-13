@@ -1332,7 +1332,8 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         # Configure final output structure based on include_raw flag
         if include_raw:
             parser_assign = RunnablePassthrough.assign(
-                parsed=itemgetter("raw") | output_parser, parsing_error=lambda _: None
+                parsed=itemgetter("raw") | output_parser,  # type: ignore
+                parsing_error=lambda _: None,
             )
             parser_none = RunnablePassthrough.assign(parsed=lambda _: None)
             parser_with_fallback = parser_assign.with_fallbacks(
