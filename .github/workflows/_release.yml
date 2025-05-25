@@ -74,10 +74,14 @@ jobs:
       - name: Build project for distribution
         run: poetry build
 
+      - name: Set artifact name
+        id: artifact-name
+        run: echo "name=dist-$(echo '${{ inputs.working-directory }}' | tr '/' '-')" >> $GITHUB_OUTPUT
+
       - name: Upload build
         uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ inputs.working-directory }}
+          name: ${{ steps.artifact-name.outputs.name }}
           path: ${{ inputs.working-directory }}/dist/
 
       - name: Check Version
@@ -114,9 +118,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Set artifact name
+        id: artifact-name
+        run: echo "name=dist-$(echo '${{ inputs.working-directory }}' | tr '/' '-')" >> $GITHUB_OUTPUT
+
       - uses: actions/download-artifact@v4
         with:
-          name: dist-${{ inputs.working-directory }}
+          name: ${{ steps.artifact-name.outputs.name }}
           path: ${{ inputs.working-directory }}/dist/
 
       - name: Publish package distributions to PyPI
@@ -151,9 +159,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Set artifact name
+        id: artifact-name
+        run: echo "name=dist-$(echo '${{ inputs.working-directory }}' | tr '/' '-')" >> $GITHUB_OUTPUT
+
       - uses: actions/download-artifact@v4
         with:
-          name: dist-${{ inputs.working-directory }}
+          name: ${{ steps.artifact-name.outputs.name }}
           path: ${{ inputs.working-directory }}/dist/
 
       - name: Create Release
