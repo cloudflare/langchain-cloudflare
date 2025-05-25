@@ -708,9 +708,9 @@ class CloudflareVectorize(VectorStore):
 
         table_schema = f"""
         CREATE TABLE IF NOT EXISTS '{table_name}' (
-            id TEXT PRIMARY KEY, 
-            text TEXT, 
-            namespace TEXT, 
+            id TEXT PRIMARY KEY,
+            text TEXT,
+            namespace TEXT,
             metadata TEXT
         )"""
 
@@ -744,9 +744,9 @@ class CloudflareVectorize(VectorStore):
 
         table_schema = f"""
         CREATE TABLE IF NOT EXISTS '{table_name}' (
-            id TEXT PRIMARY KEY, 
-            text TEXT, 
-            namespace TEXT, 
+            id TEXT PRIMARY KEY,
+            text TEXT,
+            namespace TEXT,
             metadata TEXT
         )"""
 

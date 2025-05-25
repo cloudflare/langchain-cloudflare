@@ -8,13 +8,16 @@ version = "0.1.8"
 description = "Langchain Integrations for Cloudflare's WorkersAI and Vectorize"
 authors = []
 readme = "README.md"
+license = "MIT"
 repository = "https://github.com/cloudflare/langchain-cloudflare"
 packages = [{include = "langchain_cloudflare"}]
 
-license = "MIT"
-
 [tool.mypy]
 disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "langchain_tests.*"
+ignore_missing_imports = true
 
 [tool.poetry.urls]
 "Source Code" = "https://github.com/cloudflare/langchain-cloudflare/libs/langchain-cloudflare"
@@ -42,7 +45,6 @@ markers = [
 asyncio_mode = "auto"
 
 [tool.poetry.group.test]
-optional = true
 
 [tool.poetry.group.codespell]
 optional = true
@@ -51,19 +53,20 @@ optional = true
 optional = true
 
 [tool.poetry.group.lint]
-optional = true
 
 [tool.poetry.group.dev]
-optional = true
 
 [tool.poetry.group.dev.dependencies]
+ruff = "^0.5"
+mypy = "^1.10"
+codespell = "^2.2.6"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^7.4.3"
 pytest-asyncio = "^0.23.2"
 pytest-socket = "^0.7.0"
 pytest-watcher = "^0.3.4"
-langchain-tests = "v0.3.17"
+langchain-tests = "^0.3.17"
 
 [tool.poetry.group.codespell.dependencies]
 codespell = "^2.2.6"
@@ -77,4 +80,3 @@ ruff = "^0.5"
 mypy = "^1.10"
 types-requests = "^2.31.0"
 pytest-mypy-plugins = "^3.0.0"
-types-langchain-tests = "v0.3.17"

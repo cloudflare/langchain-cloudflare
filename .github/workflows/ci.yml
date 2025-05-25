@@ -1,0 +1,95 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# If another push to the same PR or branch happens while this workflow is still running,
+# cancel the earlier run in favor of the next run.
+#
+# There's no point in testing an outdated version of the code. GitHub only allows
+# a limited number of job runners to be active at the same time, so it's better to cancel
+# pointless jobs early so that more useful jobs can run sooner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - id: files
+        uses: Ana06/get-changed-files@25f79e676e7ea1868813e21465014798211fad8c # v2.3.0
+      - id: set-matrix
+        env:
+          FILES: ${{ steps.files.outputs.all }}
+        run: |
+          python .github/scripts/check_diff.py ${FILES} >> $GITHUB_OUTPUT
+    outputs:
+      dirs-to-lint: ${{ steps.set-matrix.outputs.dirs-to-lint }}
+      dirs-to-test: ${{ steps.set-matrix.outputs.dirs-to-test }}
+
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
+        with:
+          extra_args: --all-files --hook-stage=manual
+
+  lint:
+    name: cd ${{ matrix.working-directory }}
+    needs: [ build ]
+    if: ${{ needs.build.outputs.dirs-to-lint != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        working-directory: ${{ fromJson(needs.build.outputs.dirs-to-lint) }}
+    uses: ./.github/workflows/_lint.yml
+    with:
+      working-directory: ${{ matrix.working-directory }}
+    secrets: inherit
+
+  test:
+    name: cd ${{ matrix.working-directory }}
+    needs: [ build ]
+    if: ${{ needs.build.outputs.dirs-to-test != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        working-directory: ${{ fromJson(needs.build.outputs.dirs-to-test) }}
+    uses: ./.github/workflows/_test.yml
+    with:
+      working-directory: ${{ matrix.working-directory }}
+    secrets: inherit
+
+  ci_success:
+    name: "CI Success"
+    needs: [build, lint, test, pre-commit]
+    if: |
+      always()
+    runs-on: ubuntu-latest
+    env:
+      JOBS_JSON: ${{ toJSON(needs) }}
+      RESULTS_JSON: ${{ toJSON(needs.*.result) }}
+      EXIT_CODE: ${{!contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && '0' || '1'}}
+    steps:
+      - name: "CI Success"
+        run: |
+          echo $JOBS_JSON
+          echo $RESULTS_JSON
+          echo "Exiting with $EXIT_CODE"
+          exit $EXIT_CODE

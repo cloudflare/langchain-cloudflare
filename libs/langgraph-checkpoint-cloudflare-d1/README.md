@@ -32,7 +32,7 @@ with CloudflareD1Saver(
 ) as checkpointer:
     # Setup the database tables (idempotent operation)
     checkpointer.setup()
-    
+
     # Sample checkpoint data
     checkpoint = {
         "v": 2,
@@ -59,13 +59,13 @@ with CloudflareD1Saver(
         },
         "pending_sends": [],
     }
-    
+
     # Store checkpoint
     checkpointer.put(write_config, checkpoint, {}, {})
-    
+
     # Load checkpoint
     loaded_checkpoint = checkpointer.get_tuple(read_config)
-    
+
     # List checkpoints
     checkpoints = list(checkpointer.list(read_config))
 ```
@@ -82,11 +82,11 @@ async def main():
     account_id = "your-cloudflare-account-id"
     database_id = "your-d1-database-id"
     api_token = "your-cloudflare-api-token"
-    
+
     # Configuration for checkpoint operations
     write_config = {"configurable": {"thread_id": "1", "checkpoint_ns": ""}}
     read_config = {"configurable": {"thread_id": "1"}}
-    
+
     # Initialize the async saver with proper credentials
     async with AsyncCloudflareD1Saver(
         account_id=account_id,
@@ -119,16 +119,16 @@ async def main():
             },
             "pending_sends": [],
         }
-        
+
         # Setup happens automatically but can be called explicitly
         await checkpointer.setup()
-        
+
         # Store checkpoint
         await checkpointer.put(write_config, checkpoint, {}, {})
-        
+
         # Load checkpoint
         loaded_checkpoint = await checkpointer.get_tuple(read_config)
-        
+
         # List checkpoints
         checkpoints = [cp async for cp in checkpointer.list(read_config)]
 
