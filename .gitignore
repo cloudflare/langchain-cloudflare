@@ -116,3 +116,4 @@ install_and_test.sh
 
 .ruff_cache/
 **/.ruff_cache/
+.benchmarks/
