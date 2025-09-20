@@ -1,0 +1,83 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+name = "langmem-cloudflare-vectorize"
+version = "0.1.0"
+description = "Langgraph BaseStore for Vectorize to use with Langmem"
+authors = []
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/cloudflare/langchain-cloudflare"
+packages = [{include = "langmem_cloudflare_vectorize"}]
+
+[tool.mypy]
+disallow_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = "langchain_tests.*"
+ignore_missing_imports = true
+
+[tool.poetry.urls]
+"Source Code" = "https://github.com/cloudflare/langchain-cloudflare/libs/langmem-cloudflare-vectorize"
+"Release Notes" = "https://github.com/cloudflare/langchain-cloudflare/libs/langmem-cloudflare-vectorize/blob/main/README.md"
+
+[tool.poetry.dependencies]
+python = ">=3.9,<4.0"
+langgraph = ">=0.5.0"
+langchain-core = ">=0.3.60"
+requests = ">=2.31.0"
+httpx = ">=0.24.1"
+pydantic = ">=1.10.0,<3.0.0"
+langchain-cloudflare = ">=0.1.8"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "T201"]
+ignore = ["E501"]
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.pytest.ini_options]
+addopts = "--strict-markers --strict-config --durations=5"
+markers = [
+    "compile: mark placeholder test used to compile integration tests without running them",
+]
+asyncio_mode = "auto"
+
+[tool.poetry.group.test]
+
+[tool.poetry.group.codespell]
+optional = true
+
+[tool.poetry.group.test_integration]
+optional = true
+
+[tool.poetry.group.lint]
+
+[tool.poetry.group.dev]
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.5.0"
+mypy = "^1.15.0"
+codespell = "^2.2.0"
+
+[tool.poetry.group.test.dependencies]
+pytest = ">=7.4.0"
+pytest-asyncio = ">=0.21.1"
+pytest-socket = "^0.7.0"
+pytest-watcher = "^0.3.4"
+langchain-tests = "^0.3.17"
+
+[tool.poetry.group.codespell.dependencies]
+codespell = "^2.2.0"
+
+[tool.poetry.group.test_integration.dependencies]
+
+[tool.poetry.group.lint.dependencies]
+ruff = "^0.5.0"
+
+[tool.poetry.group.typing.dependencies]
+mypy = "^1.15.0"
+types-requests = "^2.32.0.20250328"

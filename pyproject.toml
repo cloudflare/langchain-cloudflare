@@ -13,3 +13,4 @@ dev = []
 [tool.uv.sources]
 langchain-cloudflare = { path = "libs/langchain-cloudflare", editable = true }
 langgraph-checkpoint-cloudflare-d1 = { path = "libs/langgraph-checkpoint-cloudflare-d1", editable = true }
+langmem-cloudflare-vectorize = { path = "libs/langmem-cloudflare-vectorize", editable = true }
