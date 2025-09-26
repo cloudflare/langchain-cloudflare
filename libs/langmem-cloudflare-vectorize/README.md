@@ -1,9 +1,9 @@
-# langgraph-checkpoint-cloudflare-d1
+# langmem-cloudflare-vectorize
 
 ## Installation
 
 ```bash
-pip install -U langmem-cloudflare-vectorize langgraph langchain-cloudflare
+pip install -U langmem-cloudflare-vectorize langgraph langchain-cloudflare langmem
 ```
 
 ## Usage
@@ -12,7 +12,7 @@ This package provides both synchronous and asynchronous interfaces for semantic 
 package when you want to use a custom store with langmem.
 
 ```python
-from langmem_cloudflare_vectorize import CloudflareVectorizeLangmemStore
+from langmem_cloudflare_vectorize import CloudflareVectorizeBaseStore
 from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
 from langmem import create_manage_memory_tool, create_search_memory_tool
 from langgraph.prebuilt import create_react_agent
@@ -23,7 +23,7 @@ vectorize_api_token = "your-vectorize-api-token"
 workers_ai_token = "your-workers-ai-api-token"
 
 # Create the langmem vectorize store
-agent_store = CloudflareVectorizeLangmemStore.with_cloudflare_embeddings(
+agent_store = CloudflareVectorizeBaseStore.with_cloudflare_embeddings(
     account_id=account_id,
     index_name="cool-vectorize-index-name",
     vectorize_api_token=vectorize_api_token,
@@ -115,6 +115,6 @@ print(f"Agent: {response4['messages'][-1].content}")
 ```
 ## Release Notes
 
-v0.1.2` (2025-09-25)
+v0.1.1 (2025-09-26)
 
-- Added support for environmental variables
+- Add Langgraph BaseStore support for Cloudflare Vectorize
