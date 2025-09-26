@@ -1,4 +1,4 @@
-# langgraph-checkpoint-cloudflare-d1
+# langmem-cloudflare-vectorize
 
 ## Installation
 
@@ -115,6 +115,6 @@ print(f"Agent: {response4['messages'][-1].content}")
 ```
 ## Release Notes
 
-v0.1.2` (2025-09-25)
+v0.1.1 (2025-09-26)
 
-- Added support for environmental variables
+- Add Langgraph BaseStore support for Cloudflare Vectorize

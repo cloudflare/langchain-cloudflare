@@ -38,10 +38,16 @@ You can install the `langgraph-checkpoint-cloudflare-d1` package from PyPI as we
 pip install langgraph-checkpoint-cloudflare-d1
 ```
 
+And to install the `langmem-cloudflare-vectorize` package from PyPI:
+
+```bash
+pip install langmem-cloudflare-vectorize
+```
+
 ## Usage
 
-See [langchain-cloudflare usage](libs/langchain-cloudflare/README.md#usage) and [langgraph-checkpoint-cloudflare-d1 usage](libs/langgraph-checkpoint-cloudflare-d1/README.md#usage).
-
+See [langchain-cloudflare usage](libs/langchain-cloudflare/README.md#usage) , [langgraph-checkpoint-cloudflare-d1 usage](libs/langgraph-checkpoint-cloudflare-d1/README.md#usage).
+and [langmem-cloudflare-vectorize usage](libs/langmem-cloudflare-vectorize/README.md#usage)
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
