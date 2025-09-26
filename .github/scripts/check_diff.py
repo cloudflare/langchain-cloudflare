@@ -5,6 +5,7 @@ from typing import Dict
 LIB_DIRS = [
     "libs/langchain-cloudflare",
     "libs/langgraph-checkpoint-cloudflare-d1",
+    "libs/langmem-cloudflare-vectorize",
 ]
 
 if __name__ == "__main__":
