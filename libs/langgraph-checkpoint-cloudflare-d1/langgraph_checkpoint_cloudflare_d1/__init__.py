@@ -1,6 +1,7 @@
 # Import the async implementation at the top of file
 import base64
 import json
+import logging
 import random
 import threading
 from typing import (
@@ -29,11 +30,35 @@ from langgraph.checkpoint.base import (
     get_checkpoint_id,
     get_checkpoint_metadata,
 )
-from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from .aio import AsyncCloudflareD1Saver
 from .models import D1Response
 from .utils import _metadata_predicate, search_where
+
+logger = logging.getLogger(__name__)
+
+# Runtime guard: Verify langgraph-checkpoint version >= 3.0.0 to prevent CVE-2025-64439
+try:
+    import importlib.metadata
+
+    from packaging.version import Version
+
+    _checkpoint_version = importlib.metadata.version("langgraph-checkpoint")
+    if Version(_checkpoint_version) < Version("3.0.0"):
+        raise RuntimeError(
+            f"SECURITY ERROR: langgraph-checkpoint {_checkpoint_version} is vulnerable to "
+            f"CVE-2025-64439 (Remote Code Execution). Please upgrade to >= 3.0.0 immediately. "
+            f"Run: pip install --upgrade 'langgraph-checkpoint>=3.0.0'"
+        )
+except ImportError:
+    # packaging not available, skip version check
+    pass
 
 
 class CloudflareD1Saver(BaseCheckpointSaver[str]):
@@ -50,6 +75,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         api_token (str): Your Cloudflare API token with D1 permissions. If not provided, will be read from
             the CF_D1_API_TOKEN environment variable.
         serde (Optional[SerializerProtocol]): The serializer to use for serializing and deserializing checkpoints.
+        enable_logging (bool): Whether to enable logging. Defaults to False.
 
     Examples:
         >>> from langgraph_checkpoint_cloudflare_d1 import CloudflareD1Saver
@@ -75,6 +101,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
     base_url: str
     headers: Dict[str, str]
     is_setup: bool
+    enable_logging: bool
 
     def __init__(
         self,
@@ -83,9 +110,10 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         api_token: Optional[str] = None,
         *,
         serde: Optional[SerializerProtocol] = None,
+        enable_logging: bool = False,
     ) -> None:
         super().__init__(serde=serde)
-        self.jsonplus_serde = JsonPlusSerializer()
+        self.enable_logging = enable_logging
 
         # Check environment variables if parameters not provided
         if account_id is None:
@@ -166,10 +194,16 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         self._execute_query(setup_query)
         self.is_setup = True
 
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((requests.exceptions.RequestException,)),
+        reraise=True,
+    )
     def _execute_query(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> D1Response:
-        """Execute a SQL query against the D1 database."""
+        """Execute a SQL query against the D1 database with retry logic."""
         endpoint = f"{self.base_url}/query"
 
         # Format params for D1 API
@@ -188,7 +222,9 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         data = {"sql": query, "params": formatted_params if params else []}
 
         try:
-            response = requests.post(endpoint, headers=self.headers, json=data)
+            response = requests.post(
+                endpoint, headers=self.headers, json=data, timeout=30
+            )
             response.raise_for_status()
             raw_data = response.json()
 
@@ -199,14 +235,37 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                     return D1Response.model_validate(raw_data)
                 else:
                     return D1Response(**raw_data)
-            except Exception:
+            except Exception as e:
+                if self.enable_logging:
+                    logger.warning(
+                        f"D1 response parsing failed, using fallback: {type(e).__name__}: {e}"
+                    )
                 # Direct dictionary to bypass model validation during debugging
                 return D1Response(
                     success=raw_data.get("success", False),
                     result=raw_data.get("result"),
                 )
-        except Exception:
-            # Fallback to a basic response if parsing fails
+        except requests.exceptions.HTTPError as e:
+            if self.enable_logging:
+                logger.error(
+                    f"D1 API HTTP error: {e.response.status_code if e.response else 'N/A'} - "
+                    f"{e.response.text if e.response else str(e)}\n"
+                    f"Query: {query[:200]}..."
+                )
+            raise
+        except requests.exceptions.ConnectionError as e:
+            if self.enable_logging:
+                logger.error(f"D1 API connection error: {e}\nQuery: {query[:200]}...")
+            raise
+        except requests.exceptions.Timeout as e:
+            if self.enable_logging:
+                logger.error(f"D1 API timeout error: {e}\nQuery: {query[:200]}...")
+            raise
+        except Exception as e:
+            if self.enable_logging:
+                logger.error(
+                    f"D1 API unexpected error: {type(e).__name__}: {e}\nQuery: {query[:200]}..."
+                )
             return D1Response(success=False)
 
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
@@ -344,7 +403,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                 # Get checkpoint metadata
                 try:
                     if metadata is not None and metadata != "":
-                        metadata_dict = self.jsonplus_serde.loads(metadata)
+                        metadata_dict = json.loads(metadata)
                     else:
                         metadata_dict = {"step": -2}  # Default initial metadata
 
@@ -546,7 +605,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                             and metadata != ""
                             and isinstance(metadata, (str, bytes))
                         ):
-                            metadata_dict = self.jsonplus_serde.loads(metadata)
+                            metadata_dict = json.loads(metadata)
                     except Exception:
                         metadata_dict = {}
 
@@ -617,7 +676,9 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
             if "step" not in processed_metadata:
                 processed_metadata["step"] = -2  # Set default value if missing
 
-            serialized_metadata = self.jsonplus_serde.dumps(processed_metadata)
+            serialized_metadata = json.dumps(
+                processed_metadata, ensure_ascii=False
+            ).encode("utf-8", "ignore")
 
             # Ensure serialized data is bytes for BLOB columns
             if not isinstance(serialized_checkpoint, bytes):
@@ -648,9 +709,21 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
             ]
 
             try:
-                self._execute_query(query, params)
-            except Exception:
-                pass
+                result = self._execute_query(query, params)
+                if not result.success:
+                    if self.enable_logging:
+                        logger.error(
+                            f"Failed to save checkpoint for thread_id={thread_id}, "
+                            f"checkpoint_id={checkpoint['id']}: D1 query returned success=False"
+                        )
+            except Exception as e:
+                if self.enable_logging:
+                    logger.error(
+                        f"Exception saving checkpoint for thread_id={thread_id}, "
+                        f"checkpoint_id={checkpoint['id']}: {type(e).__name__}: {e}",
+                        exc_info=True,
+                    )
+                # Don't raise - allow the graph to continue but log the failure
 
             return {
                 "configurable": {
@@ -710,7 +783,23 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                     serialized_value,
                 ]
 
-                self._execute_query(query, params)
+                try:
+                    result = self._execute_query(query, params)
+                    if not result.success:
+                        if self.enable_logging:
+                            logger.warning(
+                                f"Failed to save write for thread_id={config['configurable']['thread_id']}, "
+                                f"checkpoint_id={config['configurable']['checkpoint_id']}, "
+                                f"channel={channel}: D1 query returned success=False"
+                            )
+                except Exception as e:
+                    if self.enable_logging:
+                        logger.error(
+                            f"Exception saving write for thread_id={config['configurable']['thread_id']}, "
+                            f"checkpoint_id={config['configurable']['checkpoint_id']}, "
+                            f"channel={channel}: {type(e).__name__}: {e}"
+                        )
+                    # Continue to next write even if this one fails
 
     def delete_thread(self, thread_id: str) -> None:
         """Delete all checkpoints and writes associated with a thread ID.
