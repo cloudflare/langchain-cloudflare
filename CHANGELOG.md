@@ -5,6 +5,26 @@ All notable changes to the Langchain Cloudflare packages will be documented in t
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## langchain-cloudflare
+
+### [0.1.8]
+- Current development version
+
+## langgraph-checkpoint-cloudflare-d1
+
+### [0.1.4]
+
+#### Added
+- Optional logging configuration via `enable_logging` parameter in both `CloudflareD1Saver` and `AsyncCloudflareD1Saver` classes. Defaults to `False` (opt-in).
+
+#### Security
+- CVE-2025-64439 security fixes
+
+### [0.1.0] - Initial
+- Initial release
+
+
 ## [Unreleased]
 
 ### Added
@@ -13,16 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 ### Fixed
 ### Security
-
-## langchain-cloudflare
-
-### [0.1.8] - TBD
-- Current development version
-
-## langgraph-checkpoint-cloudflare-d1
-
-### [0.1.0] - TBD
-- Initial release
 
 ---
 
