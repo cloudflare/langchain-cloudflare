@@ -118,3 +118,4 @@ install_and_test.sh
 **/.ruff_cache/
 .benchmarks/
 .claude/
+uv.lock
