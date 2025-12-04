@@ -8,8 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
-### [0.1.8]
-- Current development version
+### [0.1.9]
+
+#### Changed
+- Updated Python version requirement from `>=3.9,<4.0` to `>=3.10,<4.0`
+- Updated `langchain-core` dependency from `^0.3.15` to `>=0.3.15,<2.0.0` for better compatibility
+- Updated `langchain-tests` dependency from `^0.3.17` to `>=0.3.17` for better compatibility
 
 ## langgraph-checkpoint-cloudflare-d1
 
