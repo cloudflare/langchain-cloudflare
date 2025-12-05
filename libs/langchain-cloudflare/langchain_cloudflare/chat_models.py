@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 import warnings
+from functools import cached_property
 from operator import itemgetter
 from typing import (
     Any,
@@ -71,6 +72,105 @@ from pydantic import (
     model_validator,
 )
 from typing_extensions import Self
+
+# =============================================================================
+# Model Behavior Registry
+# =============================================================================
+# Centralized configuration for model-specific behaviors and capabilities.
+# This makes it easy to add new models and documents differences in one place.
+# =============================================================================
+
+
+class ModelBehavior(BaseModel):
+    """Defines model-specific behaviors and capabilities for Workers AI models.
+
+    This class captures the differences between how various models handle
+    tool calling, structured output, and API parameters.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    embed_tool_calls_in_content: bool = Field(
+        default=False,
+        description=(
+            "When True, embeds tool call JSON in the content field alongside "
+            "the tool_calls array. Required for Llama models in multi-turn "
+            "tool calling conversations."
+        ),
+    )
+
+    unsupported_params: tuple = Field(
+        default=(),
+        description=(
+            "API parameters that should be removed before sending requests. "
+            "These params cause errors for this model family."
+        ),
+    )
+
+    response_format_param: str = Field(
+        default="response_format",
+        description=(
+            "The parameter name for structured output. Most models use "
+            "'response_format' (OpenAI style), but Mistral uses 'guided_json'."
+        ),
+    )
+
+
+def _transform_response_format_to_guided_json(
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Transform response_format to guided_json for Mistral models."""
+    if "response_format" in params:
+        response_format = params.pop("response_format")
+        if isinstance(response_format, dict):
+            if response_format.get("type") == "json_schema":
+                # Extract the schema from json_schema format
+                json_schema = response_format.get("json_schema", {})
+                schema = json_schema.get("schema", json_schema)
+                params["guided_json"] = schema
+            elif response_format.get("type") == "json_object":
+                # For simple json_object mode, use empty schema
+                params["guided_json"] = {}
+    return params
+
+
+# Registry of model behaviors keyed by model family identifier
+MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
+    "llama": ModelBehavior(
+        embed_tool_calls_in_content=True,
+    ),
+    "mistral": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        unsupported_params=("tool_choice",),
+        response_format_param="guided_json",
+    ),
+    "qwen": ModelBehavior(
+        embed_tool_calls_in_content=False,
+    ),
+}
+
+# Default behavior for unknown models (conservative defaults)
+DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
+
+
+def get_model_behavior(model_name: str) -> ModelBehavior:
+    """Get the behavior configuration for a model.
+
+    Matches model name against known model families and returns
+    the appropriate behavior config. Falls back to default for unknown models.
+
+    Args:
+        model_name: The full model identifier
+            (e.g., "@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+
+    Returns:
+        ModelBehavior configuration for this model family
+    """
+    model_lower = model_name.lower()
+    for family, behavior in MODEL_BEHAVIORS.items():
+        if family in model_lower:
+            return behavior
+    return DEFAULT_MODEL_BEHAVIOR
 
 
 class ChatCloudflareWorkersAI(BaseChatModel):
@@ -303,6 +403,15 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         """Return whether this model can be serialized by Langchain."""
         return False
 
+    @cached_property
+    def _model_behavior(self) -> ModelBehavior:
+        """Get the behavior configuration for this model.
+
+        Returns model-specific settings for tool calling format,
+        supported parameters, etc. Cached for performance.
+        """
+        return get_model_behavior(self.model)
+
     #
     # BaseChatModel method overrides
     #
@@ -500,6 +609,27 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return tool_calls
 
+    def _translate_params_for_model(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Translate parameters for model-specific API differences.
+
+        Uses the model behavior registry to apply appropriate transformations.
+        See MODEL_BEHAVIORS for model-specific configurations.
+        """
+        behavior = self._model_behavior
+
+        # Remove unsupported parameters
+        for param in behavior.unsupported_params:
+            params.pop(param, None)
+
+        # Handle response_format translation if model uses different param name
+        if (
+            behavior.response_format_param != "response_format"
+            and "response_format" in params
+        ):
+            params = _transform_response_format_to_guided_json(params)
+
+        return params
+
     def _generate(  # type: ignore
         self,
         messages: List[BaseMessage],
@@ -511,6 +641,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             **params,
             **kwargs,
         }
+
+        # Translate parameters for model-specific differences
+        params = self._translate_params_for_model(params)
 
         # Construct the API URL
         if self.ai_gateway:
@@ -541,6 +674,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             **params,
             **kwargs,
         }
+        params = self._translate_params_for_model(params)
 
         # Construct the Cloudflare Workers AI API URL
         if self.ai_gateway:
@@ -568,6 +702,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         """Stream completion for Cloudflare Workers AI."""
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
+        params = self._translate_params_for_model(params)
 
         # Construct the Cloudflare Workers AI API URL
         if self.ai_gateway:
@@ -723,6 +858,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         message_dicts, params = self._create_message_dicts(messages, stop)
 
         params = {**params, **kwargs, "stream": True}
+        params = self._translate_params_for_model(params)
 
         # Construct the Cloudflare Workers AI API URL
         if self.ai_gateway:
@@ -916,13 +1052,62 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         else:
             response_result = response
 
-        content = response_result.get("response", "")
-        token_usage = response_result.get("usage", {})
+        # Handle both old Workers AI format and OpenAI-compatible format
+        # Old format: {"result": {"response": "..."}}
+        # OpenAI format: {"result": {"choices": [{"message": {"content": "..."}}]}}
+        if "choices" in response_result and response_result["choices"]:
+            # OpenAI-compatible format (used by Qwen and other models)
+            choice = response_result["choices"][0]
+            message_data = choice.get("message", {})
+            content = message_data.get("content", "")
+            # Token usage in OpenAI format is at the top level of result
+            token_usage = response_result.get("usage", {})
+        else:
+            # Old Workers AI format
+            content = response_result.get("response", "")
+            token_usage = response_result.get("usage", {})
+            message_data = {}  # No message data in old format
         tool_calls = []
 
         # Handle tool_calls directly from the response
-        # First check for top-level tool_calls field as in the new format
-        if "tool_calls" in response_result:
+        # First check for tool_calls in OpenAI message format
+        if message_data.get("tool_calls"):
+            raw_tool_calls = message_data["tool_calls"]
+            for raw_tool_call in raw_tool_calls:
+                if isinstance(raw_tool_call, dict):
+                    # OpenAI format: {"id": "...", "type": "function",
+                    #   "function": {"name": "...", "arguments": "..."}}
+                    if "function" in raw_tool_call:
+                        func_data = raw_tool_call["function"]
+                        tool_id = raw_tool_call.get("id", str(uuid.uuid4()))
+                        tool_name = func_data.get("name", "")
+                        tool_args = func_data.get("arguments", {})
+                        if isinstance(tool_args, str):
+                            try:
+                                tool_args = json.loads(tool_args)
+                            except json.JSONDecodeError:
+                                tool_args = {"raw": tool_args}
+                        tool_calls.append(
+                            {
+                                "id": tool_id,
+                                "name": tool_name,
+                                "args": tool_args,
+                                "type": "function",
+                            }
+                        )
+                    # Also handle direct format
+                    elif "name" in raw_tool_call and "arguments" in raw_tool_call:
+                        tool_id = raw_tool_call.get("id", str(uuid.uuid4()))
+                        tool_calls.append(
+                            {
+                                "id": tool_id,
+                                "name": raw_tool_call["name"],
+                                "args": raw_tool_call["arguments"],
+                                "type": "function",
+                            }
+                        )
+        # Then check for top-level tool_calls field (old format)
+        elif "tool_calls" in response_result:
             raw_tool_calls = response_result["tool_calls"]
             for raw_tool_call in raw_tool_calls:
                 if isinstance(raw_tool_call, dict):
@@ -1050,15 +1235,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
         """Convert LangChain messages to Cloudflare Workers AI format.
 
-        Improved to match the TypeScript implementation's format expectations.
-        Different formatting for Mistral vs Llama models.
+        Uses model behavior registry to determine correct formatting.
+        See MODEL_BEHAVIORS for model-specific configurations.
         """
         params = self._default_params
         if stop is not None:
             params["stop"] = stop
 
-        # Check if this is a Llama model
-        is_llama_model = "llama" in self.model.lower()
+        behavior = self._model_behavior
 
         # Convert messages to Cloudflare format
         cloudflare_messages = []
@@ -1072,81 +1256,20 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 msg = {"role": message.role, "content": message.content}
 
             elif isinstance(message, HumanMessage):
-                # Format message parts
                 msg = {"role": "user", "content": message.content}
 
             elif isinstance(message, AIMessage):
-                # Handle differently based on model type
                 if message.tool_calls:
-                    if is_llama_model:
-                        # For Llama models -
-                        # use content as JSON string representation of tool call
-                        tool_call = message.tool_calls[0]
-                        content_json = {
-                            "name": tool_call["name"],
-                            "parameters": tool_call["args"],
-                        }
-                        content_str = json.dumps(content_json)
-                        msg = {"role": "assistant", "content": content_str}
-
-                        # Also include the tool_calls in the standard format
-                        tool_calls = []
-                        for tc in message.tool_calls:
-                            # Format args as JSON string
-                            args_str = (
-                                json.dumps(tc["args"])
-                                if isinstance(tc["args"], dict)
-                                else tc["args"]
-                            )
-                            tool_calls.append(
-                                {
-                                    "id": tc.get("id", str(uuid.uuid4())),
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc["name"],
-                                        "arguments": args_str,
-                                    },
-                                }
-                            )
-                        msg["tool_calls"] = tool_calls
-
-                    else:
-                        # For Mistral and other models -
-                        # use the format with empty content
-                        msg = {"role": "assistant", "content": ""}
-
-                        # Format tool calls
-                        tool_calls = []
-                        for tc in message.tool_calls:
-                            # Format args as JSON string
-                            args_str = (
-                                json.dumps(tc["args"])
-                                if isinstance(tc["args"], dict)
-                                else tc["args"]
-                            )
-
-                            tool_calls.append(
-                                {
-                                    "id": tc.get("id", f"call_{hash(str(tc))}"),
-                                    "type": "function",
-                                    "function": {
-                                        "name": tc["name"],
-                                        "arguments": args_str,
-                                    },
-                                }
-                            )
-
-                        if tool_calls:
-                            msg["tool_calls"] = tool_calls
+                    msg = self._format_ai_message_with_tool_calls(message, behavior)
                 else:
-                    # For regular assistant messages without tool calls
+                    # Regular assistant messages without tool calls
                     msg = {"role": "assistant", "content": message.content or ""}
 
                     # Handle legacy function_call format for backward compatibility
                     if "function_call" in message.additional_kwargs:
                         function_call = message.additional_kwargs["function_call"]
                         msg["function_call"] = function_call
-                        if not is_llama_model:
+                        if not behavior.embed_tool_calls_in_content:
                             # For non-Llama models,
                             # set content to empty when function_call exists
                             msg["content"] = ""
@@ -1176,6 +1299,53 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             cloudflare_messages.append(msg)
 
         return cloudflare_messages, params
+
+    def _format_ai_message_with_tool_calls(
+        self, message: AIMessage, behavior: ModelBehavior
+    ) -> Dict[str, Any]:
+        """Format an AI message that contains tool calls.
+
+        Args:
+            message: The AI message with tool calls
+            behavior: Model behavior configuration
+
+        Returns:
+            Formatted message dict for the API
+        """
+        if behavior.embed_tool_calls_in_content:
+            # Llama-style: embed tool call JSON in content field
+            tool_call = message.tool_calls[0]
+            content_json = {
+                "name": tool_call["name"],
+                "parameters": tool_call["args"],
+            }
+            content_str = json.dumps(content_json)
+            msg: Dict[str, Any] = {"role": "assistant", "content": content_str}
+        else:
+            # Standard format: empty content with tool_calls array
+            msg = {"role": "assistant", "content": ""}
+
+        # Format tool calls array (used by all models)
+        tool_calls = []
+        for tc in message.tool_calls:
+            args_str = (
+                json.dumps(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]
+            )
+            tool_calls.append(
+                {
+                    "id": tc.get("id", str(uuid.uuid4())),
+                    "type": "function",
+                    "function": {
+                        "name": tc["name"],
+                        "arguments": args_str,
+                    },
+                }
+            )
+
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+
+        return msg
 
     def _combine_llm_outputs(self, llm_outputs: List[Optional[dict]]) -> dict:
         overall_token_usage: dict = {}

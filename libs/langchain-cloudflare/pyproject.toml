@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "langchain-cloudflare"
-version = "0.1.9"
+version = "0.1.10"
 description = "Langchain Integrations for Cloudflare's WorkersAI and Vectorize"
 authors = []
 readme = "README.md"
@@ -57,7 +57,7 @@ optional = true
 [tool.poetry.group.dev]
 
 [tool.poetry.group.dev.dependencies]
-ruff = "^0.5"
+ruff = "^0.5.0"
 mypy = "^1.10"
 codespell = "^2.2.6"
 
@@ -74,7 +74,7 @@ codespell = "^2.2.6"
 [tool.poetry.group.test_integration.dependencies]
 
 [tool.poetry.group.lint.dependencies]
-ruff = "^0.5"
+ruff = "^0.5.0"
 
 [tool.poetry.group.typing.dependencies]
 mypy = "^1.10"

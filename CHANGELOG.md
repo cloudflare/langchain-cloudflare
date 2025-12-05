@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.1.10]
+
+#### Added
+
+- ModelBehavior Pydantic class for centralized model-specific configurations
+- MODEL_BEHAVIORS registry with entries for Llama, Mistral, Qwen
+- _translate_params_for_model() method for model-specific parameter handling
+- _format_ai_message_with_tool_calls() helper method
+- Integration test suite (33 tests) covering Llama, Mistral, and Qwen models
+
+#### Changed
+
+- Refactored scattered is_llama_model checks to use ModelBehavior registry
+- Response parsing now handles both Workers AI format and OpenAI-compatible format
+
+#### Fixed
+
+- Mistral structured output now uses guided_json instead of response_format
+- Mistral no longer receives unsupported tool_choice parameter (caused 400 errors)
+- Qwen tool calls now correctly parsed from OpenAI-compatible choices[].message.tool_calls format
+
 ### [0.1.9]
 
 #### Changed
