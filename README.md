@@ -7,6 +7,7 @@ It contains the following packages.
 
 - `langchain-cloudflare` ([PyPI](https://pypi.org/project/langchain-cloudflare/))
 - `langgraph-checkpoint-cloudflare-d1` ([PyPI](https://pypi.org/project/langgraph-checkpoint-cloudflare-d1/))
+- `langmem-cloudflare-vectorize` ([PyPI](https://pypi.org/project/langmem-cloudflare-vectorize/))
 
 ## Features
 
@@ -23,6 +24,8 @@ It contains the following packages.
 - Checkpointing (BaseCheckpointSaver)
     - CloudflareD1Saver
     - AsyncCloudflareD1Saver
+- MemoryStore (BaseStore)
+    - CloudflareVectorizeBaseStore
 
 ## Installation
 

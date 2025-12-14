@@ -115,6 +115,10 @@ print(f"Agent: {response4['messages'][-1].content}")
 ```
 ## Release Notes
 
-v0.1.1 (2025-09-26)
+v0.1.1 (2025-12-14)
+
+- Minor Readme updates
+
+v0.1.0 (2025-09-26)
 
 - Add Langgraph BaseStore support for Cloudflare Vectorize

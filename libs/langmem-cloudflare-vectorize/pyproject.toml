@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "langmem-cloudflare-vectorize"
-version = "0.1.0"
+version = "0.1.1"
 description = "Langgraph BaseStore for Vectorize to use with Langmem"
 authors = []
 readme = "README.md"
