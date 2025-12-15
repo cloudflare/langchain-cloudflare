@@ -156,17 +156,17 @@ class TestStructuredOutput:
         print(f"  Result: {result}")
 
         assert result is not None, f"Result is None for {model}"
-        assert isinstance(result, (dict, Data)), (
-            f"Unexpected type {type(result)} for {model}"
-        )
+        assert isinstance(
+            result, (dict, Data)
+        ), f"Unexpected type {type(result)} for {model}"
 
         # Check structure
         if isinstance(result, dict):
             assert "announcements" in result, f"Missing 'announcements' key for {model}"
         else:
-            assert hasattr(result, "announcements"), (
-                f"Missing 'announcements' attr for {model}"
-            )
+            assert hasattr(
+                result, "announcements"
+            ), f"Missing 'announcements' attr for {model}"
 
     @pytest.mark.parametrize("model", MODELS)
     def test_structured_output_batch(self, model, account_id, api_token, ai_gateway):
