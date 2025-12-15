@@ -123,9 +123,9 @@ class TestCloudflareVectorize:
         retrieved_docs = store.get_by_ids(doc_ids)
         retrieved_ids = set(doc.id for doc in retrieved_docs)
 
-        assert retrieved_ids == set(
-            doc_ids
-        ), f"Retrieved IDs {retrieved_ids} don't match original IDs {doc_ids}"
+        assert retrieved_ids == set(doc_ids), (
+            f"Retrieved IDs {retrieved_ids} don't match original IDs {doc_ids}"
+        )
 
     def test_add_duplicates_and_upsert(self, store: CloudflareVectorize) -> None:
         """Test adding duplicate documents and upserting documents."""

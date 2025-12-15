@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.1.11]
+
+#### Added
+
+- SQLAlchemy integration via `sqlalchemy-cloudflare-d1` for D1 database operations
+- New helper methods `_get_d1_engine()` and `_get_d1_table()` for SQLAlchemy engine/table management
+- Unit tests for D1 SQLAlchemy integration and input validation
+
+#### Changed
+
+- Refactored all D1 methods to use SQLAlchemy with parameterized queries:
+  - `d1_create_table` / `ad1_create_table`
+  - `d1_drop_table` / `ad1_drop_table`
+  - `d1_upsert_texts` / `ad1_upsert_texts` (now uses batch upsert for better performance)
+  - `d1_get_by_ids` / `ad1_get_by_ids`
+  - `d1_delete` / `ad1_delete`
+  - `d1_metadata_query` / `ad1_metadata_query`
+
+#### Removed
+
+- Removed `_d1_create_upserts()` method (replaced by SQLAlchemy batch operations)
+
+#### Security
+
+- **CVE-TBD**: Fixed SQL injection vulnerability in D1 upsert operations. Previously, nested metadata containing single quotes could escape SQL string literals and inject arbitrary SQL. Now uses SQLAlchemy's parameterized queries which properly separate SQL from data.
+
 ### [0.1.10]
 
 #### Added
