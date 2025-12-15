@@ -24,6 +24,19 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.utils import from_env, secret_from_env
 from langchain_core.vectorstores import VectorStore
 from pydantic import SecretStr
+from sqlalchemy import (
+    Column,
+    MetaData,
+    Table,
+    Text,
+    create_engine,
+    delete,
+    insert,
+    select,
+)
+from sqlalchemy import text as sql_text
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Engine
 from typing_extensions import TypedDict
 
 MAX_INSERT_SIZE = 5000
@@ -420,6 +433,60 @@ class CloudflareVectorize(VectorStore):
         """
         return f"{self.d1_base_url}/accounts/{self.account_id}/d1/{endpoint}"
 
+    def _get_d1_engine(self) -> Engine:
+        """Get a SQLAlchemy engine for the D1 database.
+
+        Returns:
+            Engine: SQLAlchemy engine configured for Cloudflare D1
+
+        Raises:
+            ValueError: If D1 credentials are not configured
+        """
+        if not self.d1_database_id:
+            raise ValueError("D1 database ID is required")
+
+        # Get the API token for D1
+        api_token = (
+            self.d1_api_token.get_secret_value()
+            if self.d1_api_token
+            else self.api_token.get_secret_value()
+            if self.api_token
+            else None
+        )
+        if not api_token:
+            raise ValueError("D1 API token is required")
+
+        # Create connection string for sqlalchemy-cloudflare-d1
+        # Format: cloudflare_d1://account_id:api_token@database_id
+        connection_string = (
+            f"cloudflare_d1://{self.account_id}:{api_token}@{self.d1_database_id}"
+        )
+        return create_engine(connection_string)
+
+    def _get_d1_table(
+        self, table_name: str, metadata: Optional[MetaData] = None
+    ) -> Table:
+        """Get a SQLAlchemy Table object for D1 document storage.
+
+        Args:
+            table_name: Name of the table
+            metadata: Optional SQLAlchemy MetaData instance
+
+        Returns:
+            Table: SQLAlchemy Table object for the D1 table
+        """
+        if metadata is None:
+            metadata = MetaData()
+
+        return Table(
+            table_name,
+            metadata,
+            Column("id", Text, primary_key=True, autoincrement=False),
+            Column("text", Text),
+            Column("namespace", Text),
+            Column("metadata", Text),
+        )
+
     @staticmethod
     def _filter_request_kwargs(kwargs: Dict[str, Any]) -> RequestsKwargs:
         """Filter kwargs to only include those allowed for the specified HTTP client.
@@ -485,67 +552,6 @@ class CloudflareVectorize(VectorStore):
             search_request["returnValues"] = return_values
 
         return search_request
-
-    # MARK: - _d1_create_upserts
-    @staticmethod
-    def _d1_create_upserts(
-        table_name: str, data: List[VectorizeRecord], upsert: bool = False
-    ) -> List[str]:
-        """Create SQL upsert statements for D1 database operations.
-
-        Args:
-            table_name: Name of the table to insert/update data in
-            data: List of VectorizeRecord objects containing the data
-
-        Returns:
-            List[str]: List of SQL statements for upserting the records
-
-        Raises:
-            ValueError: If table_name is not provided
-        """
-        statements = []
-        for record in data:
-            record_dict = record.to_dict()
-
-            if "namespace" not in record_dict.keys():
-                record_dict["namespace"] = ""
-
-            if "metadata" not in record_dict.keys():
-                record_dict["metadata"] = {}
-            else:
-                for k, v in record_dict["metadata"].items():
-                    record_dict["metadata"][k] = (
-                        v.replace("'", "''") if isinstance(v, str) else v
-                    )
-
-            sql = (
-                f"INSERT INTO '{table_name}' (id, text, namespace, metadata) "
-                + "VALUES ("
-                + ", ".join(
-                    [
-                        f"'{x}'" if x else "NULL"
-                        for x in [
-                            record_dict["id"].replace("'", "''"),
-                            record_dict["text"].replace("'", "''"),
-                            record_dict["namespace"].replace("'", "''"),
-                            json.dumps(record_dict["metadata"]),
-                        ]
-                    ]
-                )
-                + ")"
-            )
-
-            if upsert:
-                sql += """
-                ON CONFLICT (id) DO UPDATE SET
-                text = excluded.text,
-                namespace = excluded.namespace,
-                metadata = excluded.metadata
-                """
-
-            statements.append(sql)
-
-        return statements
 
     # MARK: - _combine_vectorize_and_d1_data
     @staticmethod
@@ -690,11 +696,11 @@ class CloudflareVectorize(VectorStore):
 
     # MARK: - d1_create_table
     def d1_create_table(self, table_name: str, **kwargs: Any) -> Dict[str, Any]:
-        """Create a table in a D1 database using SQL schema.
+        """Create a table in a D1 database using SQLAlchemy.
 
         Args:
             table_name: Name of the table to create
-            **kwargs: Additional keyword arguments to pass to the requests call
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with query results
@@ -702,35 +708,26 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-
         if not table_name:
             raise ValueError("table_name must be provided")
 
-        table_schema = f"""
-        CREATE TABLE IF NOT EXISTS '{table_name}' (
-            id TEXT PRIMARY KEY,
-            text TEXT,
-            namespace TEXT,
-            metadata TEXT
-        )"""
+        engine = self._get_d1_engine()
+        metadata = MetaData()
+        # Define the table structure in metadata
+        self._get_d1_table(table_name, metadata)
 
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        response = requests.post(
-            self._get_d1_url(f"database/{self.d1_database_id}/query"),
-            headers=self.d1_headers,
-            json={"sql": table_schema},
-            **filtered_kwargs,
-        )
+        # Create the table using SQLAlchemy (handles CREATE TABLE IF NOT EXISTS)
+        metadata.create_all(engine)
 
-        return response.json().get("result", {})
+        return {"success": True}
 
     # MARK: - ad1_create_table
     async def ad1_create_table(self, table_name: str, **kwargs: Any) -> Dict[str, Any]:
-        """Asynchronously create a table in a D1 database using SQL schema.
+        """Asynchronously create a table in a D1 database using SQLAlchemy.
 
         Args:
             table_name: Name of the table to create
-            **kwargs: Additional keyword arguments to pass to the httpx client
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with query results
@@ -738,40 +735,19 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-
-        if not table_name:
-            raise ValueError("table_name must be provided")
-
-        table_schema = f"""
-        CREATE TABLE IF NOT EXISTS '{table_name}' (
-            id TEXT PRIMARY KEY,
-            text TEXT,
-            namespace TEXT,
-            metadata TEXT
-        )"""
-
-        import httpx
-
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_d1_url(f"database/{self.d1_database_id}/query"),
-                headers=self.d1_headers,
-                json={"sql": table_schema},
-                **filtered_kwargs,
-            )
-            response.raise_for_status()
-            response_data = response.json()
-
-        return response_data.get("result", {})
+        # Run synchronous SQLAlchemy code in executor for async compatibility
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.d1_create_table(table_name, **kwargs)
+        )
 
     # MARK: - d1_drop_table
     def d1_drop_table(self, table_name: str, **kwargs: Any) -> Dict[str, Any]:
-        """Asynchronously delete a table from a D1 database.
+        """Delete a table from a D1 database using SQLAlchemy.
 
         Args:
             table_name: Name of the table to delete
-            **kwargs: Additional keyword arguments to pass to the requests call
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with query results
@@ -779,31 +755,25 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-
         if not table_name:
             raise ValueError("table_name must be provided")
 
-        drop_query = f"DROP TABLE IF EXISTS '{table_name}'"
+        engine = self._get_d1_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
 
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        response = requests.post(
-            self._get_d1_url(f"database/{self.d1_database_id}/query"),
-            headers=self.d1_headers,
-            json={"sql": drop_query},
-            **filtered_kwargs,
-        )
+        # Drop the table using SQLAlchemy
+        table.drop(engine, checkfirst=True)
 
-        response.raise_for_status()
-
-        return response.json().get("result", {})
+        return {"success": True}
 
     # MARK: - ad1_drop_table
     async def ad1_drop_table(self, table_name: str, **kwargs: Any) -> Dict[str, Any]:
-        """Asynchronously delete a table from a D1 database.
+        """Asynchronously delete a table from a D1 database using SQLAlchemy.
 
         Args:
             table_name: Name of the table to delete
-            **kwargs: Additional keyword arguments to pass to the httpx client
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with query results
@@ -811,26 +781,11 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-
-        if not table_name:
-            raise ValueError("table_name must be provided")
-
-        import httpx
-
-        drop_query = f"DROP TABLE IF EXISTS '{table_name}'"
-
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_d1_url(f"database/{self.d1_database_id}/query"),
-                headers=self.d1_headers,
-                json={"sql": drop_query},
-                **filtered_kwargs,
-            )
-            response.raise_for_status()
-            response_data = response.json()
-
-        return response_data.get("result", {})
+        # Run synchronous SQLAlchemy code in executor for async compatibility
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.d1_drop_table(table_name, **kwargs)
+        )
 
     # MARK: - d1_upsert_texts
     def d1_upsert_texts(
@@ -840,15 +795,17 @@ class CloudflareVectorize(VectorStore):
         upsert: bool = False,
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Insert or update text data in a D1 database table.
+        """Insert or update text data in a D1 database table using SQLAlchemy.
+
+        Uses parameterized queries via SQLAlchemy to prevent SQL injection.
 
         Args:
             table_name: Name of the table to insert data into
-            data: List of dictionaries containing data to insert
+            data: List of VectorizeRecord objects containing data to insert
             upsert:
                 If true (default: False),
                 insert or update the text data otherwise insert only.
-            **kwargs: Additional keyword arguments to pass to the requests call
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with query results
@@ -856,28 +813,49 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-
         if not table_name:
             raise ValueError("table_name must be provided")
 
         if not data:
             return {"success": True, "changes": 0}
 
-        statements = self._d1_create_upserts(
-            table_name=table_name, data=data, upsert=upsert
-        )
+        engine = self._get_d1_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
 
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        response = requests.post(
-            self._get_d1_url(f"database/{self.d1_database_id}/query"),
-            headers=self.d1_headers,
-            json={
-                "sql": ";\n".join(statements),
-            },
-            **filtered_kwargs,
-        )
+        # Prepare records for insertion
+        records = []
+        for record in data:
+            record_dict = record.to_dict()
+            records.append(
+                {
+                    "id": record_dict.get("id", ""),
+                    "text": record_dict.get("text", ""),
+                    "namespace": record_dict.get("namespace", ""),
+                    "metadata": json.dumps(record_dict.get("metadata", {})),
+                }
+            )
 
-        return response.json().get("result", {})
+        with engine.connect() as conn:
+            if upsert:
+                # Batch upsert using SQLite's INSERT ... ON CONFLICT DO UPDATE
+                stmt = sqlite_insert(table).values(records)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["id"],
+                    set_={
+                        "text": stmt.excluded.text,
+                        "namespace": stmt.excluded.namespace,
+                        "metadata": stmt.excluded.metadata,
+                    },
+                )
+                conn.execute(stmt)
+                conn.commit()
+            else:
+                # Batch insert (will fail on duplicate IDs)
+                conn.execute(insert(table), records)
+                conn.commit()
+
+        return {"success": True, "changes": len(records)}
 
     # MARK: - ad1_upsert_texts
     async def ad1_upsert_texts(
@@ -889,56 +867,15 @@ class CloudflareVectorize(VectorStore):
     ) -> Dict[str, Any]:
         """Asynchronously insert or update text data in a D1 database table.
 
+        Uses parameterized queries via SQLAlchemy to prevent SQL injection.
+
         Args:
             table_name: Name of the table to insert data into
-            data: List of dictionaries containing data to insert
+            data: List of VectorizeRecord objects containing data to insert
             upsert:
                 If true (default: False),
                 insert or update the text data otherwise insert only.
-            **kwargs: Additional keyword arguments to pass to the httpx client
-
-        Returns:
-            Response data with query results
-
-        Raises:
-            ValueError: If index_name is not provided
-        """
-        if not table_name:
-            raise ValueError("table_name must be provided")
-
-        if not data:
-            return {"success": True, "changes": 0}
-
-        statements = self._d1_create_upserts(
-            table_name=table_name, data=data, upsert=upsert
-        )
-
-        import httpx
-
-        # Execute with parameters
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_d1_url(f"database/{self.d1_database_id}/query"),
-                headers=self.d1_headers,
-                json={
-                    "sql": ";\n".join(statements),
-                },
-                **filtered_kwargs,
-            )
-            response.raise_for_status()
-            response_data = response.json()
-
-        return response_data.get("result", {})
-
-    # MARK: - d1_get_by_ids
-    def d1_get_by_ids(self, table_name: str, ids: List[str], **kwargs: Any) -> List:
-        """Retrieve text data from a D1 database table.
-
-        Args:
-            table_name: Name of the table to retrieve data from
-            ids: List of ids to retrieve
-            **kwargs: Additional keyword arguments to pass to the requests call
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with query results
@@ -946,39 +883,54 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
+        # Run synchronous SQLAlchemy code in executor for async compatibility
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.d1_upsert_texts(table_name, data, upsert, **kwargs)
+        )
 
+    # MARK: - d1_get_by_ids
+    def d1_get_by_ids(self, table_name: str, ids: List[str], **kwargs: Any) -> List:
+        """Retrieve text data from a D1 database table using SQLAlchemy.
+
+        Args:
+            table_name: Name of the table to retrieve data from
+            ids: List of ids to retrieve
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
+
+        Returns:
+            List of dictionaries with query results
+
+        Raises:
+            ValueError: If table_name is not provided
+        """
         if not table_name:
             raise ValueError("table_name must be provided")
 
-        # query D1 for raw results
-        placeholders = ",".join(
-            ["?"] * len(ids)
-        )  # Creates "?,?,?..." for the right number of IDs
-
-        sql = f"""
-            SELECT * FROM '{table_name}'
-            WHERE id IN ({placeholders})
-        """
-
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        response = requests.post(
-            self._get_d1_url(f"database/{self.d1_database_id}/query"),
-            headers=self.d1_headers,
-            json={"sql": sql, "params": ids},
-            **filtered_kwargs,
-        )
-
-        response.raise_for_status()
-        response_data = response.json()
-        d1_results = response_data.get("result", {})
-        if len(d1_results) == 0:
+        if not ids:
             return []
 
-        d1_results_records = d1_results[0].get("results", [])
+        engine = self._get_d1_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
 
-        return d1_results_records
+        with engine.connect() as conn:
+            stmt = select(table).where(table.c.id.in_(ids))
+            result = conn.execute(stmt)
+            rows = result.fetchall()
 
-    # MARK: - ad1_get_texts
+        # Convert rows to list of dicts
+        return [
+            {
+                "id": row[0],
+                "text": row[1],
+                "namespace": row[2],
+                "metadata": row[3],
+            }
+            for row in rows
+        ]
+
+    # MARK: - ad1_get_by_ids
     async def ad1_get_by_ids(
         self, table_name: str, ids: List[str], **kwargs: Any
     ) -> List:
@@ -987,52 +939,19 @@ class CloudflareVectorize(VectorStore):
         Args:
             table_name: Name of the table to retrieve data from
             ids: List of ids to retrieve
-            **kwargs: Additional keyword arguments to pass to the httpx client
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
-            Response data with query results
+            List of dictionaries with query results
 
         Raises:
             ValueError: If table_name is not provided
         """
-
-        if not table_name:
-            raise ValueError("table_name must be provided")
-
-        # query D1 for raw results
-        placeholders = ",".join(
-            ["?"] * len(ids)
-        )  # Creates "?,?,?..." for the right number of IDs
-
-        sql = f"""
-            SELECT * FROM '{table_name}'
-            WHERE id IN ({placeholders})
-        """
-
-        import httpx
-
-        # Execute the query
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_d1_url(f"database/{self.d1_database_id}/query"),
-                headers=self.d1_headers,
-                json={
-                    "sql": sql,
-                    "params": ids,
-                },
-                **filtered_kwargs,
-            )
-            response.raise_for_status()
-            response_data = response.json()
-
-        d1_results = response_data.get("result", {})
-        if len(d1_results) == 0:
-            return []
-
-        d1_results_records = d1_results[0].get("results", [])
-
-        return d1_results_records
+        # Run synchronous SQLAlchemy code in executor for async compatibility
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.d1_get_by_ids(table_name, ids, **kwargs)
+        )
 
     # MARK: - d1_metadata_query
     def d1_metadata_query(
@@ -1044,61 +963,73 @@ class CloudflareVectorize(VectorStore):
     ) -> List[Dict[str, Any]]:
         """Retrieve text data from a D1 database table with a metadata query.
 
+        Uses SQLAlchemy with raw SQL for complex JSON queries while maintaining
+        parameterized query safety.
+
         Args:
             table_name: Name of the table to retrieve data from
             metadata_filters: Dictionary of filters to apply to the query
             operation: Operation to combine query conditions. "AND" (Default) or "OR"
-            **kwargs: Additional keyword arguments to pass to the requests call
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
-            Response data with query results
+            List of dictionaries with query results
 
         Raises:
             ValueError: If table_name is not provided
         """
-
         if not table_name:
             raise ValueError("table_name must be provided")
 
-        clauses: list[str] = []
-        params: list = []
+        if not metadata_filters:
+            return []
+
+        engine = self._get_d1_engine()
+
+        # Build parameterized clauses for JSON metadata filtering
+        clauses: List[str] = []
+        params: List[Any] = []
 
         for key, values in metadata_filters.items():
             if not values:
                 continue
 
-            in_placeholders = ",".join("?" * len(values))
+            in_placeholders = ",".join(
+                ":p" + str(len(params) + i + 1) for i in range(len(values))
+            )
 
+            # Use named parameters for SQLAlchemy text()
+            param_key = f":p{len(params)}"
             clauses.append(
                 f"""EXISTS (
-                          SELECT 1
-                          FROM   json_each('{table_name}'.metadata, ?)
-                          WHERE  json_each.value IN ({in_placeholders})
-                        )"""
+                    SELECT 1
+                    FROM json_each("{table_name}".metadata, {param_key})
+                    WHERE json_each.value IN ({in_placeholders})
+                )"""
             )
 
             params.append(f"$.{key}")
             params.extend(values)
 
         where_clause = f" {operation} ".join(clauses)
-        sql = f"SELECT * FROM '{table_name}' WHERE {where_clause}"
+        sql = f'SELECT * FROM "{table_name}" WHERE {where_clause}'
 
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        response = requests.post(
-            self._get_d1_url(f"database/{self.d1_database_id}/query"),
-            headers=self.d1_headers,
-            json={"sql": sql, "params": params},
-            **filtered_kwargs,
-        )
+        # Build param dict for SQLAlchemy
+        param_dict = {f"p{i}": v for i, v in enumerate(params)}
 
-        response.raise_for_status()
-        response_data = response.json()
-        d1_results = response_data.get("result", {})
-        if len(d1_results) == 0:
-            return []
+        with engine.connect() as conn:
+            result = conn.execute(sql_text(sql), param_dict)
+            rows = result.fetchall()
 
-        d1_results_records = d1_results[0].get("results", [])
-        return d1_results_records
+        return [
+            {
+                "id": row[0],
+                "text": row[1],
+                "namespace": row[2],
+                "metadata": row[3],
+            }
+            for row in rows
+        ]
 
     # MARK: - ad1_metadata_query
     async def ad1_metadata_query(
@@ -1108,67 +1039,28 @@ class CloudflareVectorize(VectorStore):
         operation: Optional[str] = "AND",
         **kwargs: Any,
     ) -> List[Dict[str, Any]]:
-        """Retrieve text data from a D1 database table with a metadata query.
+        """Asynchronously retrieve text data from D1 with metadata query.
 
         Args:
             table_name: Name of the table to retrieve data from
             metadata_filters: Dictionary of filters to apply to the query
             operation: Operation to combine query conditions. "AND" (Default) or "OR"
-            **kwargs: Additional keyword arguments to pass to the requests call
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
-            Response data with query results
+            List of dictionaries with query results
 
         Raises:
             ValueError: If table_name is not provided
         """
-
-        if not table_name:
-            raise ValueError("table_name must be provided")
-
-        clauses: list[str] = []
-        params: list = []
-
-        for key, values in metadata_filters.items():
-            if not values:
-                continue
-
-            in_placeholders = ",".join("?" * len(values))
-
-            clauses.append(
-                f"""EXISTS (
-                          SELECT 1
-                          FROM   json_each('{table_name}'.metadata, ?)
-                          WHERE  json_each.value IN ({in_placeholders})
-                        )"""
-            )
-
-            params.append(f"$.{key}")
-            params.extend(values)
-
-        where_clause = f" {operation} ".join(clauses)
-        sql = f"SELECT * FROM '{table_name}' WHERE {where_clause}"
-
-        import httpx
-
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_d1_url(f"database/{self.d1_database_id}/query"),
-                headers=self.d1_headers,
-                json={"sql": sql, "params": params},
-                **filtered_kwargs,
-            )
-            response.raise_for_status()
-            response_data = response.json()
-
-        d1_results = response_data.get("result", {})
-        if len(d1_results) == 0:
-            return []
-
-        d1_results_records = d1_results[0].get("results", [])
-
-        return d1_results_records
+        # Run synchronous SQLAlchemy code in executor for async compatibility
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.d1_metadata_query(
+                table_name, metadata_filters, operation, **kwargs
+            ),
+        )
 
     # MARK: - d1_delete
     def d1_delete(
@@ -1177,40 +1069,35 @@ class CloudflareVectorize(VectorStore):
         ids: List[str],
         **kwargs: Any,
     ) -> Dict[str, Any]:
-        """Delete data from a D1 database table.
+        """Delete data from a D1 database table using SQLAlchemy.
 
         Args:
             table_name: Name of the table to delete from
-            ids: List of ids to retrieve
+            ids: List of ids to delete
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with deletion results
 
         Raises:
-            ValueError: If index_name is not provided
+            ValueError: If table_name is not provided
         """
-
         if not table_name:
             raise ValueError("table_name must be provided")
 
-        # query D1 for raw results
-        placeholders = ",".join(
-            ["?"] * len(ids)
-        )  # Creates "?,?,?..." for the right number of IDs
+        if not ids:
+            return {"success": True, "changes": 0}
 
-        sql = f"""
-                    DELETE FROM '{table_name}'
-                    WHERE id IN ({placeholders})
-                """
-        response = requests.post(
-            self._get_d1_url(f"database/{self.d1_database_id}/query"),
-            headers=self.d1_headers,
-            json={"sql": sql, "params": ids},
-            **kwargs,
-        )
-        response.raise_for_status()
+        engine = self._get_d1_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
 
-        return response.json().get("result", {})
+        with engine.connect() as conn:
+            stmt = delete(table).where(table.c.id.in_(ids))
+            result = conn.execute(stmt)
+            conn.commit()
+
+        return {"success": True, "changes": result.rowcount}
 
     # MARK: - ad1_delete
     async def ad1_delete(
@@ -1220,8 +1107,8 @@ class CloudflareVectorize(VectorStore):
 
         Args:
             table_name: Name of the table to delete from
-            ids: List of ids to retrieve
-            **kwargs: Additional keyword arguments to pass to the httpx client
+            ids: List of ids to delete
+            **kwargs: Additional keyword arguments (unused, kept for compatibility)
 
         Returns:
             Response data with deletion results
@@ -1229,38 +1116,11 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-
-        if not table_name:
-            raise ValueError("table_name must be provided")
-
-        # query D1 for raw results
-        placeholders = ",".join(
-            ["?"] * len(ids)
-        )  # Creates "?,?,?..." for the right number of IDs
-
-        sql = f"""
-                    DELETE FROM '{table_name}'
-                    WHERE id IN ({placeholders})
-                """
-
-        import httpx
-
-        # Execute the deletion
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_d1_url(f"database/{self.d1_database_id}/query"),
-                headers=self.d1_headers,
-                json={
-                    "sql": sql,
-                    "params": ids,
-                },
-                **filtered_kwargs,
-            )
-            response.raise_for_status()
-            response_data = response.json()
-
-        return response_data.get("result", {})
+        # Run synchronous SQLAlchemy code in executor for async compatibility
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None, lambda: self.d1_delete(table_name, ids, **kwargs)
+        )
 
     # MARK: - add_texts
     def add_texts(

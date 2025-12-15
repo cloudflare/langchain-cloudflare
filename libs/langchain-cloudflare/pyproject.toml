@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "langchain-cloudflare"
-version = "0.1.10"
+version = "0.1.11"
 description = "Langchain Integrations for Cloudflare's WorkersAI and Vectorize"
 authors = []
 readme = "README.md"
@@ -30,6 +30,8 @@ requests = ">=2.31.0"
 httpx = ">=0.24.1"
 pydantic = ">=1.10.0,<3.0.0"
 typing-extensions = ">=4.5.0"
+sqlalchemy = ">=2.0.0"
+sqlalchemy-cloudflare-d1 = ">=0.3.0"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "T201"]
