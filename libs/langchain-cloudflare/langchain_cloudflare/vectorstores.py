@@ -146,8 +146,39 @@ class CloudflareVectorize(VectorStore):
         d1_api_token: str
             Optional API token for D1 database service. If not specified,
             will be read from the CF_D1_API_TOKEN environment variable.
+        binding: Any
+            Optional Vectorize binding (env.VECTORIZE) for use in Python Workers.
+            When provided, uses the binding instead of REST API calls.
 
     See full list of supported init args and their descriptions in the params section.
+
+    Usage in Python Workers:
+        When running in a Cloudflare Python Worker, you can use the
+        Vectorize binding directly for better performance:
+
+        .. code-block:: python
+
+            from workers import WorkerEntrypoint, Response
+            from langchain_cloudflare import CloudflareVectorize
+            from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
+
+            class Default(WorkerEntrypoint):
+                async def fetch(self, request):
+                    # Create embeddings using AI binding
+                    embeddings = CloudflareWorkersAIEmbeddings(
+                        model_name="@cf/baai/bge-large-en-v1.5",
+                        binding=self.env.AI,
+                    )
+
+                    # Create vectorstore using Vectorize binding
+                    vectorstore = CloudflareVectorize(
+                        embedding=embeddings,
+                        binding=self.env.VECTORIZE,  # Pass the Vectorize binding
+                    )
+
+                    # Perform similarity search
+                    results = await vectorstore.asimilarity_search("query", k=5)
+                    return Response.json({"results": [doc.page_content for doc in results]})
 
     Instantiate:
         .. code-block:: python
@@ -264,6 +295,8 @@ class CloudflareVectorize(VectorStore):
         base_url: str = "https://api.cloudflare.com/client/v4",
         d1_database_id: Optional[str] = None,
         index_name: Optional[str] = None,
+        binding: Any = None,
+        d1_binding: Any = None,
         **kwargs: Any,
     ) -> None:
         """Initialize a CloudflareVectorize instance.
@@ -280,6 +313,12 @@ class CloudflareVectorize(VectorStore):
                 If not specified, will be read from the
                 CF_D1_DATABASE_ID environment variable.
             index_name: Optional name for the default Vectorize index
+            binding: Optional Vectorize binding (env.VECTORIZE) for use in
+                Python Workers. When provided, uses the binding instead of
+                REST API calls.
+            d1_binding: Optional D1 database binding (env.D1) for use in
+                Python Workers. When provided, uses the binding instead of
+                REST API calls for D1 operations.
             **kwargs:
                 Additional arguments including:
                 - vectorize_api_token: Token for Vectorize service, if api_token not
@@ -291,15 +330,29 @@ class CloudflareVectorize(VectorStore):
                 - default_wait_seconds: # seconds to wait between mutation checks
 
         Raises:
-            ValueError: If required API tokens are not provided
+            ValueError: If required API tokens are not provided (when not using binding)
         """
         self.embedding = embedding
         self.base_url = base_url
         self.d1_base_url = base_url
         self.index_name = index_name
+        self.binding = binding
+        self.d1_binding = d1_binding
         self.default_wait_seconds = kwargs.get(
             "default_wait_seconds", DEFAULT_WAIT_SECONDS
         )
+
+        # If binding is provided, skip REST API setup
+        if self.binding is not None:
+            # When using binding, we don't need account_id or api_token
+            self.account_id = account_id or ""
+            self.d1_database_id = d1_database_id or ""
+            self.api_token = None
+            self.vectorize_api_token = None
+            self.d1_api_token = None
+            self._headers = {}
+            self.d1_headers = {}
+            return
 
         # Check environment variables if parameters not provided
         if account_id is None:
@@ -335,7 +388,9 @@ class CloudflareVectorize(VectorStore):
             raise ValueError(
                 "A Cloudflare account ID must be provided either through "
                 "the account_id parameter or "
-                "CF_ACCOUNT_ID environment variable."
+                "CF_ACCOUNT_ID environment variable. "
+                "Alternatively, when running in a Python Worker, you can "
+                "pass the 'binding' parameter (env.VECTORIZE) instead."
             )
 
         # Set headers for Vectorize and D1 using get_secret_value() for the tokens
@@ -368,10 +423,12 @@ class CloudflareVectorize(VectorStore):
             not self.api_token or not self.api_token.get_secret_value()
         ) and not self.vectorize_api_token:
             raise ValueError(
-                "Not enough API token values provided."
+                "Not enough API token values provided. "
                 "Please provide a global `api_token` or `vectorize_api_token` "
                 "through parameters or environment variables "
-                "(CF_API_TOKEN, CF_VECTORIZE_API_TOKEN)."
+                "(CF_API_TOKEN, CF_VECTORIZE_API_TOKEN). "
+                "Alternatively, when running in a Python Worker, you can "
+                "pass the 'binding' parameter (env.VECTORIZE) instead."
             )
 
         if (
@@ -486,6 +543,215 @@ class CloudflareVectorize(VectorStore):
             Column("namespace", Text),
             Column("metadata", Text),
         )
+
+    def _get_d1_async_engine(self) -> Any:
+        """Get an async SQLAlchemy engine for the D1 database.
+
+        For Python Workers with d1_binding, creates a sync engine using
+        create_engine_from_binding (which uses pyodide.ffi.run_sync internally).
+        For REST API mode, uses the async dialect.
+
+        Returns:
+            Engine or AsyncEngine: SQLAlchemy engine configured for Cloudflare D1.
+            For Workers with d1_binding, returns a sync Engine.
+            For REST API mode, returns an AsyncEngine.
+
+        Raises:
+            ValueError: If D1 credentials are not configured
+        """
+        if self.d1_binding is not None:
+            # For Workers, use create_engine_from_binding which handles
+            # async-to-sync bridging via pyodide.ffi.run_sync()
+            # This avoids the need for greenlet which isn't available in Pyodide
+            from sqlalchemy_cloudflare_d1 import create_engine_from_binding
+
+            return create_engine_from_binding(self.d1_binding)
+
+        # For REST API mode, use async engine
+        from sqlalchemy.ext.asyncio import create_async_engine
+
+        if not self.d1_database_id:
+            raise ValueError("D1 database ID is required")
+
+        # Get the API token for D1
+        api_token = (
+            self.d1_api_token.get_secret_value()
+            if self.d1_api_token
+            else self.api_token.get_secret_value()
+            if self.api_token
+            else None
+        )
+        if not api_token:
+            raise ValueError("D1 API token is required")
+
+        # Create async connection string for sqlalchemy-cloudflare-d1
+        # Format: cloudflare_d1+async://account_id:api_token@database_id
+        connection_string = (
+            f"cloudflare_d1+async://{self.account_id}:{api_token}@{self.d1_database_id}"
+        )
+        return create_async_engine(connection_string)
+
+    def _is_sync_engine(self, engine: Any) -> bool:
+        """Check if the engine is a sync engine (from create_engine_from_binding).
+
+        Args:
+            engine: SQLAlchemy engine to check
+
+        Returns:
+            bool: True if sync engine, False if async engine
+        """
+        # AsyncEngine has a 'sync_engine' attribute, regular Engine does not
+        return not hasattr(engine, "sync_engine")
+
+    @staticmethod
+    def _validate_table_name(table_name: str) -> None:
+        """Validate that table_name is provided and contains only safe characters.
+
+        Table names must be alphanumeric with underscores only to prevent
+        SQL injection attacks. This is defense-in-depth alongside SQLAlchemy's
+        identifier quoting.
+
+        Args:
+            table_name: Name of the table
+
+        Raises:
+            ValueError: If table_name is empty, None, or contains unsafe characters
+        """
+        if not table_name:
+            raise ValueError("table_name must be provided")
+        if not table_name.replace("_", "").replace("-", "").isalnum():
+            raise ValueError(
+                f"Invalid table_name '{table_name}': "
+                "table names must be alphanumeric with underscores or hyphens only"
+            )
+
+    @staticmethod
+    def _validate_metadata_key(key: str) -> None:
+        """Validate that a metadata key contains only safe characters.
+
+        Args:
+            key: The metadata key to validate
+
+        Raises:
+            ValueError: If key contains unsafe characters
+        """
+        if not key.replace("_", "").isalnum():
+            raise ValueError(
+                f"Invalid metadata key '{key}': "
+                "keys must be alphanumeric with underscores only"
+            )
+
+    @staticmethod
+    def _validate_operation(operation: str) -> None:
+        """Validate that operation is AND or OR.
+
+        Args:
+            operation: The SQL operation to validate
+
+        Raises:
+            ValueError: If operation is not AND or OR
+        """
+        if operation not in ("AND", "OR"):
+            raise ValueError("operation must be 'AND' or 'OR'")
+
+    @staticmethod
+    def _build_metadata_filter_query(
+        table_name: str,
+        metadata_filters: Dict[str, List[str]],
+        operation: str,
+    ) -> tuple:
+        """Build SQL query and parameters for metadata filtering.
+
+        Args:
+            table_name: Name of the table to query
+            metadata_filters: Dictionary of {key: [values]} to filter by
+            operation: "AND" or "OR" to combine conditions
+
+        Returns:
+            Tuple of (sql_string, param_dict) for execution
+
+        Raises:
+            ValueError: If metadata keys contain unsafe characters
+        """
+        from sqlalchemy.engine import default
+
+        dialect = default.DefaultDialect()
+        quoted_table = dialect.identifier_preparer.quote_identifier(table_name)
+
+        clauses: List[str] = []
+        params: List[Any] = []
+
+        for key, values in metadata_filters.items():
+            if not values:
+                continue
+
+            # Validate key contains only safe characters
+            CloudflareVectorize._validate_metadata_key(key)
+
+            in_placeholders = ",".join(
+                f":p{len(params) + i + 1}" for i in range(len(values))
+            )
+
+            param_key = f":p{len(params)}"
+            clauses.append(
+                f"""EXISTS (
+                    SELECT 1
+                    FROM json_each({quoted_table}.metadata, {param_key})
+                    WHERE json_each.value IN ({in_placeholders})
+                )"""
+            )
+
+            params.append(f"$.{key}")
+            params.extend(values)
+
+        where_clause = f" {operation} ".join(clauses)
+        sql = f"SELECT * FROM {quoted_table} WHERE {where_clause}"
+        param_dict = {f"p{i}": v for i, v in enumerate(params)}
+
+        return sql, param_dict
+
+    @staticmethod
+    def _rows_to_dicts(rows: Sequence[Any]) -> List[Dict[str, Any]]:
+        """Convert database rows to list of dictionaries.
+
+        Args:
+            rows: Sequence of row tuples from database
+
+        Returns:
+            List of dictionaries with id, text, namespace, metadata keys
+        """
+        return [
+            {
+                "id": row[0],
+                "text": row[1],
+                "namespace": row[2],
+                "metadata": row[3],
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _prepare_records_for_insert(data: List["VectorizeRecord"]) -> List[Dict]:
+        """Convert VectorizeRecords to dicts for database insertion.
+
+        Args:
+            data: List of VectorizeRecord objects
+
+        Returns:
+            List of dictionaries ready for SQLAlchemy insert
+        """
+        records = []
+        for record in data:
+            record_dict = record.to_dict()
+            records.append(
+                {
+                    "id": record_dict.get("id", ""),
+                    "text": record_dict.get("text", ""),
+                    "namespace": record_dict.get("namespace", ""),
+                    "metadata": json.dumps(record_dict.get("metadata", {})),
+                }
+            )
+        return records
 
     @staticmethod
     def _filter_request_kwargs(kwargs: Dict[str, Any]) -> RequestsKwargs:
@@ -607,6 +873,132 @@ class CloudflareVectorize(VectorStore):
 
         return documents
 
+    # MARK: - Binding Helper Methods
+
+    async def _binding_insert(
+        self, vectors: List[Dict[str, Any]], upsert: bool = False
+    ) -> Dict[str, Any]:
+        """Insert or upsert vectors using the Vectorize binding.
+
+        Args:
+            vectors: List of vector dicts with id, values, and optional metadata
+            upsert: If True, use upsert (insert or update), otherwise insert only
+
+        Returns:
+            Dict with mutationId and count information
+        """
+        from .bindings import (
+            convert_vectorize_mutation_response,
+            convert_vectors_for_binding,
+        )
+
+        js_vectors = convert_vectors_for_binding(vectors)
+
+        if upsert:
+            response = await self.binding.upsert(js_vectors)
+        else:
+            response = await self.binding.insert(js_vectors)
+
+        return convert_vectorize_mutation_response(response)
+
+    async def _binding_query(
+        self,
+        vector: List[float],
+        top_k: int = DEFAULT_TOP_K,
+        filter_dict: Optional[Dict[str, Any]] = None,
+        namespace: Optional[str] = None,
+        return_metadata: str = "none",
+        return_values: bool = False,
+    ) -> Dict[str, Any]:
+        """Query vectors using the Vectorize binding.
+
+        Args:
+            vector: The query vector
+            top_k: Number of results to return
+            filter_dict: Optional metadata filter
+            namespace: Optional namespace to search within
+            return_metadata: "none", "indexed", or "all"
+            return_values: Whether to return vector values
+
+        Returns:
+            Dict with matches array
+        """
+        from .bindings import (
+            convert_query_options_for_binding,
+            convert_vectorize_query_response,
+        )
+
+        # Build options object
+        options: Dict[str, Any] = {"topK": top_k}
+        if filter_dict:
+            options["filter"] = filter_dict
+        if namespace:
+            options["namespace"] = namespace
+        if return_metadata and return_metadata != "none":
+            options["returnMetadata"] = return_metadata
+        if return_values:
+            options["returnValues"] = return_values
+
+        # Convert vector and options for JS
+        from .bindings import convert_vectors_for_binding
+
+        js_vector = convert_vectors_for_binding(vector)
+        js_options = convert_query_options_for_binding(options)
+
+        response = await self.binding.query(js_vector, js_options)
+
+        return convert_vectorize_query_response(response)
+
+    async def _binding_get_by_ids(self, ids: List[str]) -> List[Dict[str, Any]]:
+        """Get vectors by IDs using the Vectorize binding.
+
+        Args:
+            ids: List of vector IDs to retrieve
+
+        Returns:
+            List of vector dicts with id, values, and metadata
+        """
+        from .bindings import (
+            convert_vectorize_get_response,
+            convert_vectors_for_binding,
+        )
+
+        js_ids = convert_vectors_for_binding(ids)
+        response = await self.binding.getByIds(js_ids)
+
+        return convert_vectorize_get_response(response)
+
+    async def _binding_delete_by_ids(self, ids: List[str]) -> Dict[str, Any]:
+        """Delete vectors by IDs using the Vectorize binding.
+
+        Args:
+            ids: List of vector IDs to delete
+
+        Returns:
+            Dict with mutationId and count information
+        """
+        from .bindings import (
+            convert_vectorize_mutation_response,
+            convert_vectors_for_binding,
+        )
+
+        js_ids = convert_vectors_for_binding(ids)
+        response = await self.binding.deleteByIds(js_ids)
+
+        return convert_vectorize_mutation_response(response)
+
+    async def _binding_describe(self) -> Dict[str, Any]:
+        """Get index information using the Vectorize binding.
+
+        Returns:
+            Dict with index configuration details
+        """
+        from .bindings import convert_vectorize_describe_response
+
+        response = await self.binding.describe()
+
+        return convert_vectorize_describe_response(response)
+
     # MARK: - _poll_mutation_status
     def _poll_mutation_status(
         self,
@@ -708,22 +1100,21 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        if not table_name:
-            raise ValueError("table_name must be provided")
+        self._validate_table_name(table_name)
 
         engine = self._get_d1_engine()
         metadata = MetaData()
-        # Define the table structure in metadata
         self._get_d1_table(table_name, metadata)
-
-        # Create the table using SQLAlchemy (handles CREATE TABLE IF NOT EXISTS)
         metadata.create_all(engine)
 
         return {"success": True}
 
     # MARK: - ad1_create_table
     async def ad1_create_table(self, table_name: str, **kwargs: Any) -> Dict[str, Any]:
-        """Asynchronously create a table in a D1 database using SQLAlchemy.
+        """Asynchronously create a table in a D1 database.
+
+        Uses the async SQLAlchemy engine with cloudflare_d1+async dialect.
+        For Workers with d1_binding, uses sync engine with run_sync bridging.
 
         Args:
             table_name: Name of the table to create
@@ -735,11 +1126,23 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        # Run synchronous SQLAlchemy code in executor for async compatibility
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.d1_create_table(table_name, **kwargs)
-        )
+        self._validate_table_name(table_name)
+
+        engine = self._get_d1_async_engine()
+        metadata = MetaData()
+        self._get_d1_table(table_name, metadata)
+
+        if self._is_sync_engine(engine):
+            # For Workers with d1_binding, use sync patterns
+            # The engine already handles async-to-sync via run_sync internally
+            metadata.create_all(engine)
+        else:
+            # For REST API mode, use async patterns
+            async with engine.begin() as conn:
+                await conn.run_sync(metadata.create_all)
+            await engine.dispose()
+
+        return {"success": True}
 
     # MARK: - d1_drop_table
     def d1_drop_table(self, table_name: str, **kwargs: Any) -> Dict[str, Any]:
@@ -755,21 +1158,21 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        if not table_name:
-            raise ValueError("table_name must be provided")
+        self._validate_table_name(table_name)
 
         engine = self._get_d1_engine()
         metadata = MetaData()
         table = self._get_d1_table(table_name, metadata)
-
-        # Drop the table using SQLAlchemy
         table.drop(engine, checkfirst=True)
 
         return {"success": True}
 
     # MARK: - ad1_drop_table
     async def ad1_drop_table(self, table_name: str, **kwargs: Any) -> Dict[str, Any]:
-        """Asynchronously delete a table from a D1 database using SQLAlchemy.
+        """Asynchronously delete a table from a D1 database.
+
+        Uses the async SQLAlchemy engine with cloudflare_d1+async dialect.
+        For Workers with d1_binding, uses sync engine with run_sync bridging.
 
         Args:
             table_name: Name of the table to delete
@@ -781,11 +1184,24 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        # Run synchronous SQLAlchemy code in executor for async compatibility
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.d1_drop_table(table_name, **kwargs)
-        )
+        self._validate_table_name(table_name)
+
+        engine = self._get_d1_async_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
+
+        if self._is_sync_engine(engine):
+            # For Workers with d1_binding, use sync patterns
+            table.drop(engine, checkfirst=True)
+        else:
+            # For REST API mode, use async patterns
+            async with engine.begin() as conn:
+                await conn.run_sync(
+                    lambda sync_conn: table.drop(sync_conn, checkfirst=True)
+                )
+            await engine.dispose()
+
+        return {"success": True}
 
     # MARK: - d1_upsert_texts
     def d1_upsert_texts(
@@ -813,8 +1229,7 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        if not table_name:
-            raise ValueError("table_name must be provided")
+        self._validate_table_name(table_name)
 
         if not data:
             return {"success": True, "changes": 0}
@@ -822,23 +1237,10 @@ class CloudflareVectorize(VectorStore):
         engine = self._get_d1_engine()
         metadata = MetaData()
         table = self._get_d1_table(table_name, metadata)
-
-        # Prepare records for insertion
-        records = []
-        for record in data:
-            record_dict = record.to_dict()
-            records.append(
-                {
-                    "id": record_dict.get("id", ""),
-                    "text": record_dict.get("text", ""),
-                    "namespace": record_dict.get("namespace", ""),
-                    "metadata": json.dumps(record_dict.get("metadata", {})),
-                }
-            )
+        records = self._prepare_records_for_insert(data)
 
         with engine.connect() as conn:
             if upsert:
-                # Batch upsert using SQLite's INSERT ... ON CONFLICT DO UPDATE
                 stmt = sqlite_insert(table).values(records)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["id"],
@@ -851,7 +1253,6 @@ class CloudflareVectorize(VectorStore):
                 conn.execute(stmt)
                 conn.commit()
             else:
-                # Batch insert (will fail on duplicate IDs)
                 conn.execute(insert(table), records)
                 conn.commit()
 
@@ -867,7 +1268,8 @@ class CloudflareVectorize(VectorStore):
     ) -> Dict[str, Any]:
         """Asynchronously insert or update text data in a D1 database table.
 
-        Uses parameterized queries via SQLAlchemy to prevent SQL injection.
+        Uses the async SQLAlchemy engine with cloudflare_d1+async dialect.
+        For Workers with d1_binding, uses sync engine with run_sync bridging.
 
         Args:
             table_name: Name of the table to insert data into
@@ -883,11 +1285,51 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        # Run synchronous SQLAlchemy code in executor for async compatibility
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.d1_upsert_texts(table_name, data, upsert, **kwargs)
-        )
+        self._validate_table_name(table_name)
+
+        if not data:
+            return {"success": True, "changes": 0}
+
+        engine = self._get_d1_async_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
+        records = self._prepare_records_for_insert(data)
+
+        if self._is_sync_engine(engine):
+            # For Workers with d1_binding, use sync patterns
+            with engine.begin() as conn:
+                if upsert:
+                    stmt = sqlite_insert(table).values(records)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["id"],
+                        set_={
+                            "text": stmt.excluded.text,
+                            "namespace": stmt.excluded.namespace,
+                            "metadata": stmt.excluded.metadata,
+                        },
+                    )
+                    conn.execute(stmt)
+                else:
+                    conn.execute(insert(table), records)
+        else:
+            # For REST API mode, use async patterns
+            async with engine.begin() as conn:
+                if upsert:
+                    stmt = sqlite_insert(table).values(records)
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["id"],
+                        set_={
+                            "text": stmt.excluded.text,
+                            "namespace": stmt.excluded.namespace,
+                            "metadata": stmt.excluded.metadata,
+                        },
+                    )
+                    await conn.execute(stmt)
+                else:
+                    await conn.execute(insert(table), records)
+            await engine.dispose()
+
+        return {"success": True, "changes": len(records)}
 
     # MARK: - d1_get_by_ids
     def d1_get_by_ids(self, table_name: str, ids: List[str], **kwargs: Any) -> List:
@@ -904,8 +1346,7 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        if not table_name:
-            raise ValueError("table_name must be provided")
+        self._validate_table_name(table_name)
 
         if not ids:
             return []
@@ -919,22 +1360,16 @@ class CloudflareVectorize(VectorStore):
             result = conn.execute(stmt)
             rows = result.fetchall()
 
-        # Convert rows to list of dicts
-        return [
-            {
-                "id": row[0],
-                "text": row[1],
-                "namespace": row[2],
-                "metadata": row[3],
-            }
-            for row in rows
-        ]
+        return self._rows_to_dicts(rows)
 
     # MARK: - ad1_get_by_ids
     async def ad1_get_by_ids(
         self, table_name: str, ids: List[str], **kwargs: Any
     ) -> List:
         """Asynchronously retrieve text data from a D1 database table.
+
+        Uses the async SQLAlchemy engine with cloudflare_d1+async dialect.
+        For Workers with d1_binding, uses sync engine with run_sync bridging.
 
         Args:
             table_name: Name of the table to retrieve data from
@@ -947,11 +1382,30 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        # Run synchronous SQLAlchemy code in executor for async compatibility
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.d1_get_by_ids(table_name, ids, **kwargs)
-        )
+        self._validate_table_name(table_name)
+
+        if not ids:
+            return []
+
+        engine = self._get_d1_async_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
+
+        if self._is_sync_engine(engine):
+            # For Workers with d1_binding, use sync patterns
+            with engine.connect() as conn:
+                stmt = select(table).where(table.c.id.in_(ids))
+                result = conn.execute(stmt)
+                rows = result.fetchall()
+        else:
+            # For REST API mode, use async patterns
+            async with engine.connect() as conn:
+                stmt = select(table).where(table.c.id.in_(ids))
+                result = await conn.execute(stmt)
+                rows = result.fetchall()
+            await engine.dispose()
+
+        return self._rows_to_dicts(rows)
 
     # MARK: - d1_metadata_query
     def d1_metadata_query(
@@ -963,8 +1417,7 @@ class CloudflareVectorize(VectorStore):
     ) -> List[Dict[str, Any]]:
         """Retrieve text data from a D1 database table with a metadata query.
 
-        Uses SQLAlchemy with raw SQL for complex JSON queries while maintaining
-        parameterized query safety.
+        Uses SQLAlchemy with safe identifier handling and parameterized queries.
 
         Args:
             table_name: Name of the table to retrieve data from
@@ -976,60 +1429,26 @@ class CloudflareVectorize(VectorStore):
             List of dictionaries with query results
 
         Raises:
-            ValueError: If table_name is not provided
+            ValueError: If table_name is not provided or operation is invalid
         """
-        if not table_name:
-            raise ValueError("table_name must be provided")
+        self._validate_table_name(table_name)
 
         if not metadata_filters:
             return []
 
+        op = operation or "AND"
+        self._validate_operation(op)
+
+        sql, param_dict = self._build_metadata_filter_query(
+            table_name, metadata_filters, op
+        )
+
         engine = self._get_d1_engine()
-
-        # Build parameterized clauses for JSON metadata filtering
-        clauses: List[str] = []
-        params: List[Any] = []
-
-        for key, values in metadata_filters.items():
-            if not values:
-                continue
-
-            in_placeholders = ",".join(
-                ":p" + str(len(params) + i + 1) for i in range(len(values))
-            )
-
-            # Use named parameters for SQLAlchemy text()
-            param_key = f":p{len(params)}"
-            clauses.append(
-                f"""EXISTS (
-                    SELECT 1
-                    FROM json_each("{table_name}".metadata, {param_key})
-                    WHERE json_each.value IN ({in_placeholders})
-                )"""
-            )
-
-            params.append(f"$.{key}")
-            params.extend(values)
-
-        where_clause = f" {operation} ".join(clauses)
-        sql = f'SELECT * FROM "{table_name}" WHERE {where_clause}'
-
-        # Build param dict for SQLAlchemy
-        param_dict = {f"p{i}": v for i, v in enumerate(params)}
-
         with engine.connect() as conn:
             result = conn.execute(sql_text(sql), param_dict)
             rows = result.fetchall()
 
-        return [
-            {
-                "id": row[0],
-                "text": row[1],
-                "namespace": row[2],
-                "metadata": row[3],
-            }
-            for row in rows
-        ]
+        return self._rows_to_dicts(rows)
 
     # MARK: - ad1_metadata_query
     async def ad1_metadata_query(
@@ -1041,6 +1460,9 @@ class CloudflareVectorize(VectorStore):
     ) -> List[Dict[str, Any]]:
         """Asynchronously retrieve text data from D1 with metadata query.
 
+        Uses the async SQLAlchemy engine with safe identifier handling.
+        For Workers with d1_binding, uses sync engine with run_sync bridging.
+
         Args:
             table_name: Name of the table to retrieve data from
             metadata_filters: Dictionary of filters to apply to the query
@@ -1051,16 +1473,35 @@ class CloudflareVectorize(VectorStore):
             List of dictionaries with query results
 
         Raises:
-            ValueError: If table_name is not provided
+            ValueError: If table_name is not provided or operation is invalid
         """
-        # Run synchronous SQLAlchemy code in executor for async compatibility
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None,
-            lambda: self.d1_metadata_query(
-                table_name, metadata_filters, operation, **kwargs
-            ),
+        self._validate_table_name(table_name)
+
+        if not metadata_filters:
+            return []
+
+        op = operation or "AND"
+        self._validate_operation(op)
+
+        sql, param_dict = self._build_metadata_filter_query(
+            table_name, metadata_filters, op
         )
+
+        engine = self._get_d1_async_engine()
+
+        if self._is_sync_engine(engine):
+            # For Workers with d1_binding, use sync patterns
+            with engine.connect() as conn:
+                result = conn.execute(sql_text(sql), param_dict)
+                rows = result.fetchall()
+        else:
+            # For REST API mode, use async patterns
+            async with engine.connect() as conn:
+                result = await conn.execute(sql_text(sql), param_dict)
+                rows = result.fetchall()
+            await engine.dispose()
+
+        return self._rows_to_dicts(rows)
 
     # MARK: - d1_delete
     def d1_delete(
@@ -1082,8 +1523,7 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        if not table_name:
-            raise ValueError("table_name must be provided")
+        self._validate_table_name(table_name)
 
         if not ids:
             return {"success": True, "changes": 0}
@@ -1105,6 +1545,9 @@ class CloudflareVectorize(VectorStore):
     ) -> Dict[str, Any]:
         """Asynchronously delete data from a D1 database table.
 
+        Uses the async SQLAlchemy engine with cloudflare_d1+async dialect.
+        For Workers with d1_binding, uses sync engine with run_sync bridging.
+
         Args:
             table_name: Name of the table to delete from
             ids: List of ids to delete
@@ -1116,11 +1559,30 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If table_name is not provided
         """
-        # Run synchronous SQLAlchemy code in executor for async compatibility
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(
-            None, lambda: self.d1_delete(table_name, ids, **kwargs)
-        )
+        self._validate_table_name(table_name)
+
+        if not ids:
+            return {"success": True, "changes": 0}
+
+        engine = self._get_d1_async_engine()
+        metadata = MetaData()
+        table = self._get_d1_table(table_name, metadata)
+
+        if self._is_sync_engine(engine):
+            # For Workers with d1_binding, use sync patterns
+            with engine.begin() as conn:
+                stmt = delete(table).where(table.c.id.in_(ids))
+                result = conn.execute(stmt)
+            rowcount = result.rowcount
+        else:
+            # For REST API mode, use async patterns
+            async with engine.begin() as conn:
+                stmt = delete(table).where(table.c.id.in_(ids))
+                result = await conn.execute(stmt)
+            rowcount = result.rowcount
+            await engine.dispose()
+
+        return {"success": True, "changes": rowcount}
 
     # MARK: - add_texts
     def add_texts(
@@ -1238,7 +1700,7 @@ class CloudflareVectorize(VectorStore):
         )
         response.raise_for_status()
 
-        if include_d1 and self.d1_database_id:
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             self.d1_create_table(table_name=index_name, **kwargs)
 
             # add values to D1Database
@@ -1296,13 +1758,14 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If the number of texts exceeds MAX_INSERT_SIZE.
         """
-        index_name = index_name or self.index_name
-
-        if not index_name:
-            raise ValueError("index_name must be provided")
-
         # Convert texts to list if it's not already
         texts_list = list(texts)
+
+        # When using binding, index_name is optional (configured in wrangler.jsonc)
+        # For REST API, it's required
+        index_name = index_name or self.index_name
+        if not index_name and self.binding is None:
+            raise ValueError("index_name must be provided")
 
         # Check if the number of texts exceeds the maximum allowed
         if len(texts_list) > MAX_INSERT_SIZE:
@@ -1342,43 +1805,63 @@ class CloudflareVectorize(VectorStore):
 
             vectors.append(vector)
 
-        # Choose endpoint based on upsert parameter
-        endpoint = "upsert" if upsert else "insert"
+        # Convert vectors to dict format for both binding and REST API
+        vector_dicts = [
+            {
+                "id": v.id,
+                "values": v.values,
+                "namespace": v.namespace,
+                "metadata": v.metadata,
+            }
+            for v in vectors
+        ]
 
-        # Convert vectors to newline-delimited JSON
-        ndjson_data = "\n".join(json.dumps(vector.to_dict()) for vector in vectors)
+        # Use binding if available (for Python Workers)
+        if self.binding is not None:
+            mutation_response = await self._binding_insert(vector_dicts, upsert=upsert)
+            mutation_id = mutation_response.get("mutationId")
+        else:
+            # Choose endpoint based on upsert parameter
+            endpoint = "upsert" if upsert else "insert"
 
-        # Import httpx here to avoid dependency issues
-        import httpx
+            # Convert vectors to newline-delimited JSON
+            ndjson_data = "\n".join(json.dumps(vd) for vd in vector_dicts)
 
-        # Copy headers and set correct content type for NDJSON
-        headers = self._headers.copy()
-        headers["Content-Type"] = "application/x-ndjson"
+            # Import httpx here to avoid dependency issues
+            import httpx
 
-        # Make API call to insert/upsert vectors
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_url(endpoint, index_name),
-                headers=headers,
-                content=ndjson_data.encode("utf-8"),
-                **kwargs,
-            )
-            response.raise_for_status()
+            # Copy headers and set correct content type for NDJSON
+            headers = self._headers.copy()
+            headers["Content-Type"] = "application/x-ndjson"
 
-        if include_d1 and self.d1_database_id:
+            # Make API call to insert/upsert vectors
+            # index_name is guaranteed to be str here (validated above for REST API)
+            assert index_name is not None
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self._get_url(endpoint, index_name),
+                    headers=headers,
+                    content=ndjson_data.encode("utf-8"),
+                    **kwargs,
+                )
+                response.raise_for_status()
+
+            mutation_response = response.json()
+            mutation_id = mutation_response.get("result", {}).get("mutationId")
+
+        if include_d1 and (self.d1_database_id or self.d1_binding):
+            # Use index_name for D1 table name (empty string fallback for binding mode)
+            table_name = index_name or ""
             # create D1 table if not exists
-            await self.ad1_create_table(table_name=index_name)
+            await self.ad1_create_table(table_name=table_name)
 
             # add values to D1Database
             await self.ad1_upsert_texts(
-                table_name=index_name,
+                table_name=table_name,
                 data=vectors,
             )
 
-        mutation_response = response.json()
-        mutation_id = mutation_response.get("result", {}).get("mutationId")
-
-        if wait and mutation_id:
+        if wait and mutation_id and index_name:
             await self._apoll_mutation_status(
                 index_name=index_name,
                 mutation_id=mutation_id,
@@ -1515,7 +1998,7 @@ class CloudflareVectorize(VectorStore):
         response.raise_for_status()
         results = response.json().get("result", {}).get("matches", [])
 
-        if include_d1 and self.d1_database_id:
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             # query D1 for raw results
             ids = [x.get("id") for x in results]
 
@@ -1637,47 +2120,62 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If index_name is not provided
         """
-
+        # When using binding, index_name is optional (configured in wrangler.jsonc)
+        # For REST API, it's required
         index_name = index_name or self.index_name
-
-        if not index_name:
+        if not index_name and self.binding is None:
             raise ValueError("index_name must be provided")
 
         # Generate embedding for the query
         query_embedding = await self.embedding.aembed_query(query)
 
-        search_request = self._prep_search_request(
-            query_embedding=query_embedding,
-            k=k,
-            md_filter=md_filter,
-            namespace=namespace,
-            return_metadata=return_metadata,
-            return_values=return_values,
-        )
-
-        # Import httpx here to avoid dependency issues
-        import httpx
-
-        # Make API call to query vectors
-        filtered_kwargs = self._filter_request_kwargs(kwargs)
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_url("query", index_name),
-                headers=self._headers,
-                json=search_request,
-                **filtered_kwargs,
+        # Use binding if available (for Python Workers)
+        if self.binding is not None:
+            response_data = await self._binding_query(
+                vector=query_embedding,
+                top_k=k,
+                filter_dict=md_filter,
+                namespace=namespace,
+                return_metadata=return_metadata,
+                return_values=return_values,
             )
-            response.raise_for_status()
-            response_data = response.json()
+            results = response_data.get("matches", [])
+        else:
+            search_request = self._prep_search_request(
+                query_embedding=query_embedding,
+                k=k,
+                md_filter=md_filter,
+                namespace=namespace,
+                return_metadata=return_metadata,
+                return_values=return_values,
+            )
 
-        results = response_data.get("result", {}).get("matches", [])
+            # Import httpx here to avoid dependency issues
+            import httpx
 
-        if include_d1 and self.d1_database_id:
+            # Make API call to query vectors
+            # index_name is guaranteed to be str here (validated above for REST API)
+            assert index_name is not None
+            filtered_kwargs = self._filter_request_kwargs(kwargs)
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self._get_url("query", index_name),
+                    headers=self._headers,
+                    json=search_request,
+                    **filtered_kwargs,
+                )
+                response.raise_for_status()
+                response_data = response.json()
+
+            results = response_data.get("result", {}).get("matches", [])
+
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             # query D1 for raw results
             ids = [x.get("id") for x in results]
+            table_name = index_name or ""
 
             d1_results_records = await self.ad1_get_by_ids(
-                table_name=index_name, ids=ids, **kwargs
+                table_name=table_name, ids=ids, **kwargs
             )
         else:
             d1_results_records = []
@@ -1738,7 +2236,7 @@ class CloudflareVectorize(VectorStore):
         )
         response.raise_for_status()
 
-        if include_d1 and self.d1_database_id:
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             self.d1_delete(table_name=index_name, ids=ids)
 
         mutation_response = response.json()
@@ -1785,31 +2283,40 @@ class CloudflareVectorize(VectorStore):
             # Cloudflare Vectorize doesn't have a delete all endpoint
             raise ValueError("Deleting all vectors is not supported")
 
-        index_name = index_name or self.index_name
+        ids_list = [str(x) if type(x) is not str else x for x in ids]
 
-        if not index_name:
-            raise ValueError("index_name must be provided")
+        # Use binding if available (for Python Workers)
+        # Binding doesn't need index_name - it's already configured in wrangler.jsonc
+        if self.binding is not None:
+            mutation_response = await self._binding_delete_by_ids(ids_list)
+            mutation_id = mutation_response.get("mutationId")
+            index_name = self.index_name  # For D1 operations if needed
+        else:
+            index_name = index_name or self.index_name
 
-        delete_request = {"ids": [str(x) if type(x) is not str else x for x in ids]}
+            if not index_name:
+                raise ValueError("index_name must be provided")
+            delete_request = {"ids": ids_list}
 
-        # Make API call to delete vectors
-        import httpx
+            # Make API call to delete vectors
+            import httpx
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_url("delete_by_ids", index_name),
-                headers=self._headers,
-                json=delete_request,
-            )
-        response.raise_for_status()
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self._get_url("delete_by_ids", index_name),
+                    headers=self._headers,
+                    json=delete_request,
+                )
+            response.raise_for_status()
 
-        mutation_response = response.json()
-        mutation_id = mutation_response.get("result", {}).get("mutationId")
+            mutation_response = response.json()
+            mutation_id = mutation_response.get("result", {}).get("mutationId")
 
-        if include_d1 and self.d1_database_id:
-            await self.ad1_delete(table_name=index_name, ids=ids, **kwargs)
+        if include_d1 and (self.d1_database_id or self.d1_binding):
+            table_name = index_name or ""
+            await self.ad1_delete(table_name=table_name, ids=ids_list, **kwargs)
 
-        if wait and mutation_id:
+        if wait and mutation_id and index_name:
             await self._apoll_mutation_status(
                 index_name=index_name,
                 mutation_id=mutation_id,
@@ -1881,30 +2388,36 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If index_name is not provided
         """
-        index_name = self.index_name
+        ids_list = [str(x) if type(x) is not str else x for x in ids]
 
-        if not index_name:
-            raise ValueError("index_name must be provided")
+        # Use binding if available (for Python Workers)
+        # Binding doesn't need index_name - it's already configured in wrangler.jsonc
+        if self.binding is not None:
+            vector_data = await self._binding_get_by_ids(ids_list)
+            index_name = self.index_name  # For D1 operations if needed
+        else:
+            index_name = self.index_name
 
-        get_request = {"ids": [str(x) if type(x) is not str else x for x in ids]}
+            if not index_name:
+                raise ValueError("index_name must be provided")
+            get_request = {"ids": ids_list}
 
-        # Get vector data from Vectorize API
-        import httpx
+            # Get vector data from Vectorize API
+            import httpx
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                self._get_url("get_by_ids", index_name),
-                headers=self._headers,
-                json=get_request,
-            )
-        response.raise_for_status()
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    self._get_url("get_by_ids", index_name),
+                    headers=self._headers,
+                    json=get_request,
+                )
+            response.raise_for_status()
 
-        vector_data = response.json().get("result", {})
+            vector_data = response.json().get("result", {})
 
         if self.d1_database_id:
-            d1_response = await self.ad1_get_by_ids(
-                table_name=index_name, ids=list(ids)
-            )
+            table_name = index_name or ""
+            d1_response = await self.ad1_get_by_ids(table_name=table_name, ids=ids_list)
         else:
             d1_response = []
 
@@ -1961,6 +2474,11 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If index_name is not provided
         """
+
+        # Use binding if available (for Python Workers)
+        # Binding doesn't need index_name - it's already configured in wrangler.jsonc
+        if self.binding is not None:
+            return await self._binding_describe()
 
         index_name = index_name or self.index_name
 
@@ -2372,7 +2890,7 @@ class CloudflareVectorize(VectorStore):
         )
         response.raise_for_status()
 
-        if include_d1 and self.d1_database_id:
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             # Create D1 table if not exists
             self.d1_create_table(table_name=index_name, **kwargs)
 
@@ -2450,7 +2968,7 @@ class CloudflareVectorize(VectorStore):
 
             response_data = response.json()
 
-        if include_d1 and self.d1_database_id:
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             # create D1 table if not exists
             await self.ad1_create_table(table_name=index_name, **kwargs)
 
@@ -2575,7 +3093,7 @@ class CloudflareVectorize(VectorStore):
         )
         response.raise_for_status()
 
-        if include_d1 and self.d1_database_id:
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             # delete D1 table if exists
             self.d1_drop_table(table_name=index_name)
 
@@ -2631,7 +3149,7 @@ class CloudflareVectorize(VectorStore):
 
             response_data = response.json()
 
-        if include_d1 and self.d1_database_id:
+        if include_d1 and (self.d1_database_id or self.d1_binding):
             await self.ad1_drop_table(table_name=index_name)
 
         return response_data.get("result", {})

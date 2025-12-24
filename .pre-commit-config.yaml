@@ -7,18 +7,20 @@ repos:
       - id: trailing-whitespace
       - id: check-added-large-files
 
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.0
+  # Use uv run with root pyproject.toml dev dependencies
+  # mypy is skipped here - runs per-lib in CI with proper dependencies
+  - repo: local
     hooks:
-      # Linter
       - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
-      # Formatter
-      - id: ruff-format
+        name: ruff
+        entry: uv run --group dev ruff check --fix --exit-non-zero-on-fix
+        language: system
+        types: [python]
+        require_serial: true
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.10.0
-    hooks:
-      - id: mypy
-        files: ^libs/
-        additional_dependencies: [types-requests]
+      - id: ruff-format
+        name: ruff-format
+        entry: uv run --group dev ruff format
+        language: system
+        types: [python]
+        require_serial: true
