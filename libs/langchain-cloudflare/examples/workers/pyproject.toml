@@ -1,0 +1,27 @@
+[project]
+name = "langchain-cloudflare-example"
+version = "0.1.0"
+description = "Example of using LangChain with Cloudflare Python Workers"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "webtypy>=0.1.7",
+    "langchain-cloudflare @ file:////Users/collierking/Desktop/github/langchain-cloudflare/libs/langchain-cloudflare",
+    "langchain-core>=0.3.81,<1.0.0",
+    "langchain>=0.3.0,<1.0.0",
+    "sqlalchemy-cloudflare-d1 @ file:////Users/collierking/Desktop/github/sqlalchemy-cloudflare-d1",
+    # NOTE: Do NOT include pydantic - use Pyodide's built-in version
+    # pydantic_core requires compiled Rust binaries that aren't available for WebAssembly
+]
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+    "pytest>=7.0.0",
+    "requests>=2.31.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -112,6 +112,8 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
     ai_gateway: Optional[str] = Field(
         default_factory=from_env("AI_GATEWAY", default=None)
     )
+    binding: Any = Field(default=None, exclude=True)
+    """Workers AI binding (env.AI) for use in Python Workers."""
 
     _inference_url: str = PrivateAttr()
 
@@ -119,19 +121,24 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         """Initialize the Cloudflare Workers AI client."""
         super().__init__(**kwargs)
 
+        # If binding is provided, skip REST API setup
+        if self.binding is not None:
+            self._inference_url = ""
+            return
+
         # Validate credentials
         if not self.account_id:
             raise ValueError(
                 "A Cloudflare account ID must be provided either through "
-                "the account_id parameter or "
-                "CF_ACCOUNT_ID environment variable."
+                "the account_id parameter or CF_ACCOUNT_ID environment variable. "
+                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
             )
 
         if not self.api_token or self.api_token.get_secret_value() == "":
             raise ValueError(
                 "A Cloudflare API token must be provided either through "
-                "the api_token parameter or "
-                "CF_AI_API_TOKEN environment variable."
+                "the api_token parameter or CF_AI_API_TOKEN environment variable. "
+                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
             )
 
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}
@@ -186,10 +193,14 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         Returns:
             List of embeddings, one for each text.
         """
-        import httpx
-
         if self.strip_new_lines:
             texts = [text.replace("\n", " ") for text in texts]
+
+        # Use binding if available (for Python Workers)
+        if self.binding is not None:
+            return await self._aembed_with_binding(texts)
+
+        import httpx
 
         batches = [
             texts[i : i + self.batch_size]
@@ -207,6 +218,51 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
                 )
                 response.raise_for_status()
                 embeddings.extend(response.json()["result"]["data"])
+
+        return embeddings
+
+    async def _aembed_with_binding(self, texts: List[str]) -> List[List[float]]:
+        """Compute embeddings using the Workers AI binding.
+
+        Args:
+            texts: The list of texts to embed.
+
+        Returns:
+            List of embeddings, one for each text.
+        """
+        from .bindings import convert_payload_for_binding, create_gateway_options
+
+        batches = [
+            texts[i : i + self.batch_size]
+            for i in range(0, len(texts), self.batch_size)
+        ]
+
+        embeddings = []
+
+        # Create AI Gateway options if configured
+        gateway_options = create_gateway_options(self.ai_gateway)
+
+        for batch in batches:
+            payload = {"text": batch}
+            js_payload = convert_payload_for_binding(payload)
+
+            # Call the binding with optional gateway
+            if gateway_options is not None:
+                response = await self.binding.run(
+                    self.model_name, js_payload, gateway_options
+                )
+            else:
+                response = await self.binding.run(self.model_name, js_payload)
+
+            # Convert JS proxy to Python
+            if hasattr(response, "to_py"):
+                response = response.to_py()
+
+            # Extract embeddings from response
+            if isinstance(response, dict) and "data" in response:
+                embeddings.extend(response["data"])
+            elif isinstance(response, list):
+                embeddings.extend(response)
 
         return embeddings
 
@@ -237,9 +293,14 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         Returns:
             Embeddings for the text.
         """
-        import httpx
-
         text = text.replace("\n", " ") if self.strip_new_lines else text
+
+        # Use binding if available (for Python Workers)
+        if self.binding is not None:
+            embeddings = await self._aembed_with_binding([text])
+            return embeddings[0]
+
+        import httpx
 
         async with httpx.AsyncClient() as client:
             response = await client.post(

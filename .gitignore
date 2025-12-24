@@ -119,3 +119,7 @@ install_and_test.sh
 .benchmarks/
 .claude/
 uv.lock
+python_modules/
+.venv-workers/
+.wrangler/
+node_modules/

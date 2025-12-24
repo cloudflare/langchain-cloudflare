@@ -8,7 +8,11 @@ license = { file = "LICENSE" }
 dependencies = []
 
 [dependency-groups]
-dev = []
+dev = [
+    "ruff>=0.8.4",
+    "mypy>=1.15.0",
+    "types-requests>=2.31.0",
+]
 
 [tool.uv.sources]
 langchain-cloudflare = { path = "libs/langchain-cloudflare", editable = true }

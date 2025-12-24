@@ -1,37 +1,61 @@
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
-[tool.poetry]
+[project]
 name = "langchain-cloudflare"
-version = "0.1.11"
+version = "0.2.0"
 description = "Langchain Integrations for Cloudflare's WorkersAI and Vectorize"
-authors = []
 readme = "README.md"
 license = "MIT"
-repository = "https://github.com/cloudflare/langchain-cloudflare"
-packages = [{include = "langchain_cloudflare"}]
+requires-python = ">=3.10"
+dependencies = [
+    "langchain-core>=0.3.81,<2.0.0",
+    "requests>=2.31.0",
+    "httpx>=0.24.1",
+    "pydantic>=1.10.0,<3.0.0",
+    "typing-extensions>=4.5.0",
+    "sqlalchemy>=2.0.0",
+    "sqlalchemy-cloudflare-d1>=0.3.1",
+]
+
+[project.optional-dependencies]
+async = ["greenlet>=3.0.0"]
+
+[project.urls]
+"Source Code" = "https://github.com/cloudflare/langchain-cloudflare/libs/langchain-cloudflare"
+"Release Notes" = "https://github.com/cloudflare/langchain-cloudflare/blob/main/README.md"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.4",
+    "mypy>=1.15.0",
+    "codespell>=2.2.6",
+    "types-requests>=2.31.0",
+]
+test = [
+    "pytest>=7.4.3",
+    "pytest-asyncio>=0.23.2",
+    "pytest-socket>=0.7.0",
+    "pytest-watcher>=0.3.4",
+    "langchain-tests>=0.3.17",
+    "python-dotenv>=1.0.0",
+    "greenlet>=3.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["langchain_cloudflare"]
 
 [tool.mypy]
 disallow_untyped_defs = true
+exclude = [
+    "^examples/",
+    "^tests/",
+]
 
 [[tool.mypy.overrides]]
 module = "langchain_tests.*"
 ignore_missing_imports = true
-
-[tool.poetry.urls]
-"Source Code" = "https://github.com/cloudflare/langchain-cloudflare/libs/langchain-cloudflare"
-"Release Notes" = "https://github.com/cloudflare/langchain-cloudflare/blob/main/README.md"
-
-[tool.poetry.dependencies]
-python = ">=3.10,<4.0"
-langchain-core = ">=0.3.81,<2.0.0"
-requests = ">=2.31.0"
-httpx = ">=0.24.1"
-pydantic = ">=1.10.0,<3.0.0"
-typing-extensions = ">=4.5.0"
-sqlalchemy = ">=2.0.0"
-sqlalchemy-cloudflare-d1 = ">=0.3.0"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "T201"]
@@ -45,40 +69,3 @@ markers = [
     "compile: mark placeholder test used to compile integration tests without running them",
 ]
 asyncio_mode = "auto"
-
-[tool.poetry.group.test]
-
-[tool.poetry.group.codespell]
-optional = true
-
-[tool.poetry.group.test_integration]
-optional = true
-
-[tool.poetry.group.lint]
-
-[tool.poetry.group.dev]
-
-[tool.poetry.group.dev.dependencies]
-ruff = "^0.5.0"
-mypy = "^1.10"
-codespell = "^2.2.6"
-
-[tool.poetry.group.test.dependencies]
-pytest = "^7.4.3"
-pytest-asyncio = "^0.23.2"
-pytest-socket = "^0.7.0"
-pytest-watcher = "^0.3.4"
-langchain-tests = ">=0.3.17"
-
-[tool.poetry.group.codespell.dependencies]
-codespell = "^2.2.6"
-
-[tool.poetry.group.test_integration.dependencies]
-
-[tool.poetry.group.lint.dependencies]
-ruff = "^0.5.0"
-
-[tool.poetry.group.typing.dependencies]
-mypy = "^1.10"
-types-requests = "^2.31.0"
-pytest-mypy-plugins = "^3.0.0"
