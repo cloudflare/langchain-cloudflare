@@ -43,15 +43,13 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
         with:
-          version: latest
-          virtualenvs-create: true
-          virtualenvs-in-project: true
+          version: "latest"
 
       - name: Install dependencies
-        run: poetry install
+        run: uv sync --group dev --group test
 
       # Run linting and tests before building
       - name: Run lint (includes format check)
@@ -72,7 +70,7 @@ jobs:
       # > from the publish job.
       # https://github.com/pypa/gh-action-pypi-publish#non-goals
       - name: Build project for distribution
-        run: poetry build
+        run: uv build
 
       - name: Set artifact name
         id: artifact-name
@@ -89,8 +87,10 @@ jobs:
         shell: bash
         run: |
           set -eu
-          echo pkg-name="$(poetry version | cut -d' ' -f1)" >> $GITHUB_OUTPUT
-          echo version="$(poetry version --short)" >> $GITHUB_OUTPUT
+          PKG_NAME=$(grep -m1 '^name = ' pyproject.toml | cut -d'"' -f2)
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "pkg-name=${PKG_NAME}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
   publish:
     needs:

@@ -128,12 +128,27 @@ class TestD1EngineHelpers:
             mock_vectorize._get_d1_engine()
 
 
+def _setup_mock_with_validators(mock_vectorize: MagicMock) -> None:
+    """Add static validator methods to a mock CloudflareVectorize instance."""
+    mock_vectorize._validate_table_name = CloudflareVectorize._validate_table_name
+    mock_vectorize._validate_operation = CloudflareVectorize._validate_operation
+    mock_vectorize._validate_metadata_key = CloudflareVectorize._validate_metadata_key
+    mock_vectorize._build_metadata_filter_query = (
+        CloudflareVectorize._build_metadata_filter_query
+    )
+    mock_vectorize._rows_to_dicts = CloudflareVectorize._rows_to_dicts
+    mock_vectorize._prepare_records_for_insert = (
+        CloudflareVectorize._prepare_records_for_insert
+    )
+
+
 class TestD1MethodValidation:
     """Test D1 method input validation."""
 
     def test_d1_create_table_requires_table_name(self) -> None:
         """Test that d1_create_table validates table_name."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_create_table = CloudflareVectorize.d1_create_table.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -141,9 +156,47 @@ class TestD1MethodValidation:
         with pytest.raises(ValueError, match="table_name must be provided"):
             mock_vectorize.d1_create_table("")
 
+    def test_d1_create_table_rejects_unsafe_table_name(self) -> None:
+        """Test that d1_create_table rejects SQL injection in table_name."""
+        mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
+        mock_vectorize.d1_create_table = CloudflareVectorize.d1_create_table.__get__(
+            mock_vectorize, CloudflareVectorize
+        )
+
+        # Various SQL injection attempts
+        injection_names = [
+            "users; DROP TABLE users; --",
+            "table'; DELETE FROM users; --",
+            "test`injection",
+            "table name with spaces",
+            "table.with.dots",
+        ]
+
+        for bad_name in injection_names:
+            with pytest.raises(ValueError, match="Invalid table_name"):
+                mock_vectorize.d1_create_table(bad_name)
+
+    def test_d1_create_table_accepts_valid_table_names(self) -> None:
+        """Test that d1_create_table accepts valid table names."""
+        # Valid names should not raise during validation
+        # (they'll fail at engine creation which we're not testing here)
+        valid_names = [
+            "users",
+            "my_table",
+            "table123",
+            "Test_Table_2",
+            "lang-chain-docs",
+        ]
+
+        for name in valid_names:
+            # Should not raise ValueError for valid names
+            CloudflareVectorize._validate_table_name(name)
+
     def test_d1_drop_table_requires_table_name(self) -> None:
         """Test that d1_drop_table validates table_name."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_drop_table = CloudflareVectorize.d1_drop_table.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -154,6 +207,7 @@ class TestD1MethodValidation:
     def test_d1_upsert_texts_requires_table_name(self) -> None:
         """Test that d1_upsert_texts validates table_name."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_upsert_texts = CloudflareVectorize.d1_upsert_texts.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -164,6 +218,7 @@ class TestD1MethodValidation:
     def test_d1_upsert_texts_empty_data_returns_success(self) -> None:
         """Test that d1_upsert_texts handles empty data."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_upsert_texts = CloudflareVectorize.d1_upsert_texts.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -174,6 +229,7 @@ class TestD1MethodValidation:
     def test_d1_get_by_ids_requires_table_name(self) -> None:
         """Test that d1_get_by_ids validates table_name."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_get_by_ids = CloudflareVectorize.d1_get_by_ids.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -184,6 +240,7 @@ class TestD1MethodValidation:
     def test_d1_get_by_ids_empty_ids_returns_empty(self) -> None:
         """Test that d1_get_by_ids handles empty IDs list."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_get_by_ids = CloudflareVectorize.d1_get_by_ids.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -194,6 +251,7 @@ class TestD1MethodValidation:
     def test_d1_delete_requires_table_name(self) -> None:
         """Test that d1_delete validates table_name."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_delete = CloudflareVectorize.d1_delete.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -204,6 +262,7 @@ class TestD1MethodValidation:
     def test_d1_delete_empty_ids_returns_success(self) -> None:
         """Test that d1_delete handles empty IDs list."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_delete = CloudflareVectorize.d1_delete.__get__(
             mock_vectorize, CloudflareVectorize
         )
@@ -214,6 +273,7 @@ class TestD1MethodValidation:
     def test_d1_metadata_query_requires_table_name(self) -> None:
         """Test that d1_metadata_query validates table_name."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_metadata_query = (
             CloudflareVectorize.d1_metadata_query.__get__(
                 mock_vectorize, CloudflareVectorize
@@ -226,6 +286,7 @@ class TestD1MethodValidation:
     def test_d1_metadata_query_empty_filters_returns_empty(self) -> None:
         """Test that d1_metadata_query handles empty filters."""
         mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
         mock_vectorize.d1_metadata_query = (
             CloudflareVectorize.d1_metadata_query.__get__(
                 mock_vectorize, CloudflareVectorize
@@ -234,6 +295,122 @@ class TestD1MethodValidation:
 
         result = mock_vectorize.d1_metadata_query("test_table", {})
         assert result == []
+
+
+class TestMetadataQuerySQLInjectionPrevention:
+    """Test SQL injection prevention in d1_metadata_query methods."""
+
+    def test_d1_metadata_query_rejects_invalid_operation(self) -> None:
+        """Test that d1_metadata_query rejects SQL injection in operation param."""
+        mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
+        mock_vectorize._get_d1_engine = MagicMock()
+        mock_vectorize._get_d1_table = CloudflareVectorize._get_d1_table.__get__(
+            mock_vectorize, CloudflareVectorize
+        )
+        mock_vectorize.d1_metadata_query = (
+            CloudflareVectorize.d1_metadata_query.__get__(
+                mock_vectorize, CloudflareVectorize
+            )
+        )
+
+        # Try SQL injection through operation parameter
+        with pytest.raises(ValueError, match="operation must be 'AND' or 'OR'"):
+            mock_vectorize.d1_metadata_query(
+                "test_table",
+                {"key": ["value"]},
+                operation="AND; DROP TABLE users; --",
+            )
+
+    def test_d1_metadata_query_rejects_invalid_metadata_key(self) -> None:
+        """Test that d1_metadata_query rejects SQL injection in metadata keys."""
+        mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
+        mock_vectorize._get_d1_engine = MagicMock()
+        mock_vectorize._get_d1_table = CloudflareVectorize._get_d1_table.__get__(
+            mock_vectorize, CloudflareVectorize
+        )
+        mock_vectorize.d1_metadata_query = (
+            CloudflareVectorize.d1_metadata_query.__get__(
+                mock_vectorize, CloudflareVectorize
+            )
+        )
+
+        # Try SQL injection through metadata key
+        with pytest.raises(ValueError, match="Invalid metadata key"):
+            mock_vectorize.d1_metadata_query(
+                "test_table",
+                {"key'); DROP TABLE users; --": ["value"]},
+                operation="AND",
+            )
+
+    def test_d1_metadata_query_accepts_valid_alphanumeric_keys(self) -> None:
+        """Test that d1_metadata_query accepts valid alphanumeric keys."""
+        mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
+        mock_engine = MagicMock()
+        mock_conn = MagicMock()
+        mock_result = MagicMock()
+        mock_result.fetchall.return_value = []
+        mock_conn.execute.return_value = mock_result
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=None)
+        mock_engine.connect.return_value = mock_conn
+
+        mock_vectorize._get_d1_engine = MagicMock(return_value=mock_engine)
+        mock_vectorize._get_d1_table = CloudflareVectorize._get_d1_table.__get__(
+            mock_vectorize, CloudflareVectorize
+        )
+        mock_vectorize.d1_metadata_query = (
+            CloudflareVectorize.d1_metadata_query.__get__(
+                mock_vectorize, CloudflareVectorize
+            )
+        )
+
+        # Should not raise for valid keys
+        result = mock_vectorize.d1_metadata_query(
+            "test_table",
+            {
+                "author_name": ["John"],
+                "category2": ["books"],
+                "tag_123": ["fiction"],
+            },
+            operation="AND",
+        )
+        assert result == []
+
+    def test_d1_metadata_query_rejects_special_chars_in_key(self) -> None:
+        """Test that metadata keys with special characters are rejected."""
+        mock_vectorize = MagicMock(spec=CloudflareVectorize)
+        _setup_mock_with_validators(mock_vectorize)
+        mock_vectorize._get_d1_engine = MagicMock()
+        mock_vectorize._get_d1_table = CloudflareVectorize._get_d1_table.__get__(
+            mock_vectorize, CloudflareVectorize
+        )
+        mock_vectorize.d1_metadata_query = (
+            CloudflareVectorize.d1_metadata_query.__get__(
+                mock_vectorize, CloudflareVectorize
+            )
+        )
+
+        # Various injection attempts through metadata keys
+        injection_keys = [
+            "key.nested",  # dot
+            "key-name",  # hyphen
+            "key name",  # space
+            'key"; DROP TABLE',  # quote
+            "key' OR '1'='1",  # quote
+            "key`test",  # backtick
+            "key;test",  # semicolon
+        ]
+
+        for bad_key in injection_keys:
+            with pytest.raises(ValueError, match="Invalid metadata key"):
+                mock_vectorize.d1_metadata_query(
+                    "test_table",
+                    {bad_key: ["value"]},
+                    operation="AND",
+                )
 
 
 class TestSQLAlchemyIntegration:
