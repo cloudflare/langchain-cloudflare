@@ -42,6 +42,9 @@ test = [
 [tool.hatch.build.targets.wheel]
 packages = ["langgraph_checkpoint_cloudflare_d1"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["Makefile"]
+
 [tool.mypy]
 disallow_untyped_defs = true
 

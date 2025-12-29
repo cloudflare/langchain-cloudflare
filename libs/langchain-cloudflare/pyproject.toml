@@ -46,6 +46,9 @@ test = [
 [tool.hatch.build.targets.wheel]
 packages = ["langchain_cloudflare"]
 
+[tool.hatch.build.targets.sdist]
+exclude = ["Makefile"]
+
 [tool.mypy]
 disallow_untyped_defs = true
 exclude = [
