@@ -1,4 +1,4 @@
-.PHONY: all format lint test tests integration_tests docker_tests help extended_tests
+.PHONY: all format lint test tests integration_tests docker_tests help extended_tests worker_tests worker_sync dev_server
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -12,14 +12,37 @@ PACKAGE_NAME := $(shell find . -maxdepth 1 -type d -name "*langchain*" -o -name 
 
 # unit tests are run with the --disable-socket flag to prevent network calls
 test tests:
-	poetry run pytest --disable-socket --allow-unix-socket $(TEST_FILE)
+	uv run pytest --disable-socket --allow-unix-socket $(TEST_FILE)
 
 test_watch:
-	poetry run ptw --snapshot-update --now . -- -vv $(TEST_FILE)
+	uv run ptw --snapshot-update --now . -- -vv $(TEST_FILE)
 
 # integration tests are run without the --disable-socket flag to allow network calls
+# Loads .env from repo root automatically
 integration_test integration_tests:
-	poetry run pytest $(TEST_FILE)
+	@if [ -f ../../.env ]; then set -a && . ../../.env && set +a; fi && \
+	export TEST_CF_API_TOKEN="$${TEST_CF_API_TOKEN:-$$CF_API_TOKEN}" && \
+	unset VIRTUAL_ENV && \
+	uv run pytest $(TEST_FILE) -v
+
+# Worker integration tests (requires wrangler OAuth login)
+# These test the Python Workers bindings with pywrangler dev server
+worker_tests:
+	@echo "Running Worker integration tests..."
+	@echo "Note: Requires 'npx wrangler login' first"
+	@if [ -f ../../.env ]; then set -a && . ../../.env && set +a; fi && \
+	unset VIRTUAL_ENV && \
+	uv run pytest tests/integration_tests/test_worker_integration.py -v
+
+# Sync Worker dependencies (run before worker_tests or dev_server)
+worker_sync:
+	cd examples/workers && uv run pywrangler sync
+
+# Start the dev server manually for debugging
+dev_server:
+	@echo "Starting pywrangler dev server on port 8799..."
+	@echo "Press Ctrl+C to stop"
+	cd examples/workers && uv run pywrangler dev --port 8799
 
 ######################
 # LINTING AND FORMATTING
@@ -35,22 +58,22 @@ lint_tests: PYTHON_FILES=tests
 lint_tests: MYPY_CACHE=.mypy_cache_test
 
 lint lint_diff lint_package lint_tests:
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff check $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff format $(PYTHON_FILES) --diff
-	[ "$(PYTHON_FILES)" = "" ] || mkdir -p $(MYPY_CACHE) && poetry run mypy $(PYTHON_FILES) --cache-dir $(MYPY_CACHE)
+	[ "$(PYTHON_FILES)" = "" ] || uv run ruff check $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || uv run ruff format $(PYTHON_FILES) --diff
+	[ "$(PYTHON_FILES)" = "" ] || mkdir -p $(MYPY_CACHE) && uv run mypy $(PACKAGE_NAME) --cache-dir $(MYPY_CACHE)
 
 format format_diff:
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff format $(PYTHON_FILES)
-	[ "$(PYTHON_FILES)" = "" ] || poetry run ruff check --select I --fix $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || uv run ruff format $(PYTHON_FILES)
+	[ "$(PYTHON_FILES)" = "" ] || uv run ruff check --select I --fix $(PYTHON_FILES)
 
 spell_check:
-	poetry run codespell --toml pyproject.toml
+	uv run codespell --toml pyproject.toml
 
 spell_fix:
-	poetry run codespell --toml pyproject.toml -w
+	uv run codespell --toml pyproject.toml -w
 
 check_imports: $(shell find $(PACKAGE_NAME) -name '*.py' 2>/dev/null || echo "")
-	[ "$(PACKAGE_NAME)" = "" ] || poetry run python ./scripts/check_imports.py $^
+	[ "$(PACKAGE_NAME)" = "" ] || uv run python ./scripts/check_imports.py $^
 
 ######################
 # HELP
@@ -58,9 +81,13 @@ check_imports: $(shell find $(PACKAGE_NAME) -name '*.py' 2>/dev/null || echo "")
 
 help:
 	@echo '----'
-	@echo 'check_imports				- check imports'
+	@echo 'check_imports                - check imports'
 	@echo 'format                       - run code formatters'
 	@echo 'lint                         - run linters'
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
+	@echo 'integration_tests            - run all integration tests (loads .env automatically)'
+	@echo 'worker_sync                  - sync Worker dependencies (pywrangler sync)'
+	@echo 'worker_tests                 - run Worker integration tests (requires wrangler login)'
+	@echo 'dev_server                   - start pywrangler dev server for debugging'

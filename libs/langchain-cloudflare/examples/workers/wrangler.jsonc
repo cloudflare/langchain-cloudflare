@@ -1,0 +1,28 @@
+{
+  "name": "langchain-cloudflare-example",
+  "main": "src/entry.py",
+  "compatibility_date": "2025-11-02",
+  "compatibility_flags": ["python_workers"],
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "langchain-test-persistent",
+      "remote": true
+    }
+  ],
+  "d1_databases": [
+    {
+      "binding": "D1",
+      "database_name": "test-db",
+      "database_id": "4f7d22a8-de65-41a2-9643-d04fb71f718f",
+      "remote": true
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

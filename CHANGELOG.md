@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.2.0]
+
+#### Added
+
+- **Python Workers binding support** for running langchain-cloudflare in Cloudflare Python Workers (Pyodide environment)
+  - `binding=` parameter for `ChatCloudflareWorkersAI`, `CloudflareWorkersAIEmbeddings`, and `CloudflareVectorize`
+  - `bindings.py` module with Pyodide/JS interop utilities
+  - Full example Worker implementation in `examples/workers/`
+- `CloudflareWorkersAIReranker` class for document reranking using Cloudflare Workers AI
+  - Supports REST API, Worker bindings, and AI Gateway
+  - `rerank()` and `arerank()` methods for sync/async reranking
+  - `compress_documents()` and `acompress_documents()` methods
+  - `RerankResult` dataclass for structured rerank results
+- AI Gateway support for binding mode across all Workers AI components
+- Integration tests for Workers binding functionality
+
+#### Changed
+
+- D1 async methods now use `create_engine_from_binding()` for Worker compatibility (no greenlet dependency)
+
+#### Security
+
+- Strengthened table name validation to prevent SQL injection (alphanumeric, underscore, hyphen only)
+- **CVE-2025-68664**: Updated `langchain-core` dependency to `>=0.3.81` to address critical serialization vulnerability ("LangGrinch") that could allow secret extraction, object instantiation, and RCE via Jinja2
+
 ### [0.1.11]
 
 #### Added
@@ -63,6 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Updated `langchain-tests` dependency from `^0.3.17` to `>=0.3.17` for better compatibility
 
 ## langgraph-checkpoint-cloudflare-d1
+
+### [0.1.5]
+
+#### Security
+- **CVE-2025-68664**: Updated `langchain-core` dependency to `>=0.3.81` to address critical serialization vulnerability ("LangGrinch") that could allow secret extraction, object instantiation, and RCE via Jinja2
 
 ### [0.1.4]
 

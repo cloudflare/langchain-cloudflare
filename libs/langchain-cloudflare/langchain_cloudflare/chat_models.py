@@ -180,6 +180,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     environment variables ``CF_AI_API_TOKEN`` and ``CF_ACCOUNT_ID``
     set with your API token and account ID.
 
+    Alternatively, when running in a Cloudflare Python Worker, you can pass
+    the Workers AI binding directly via the ``binding`` parameter.
+
     Any parameters that are valid to be passed to the Cloudflare Workers AI API call
     can be passed in, even if not explicitly saved on this class.
 
@@ -191,6 +194,24 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             pip install -U langchain-cloudflare
             export CF_AI_API_TOKEN="your-api-token"
             export CF_ACCOUNT_ID="your-account-id"
+
+    Usage in Python Workers:
+        When running in a Cloudflare Python Worker, you can use the
+        Workers AI binding directly for better performance:
+
+        .. code-block:: python
+
+            from workers import WorkerEntrypoint, Response
+            from langchain_cloudflare import ChatCloudflareWorkersAI
+
+            class Default(WorkerEntrypoint):
+                async def fetch(self, request):
+                    llm = ChatCloudflareWorkersAI(
+                        model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+                        binding=self.env.AI,  # Pass the AI binding
+                    )
+                    response = await llm.ainvoke("Hello!")
+                    return Response.json({"response": response.content})
 
     Key init args — completion params:
         model: str
@@ -238,10 +259,15 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         base_url: Optional[str]
             Base URL path for API requests, leave blank if not using a proxy
             or service emulator.
+        binding: Optional[Any]
+            Workers AI binding (env.AI) for use in Python Workers.
+            When provided, uses the binding instead of REST API calls.
     """
 
     client: Any = Field(default=None, exclude=True)  #: :meta private:
     async_client: Any = Field(default=None, exclude=True)  #: :meta private:
+    binding: Any = Field(default=None, exclude=True)
+    """Workers AI binding (env.AI) for use in Python Workers."""
     model: str = Field(alias="model_name")
     """Model name to use."""
     temperature: float = 0.7
@@ -336,18 +362,27 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         if self.temperature == 0:
             self.temperature = 1e-8
 
+        # If binding is provided, skip REST API setup
+        if self.binding is not None:
+            # When using binding, we don't need api_token or account_id
+            return self
+
         if not self.api_token:
             raise ValueError(
                 "A Cloudflare API token must be provided either through "
                 "the api_token parameter or "
-                "CF_AI_API_TOKEN environment variable."
+                "CF_AI_API_TOKEN environment variable. "
+                "Alternatively, when running in a Python Worker, you can "
+                "pass the 'binding' parameter (env.AI) instead."
             )
 
         if not self.account_id:
             raise ValueError(
                 "A Cloudflare account ID must be provided either through "
                 "the account_id parameter or "
-                "CF_ACCOUNT_ID environment variable."
+                "CF_ACCOUNT_ID environment variable. "
+                "Alternatively, when running in a Python Worker, you can "
+                "pass the 'binding' parameter (env.AI) instead."
             )
 
         try:
@@ -645,21 +680,35 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         # Translate parameters for model-specific differences
         params = self._translate_params_for_model(params)
 
-        # Construct the API URL
-        if self.ai_gateway:
-            # If using AI Gateway
-            api_url = f"workers-ai/run/{self.model}"
-        else:
-            # If using direct API
-            api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
-
         # Create the request payload
         payload = {"messages": message_dicts, **params}
 
-        # Make the API request
-        response = self.client.post(api_url, json=payload)
-        response.raise_for_status()
-        response_data = response.json()
+        # Use binding if available (for Python Workers)
+        if self.binding is not None:
+            # Bindings are async-only, so we need to run in an event loop
+            import asyncio
+
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+            response_data = loop.run_until_complete(self._call_binding(payload))
+        else:
+            # Use REST API (httpx client)
+            # Construct the API URL
+            if self.ai_gateway:
+                # If using AI Gateway
+                api_url = f"workers-ai/run/{self.model}"
+            else:
+                # If using direct API
+                api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
+
+            # Make the API request
+            response = self.client.post(api_url, json=payload)
+            response.raise_for_status()
+            response_data = response.json()
 
         return self._create_chat_result(response_data)
 
@@ -676,19 +725,24 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         }
         params = self._translate_params_for_model(params)
 
-        # Construct the Cloudflare Workers AI API URL
-        if self.ai_gateway:
-            api_url = f"workers-ai/run/{self.model}"
-        else:
-            api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
-
         # Create the request payload
         payload = {"messages": message_dicts, **params}
 
-        # Make the API request
-        response = await self.async_client.post(api_url, json=payload)
-        response.raise_for_status()
-        response_data = response.json()
+        # Use binding if available (for Python Workers)
+        if self.binding is not None:
+            response_data = await self._call_binding(payload)
+        else:
+            # Use REST API (httpx async client)
+            # Construct the Cloudflare Workers AI API URL
+            if self.ai_gateway:
+                api_url = f"workers-ai/run/{self.model}"
+            else:
+                api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
+
+            # Make the API request
+            response = await self.async_client.post(api_url, json=payload)
+            response.raise_for_status()
+            response_data = response.json()
 
         return self._create_chat_result(response_data)
 
@@ -700,6 +754,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
         """Stream completion for Cloudflare Workers AI."""
+        # Streaming is not supported via bindings
+        if self.binding is not None:
+            raise NotImplementedError(
+                "Streaming is not yet supported when using Workers bindings. "
+                "Use non-streaming methods (invoke/ainvoke) or switch to REST API "
+                "by providing api_token and account_id instead of binding."
+            )
+
         message_dicts, params = self._create_message_dicts(messages, stop)
         params = {**params, **kwargs, "stream": True}
         params = self._translate_params_for_model(params)
@@ -855,6 +917,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
+        # Streaming is not supported via bindings
+        if self.binding is not None:
+            raise NotImplementedError(
+                "Streaming is not yet supported when using Workers bindings. "
+                "Use non-streaming methods (invoke/ainvoke) or switch to REST API "
+                "by providing api_token and account_id instead of binding."
+            )
+
         message_dicts, params = self._create_message_dicts(messages, stop)
 
         params = {**params, **kwargs, "stream": True}
@@ -1021,6 +1091,36 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     #
     # Internal methods
     #
+    async def _call_binding(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Call the Workers AI binding with the given payload.
+
+        Args:
+            payload: The request payload (messages, parameters, etc.)
+
+        Returns:
+            Response data in REST API format
+        """
+        from .bindings import (
+            convert_binding_response_to_rest_format,
+            convert_payload_for_binding,
+            create_gateway_options,
+        )
+
+        # Convert payload to JS-compatible format for Pyodide
+        js_payload = convert_payload_for_binding(payload)
+
+        # Create AI Gateway options if configured
+        gateway_options = create_gateway_options(self.ai_gateway)
+
+        # Call the binding with optional gateway
+        if gateway_options is not None:
+            response = await self.binding.run(self.model, js_payload, gateway_options)
+        else:
+            response = await self.binding.run(self.model, js_payload)
+
+        # Convert to REST API format that _create_chat_result expects
+        return convert_binding_response_to_rest_format(response, self.model)
+
     @property
     def _default_params(self) -> Dict[str, Any]:
         """Get the default parameters for calling Cloudflare Workers AI API."""
@@ -1418,7 +1518,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 }
 
             kwargs["tool_choice"] = tool_choice
-        return super().bind(tools=formatted_tools, **kwargs)
+        return super().bind(tools=formatted_tools, **kwargs)  # type: ignore[return-value]
 
     def with_structured_output(
         self,
@@ -1478,7 +1578,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             )
 
         elif method == "json_mode":
-            llm = self.bind(
+            llm = self.bind(  # type: ignore[assignment]
                 response_format={"type": "json_object"},
                 ls_structured_output_format={
                     "kwargs": {"method": "json_mode"},
