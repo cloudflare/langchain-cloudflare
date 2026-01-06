@@ -7,11 +7,12 @@ requires-python = ">=3.12"
 dependencies = [
     "webtypy>=0.1.7",
     "langchain-cloudflare @ file:////Users/collierking/Desktop/github/langchain-cloudflare/libs/langchain-cloudflare",
-    "langchain-core>=0.3.81,<1.0.0",
-    "langchain>=0.3.0,<1.0.0",
+    "langchain-core>=1.0.0",
     "sqlalchemy-cloudflare-d1 @ file:////Users/collierking/Desktop/github/sqlalchemy-cloudflare-d1",
     # NOTE: Do NOT include pydantic - use Pyodide's built-in version
     # pydantic_core requires compiled Rust binaries that aren't available for WebAssembly
+    # NOTE: langchain>=1.0.0 requires langgraph which requires ormsgpack (no Pyodide wheel)
+    # We install langchain-core>=1.0.0 and manually add langgraph/langchain after with stub
 ]
 
 [dependency-groups]
