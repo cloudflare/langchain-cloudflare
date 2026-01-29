@@ -485,6 +485,7 @@ class TestWorkerReranker:
         assert "results" in data
         assert "query" in data
         assert len(data["results"]) <= 3
+        assert len(data["results"]) > 0, "Reranker returned no results"
 
         # Results should be sorted by score (descending)
         # The Paris-related documents should score higher
@@ -513,6 +514,9 @@ class TestWorkerReranker:
 
         assert data["success"] is True
         assert "results" in data
+        assert len(data["results"]) > 0, (
+            "Reranker returned no results for default documents"
+        )
 
     def test_vectorize_search_with_rerank(self, dev_server_with_vectorize):
         """POST /vectorize-search with rerank=true should rerank results."""
@@ -720,3 +724,6 @@ class TestWorkerAIGateway:
         assert data["results"]["chat"]["success"] is True
         assert data["results"]["embeddings"]["success"] is True
         assert data["results"]["reranker"]["success"] is True
+        assert data["results"]["reranker"]["count"] > 0, (
+            "AI Gateway reranker returned no results"
+        )

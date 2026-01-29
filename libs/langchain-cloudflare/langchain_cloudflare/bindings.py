@@ -290,6 +290,13 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
                 result = result.to_py()
             if isinstance(result, list):
                 return result
+        # Native AI binding returns {"response": [...], "usage": {...}}
+        if "response" in response:
+            resp = response["response"]
+            if hasattr(resp, "to_py"):
+                resp = resp.to_py()
+            if isinstance(resp, list):
+                return resp
         # Some responses might have a different structure
         if "data" in response:
             data = response["data"]

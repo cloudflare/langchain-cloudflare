@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.2.1]
+
+#### Fixed
+
+- **Reranker binding response handling**: Fixed `CloudflareWorkersAIReranker.arerank()` returning empty results when using native AI binding (`binding=env.AI`). `convert_reranker_response()` now handles the `response` key returned by `env.AI.run()` for reranker models.
+
+#### Tests
+
+- Added unit tests for `convert_reranker_response()` covering all known response formats.
+- Added `TestReranker` integration tests for the REST API reranker path.
+- Strengthened reranker assertions in worker integration tests to assert result count > 0.
+
 ### [0.2.0]
 
 #### Added

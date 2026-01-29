@@ -39,6 +39,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from langchain_cloudflare import ChatCloudflareWorkersAI
+from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
 # Agent imports
 try:
@@ -487,6 +488,76 @@ class TestCreateAgent:
         assert len(results) == 2, f"Expected 2 results, got {len(results)} for {model}"
         for i, result in enumerate(results):
             assert result is not None, f"Result {i} is None for {model}"
+
+
+# MARK: - Reranker Tests
+
+
+class TestReranker:
+    """Test CloudflareWorkersAIReranker via REST API."""
+
+    def test_rerank_basic(self, account_id, api_token):
+        """Test reranker returns ranked results with scores."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        reranker = CloudflareWorkersAIReranker(
+            model_name="@cf/baai/bge-reranker-base",
+            account_id=account_id,
+            api_token=api_token,
+        )
+
+        results = reranker.rerank(
+            query="What is the capital of France?",
+            documents=[
+                "Paris is the capital and largest city of France.",
+                "Berlin is the capital of Germany.",
+                "The Eiffel Tower is located in Paris, France.",
+                "London is the capital of the United Kingdom.",
+            ],
+            top_k=3,
+        )
+
+        assert len(results) > 0, "Reranker returned no results"
+        assert len(results) <= 3
+        # Results should have index and relevance_score
+        for r in results:
+            assert hasattr(r, "index")
+            assert hasattr(r, "relevance_score")
+            assert r.relevance_score >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_arerank_basic(self, account_id, api_token):
+        """Test async reranker returns ranked results with scores."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        reranker = CloudflareWorkersAIReranker(
+            model_name="@cf/baai/bge-reranker-base",
+            account_id=account_id,
+            api_token=api_token,
+        )
+
+        results = await reranker.arerank(
+            query="What is the capital of France?",
+            documents=[
+                "Paris is the capital and largest city of France.",
+                "Berlin is the capital of Germany.",
+                "The Eiffel Tower is located in Paris, France.",
+                "London is the capital of the United Kingdom.",
+            ],
+            top_k=3,
+        )
+
+        assert len(results) > 0, "Reranker returned no results"
+        assert len(results) <= 3
+        for r in results:
+            assert hasattr(r, "index")
+            assert hasattr(r, "relevance_score")
+            assert r.relevance_score >= 0.0
+
+
+# MARK: - Basic Invoke Tests
 
 
 class TestBasicInvoke:
