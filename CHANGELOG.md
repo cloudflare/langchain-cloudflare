@@ -10,14 +10,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### [0.2.1]
 
+#### Added
+
+- **Reproducible Pyodide dependency setup**: Added `setup_pyodide_deps.sh` script and `package.json` to automate the Python Worker dependency setup for packages without Pyodide wheels (langchain>=1.0.0, langgraph, langgraph-checkpoint).
+- **Pure Python stubs for Pyodide**: Added `xxhash` and `ormsgpack` stub packages in `stubs/` with proper `pyproject.toml` files, enabling `create_agent` and langgraph imports in Cloudflare Python Workers.
+- **ToolStrategy with JSON schema dict**: Added `/agent-structured-json` Worker endpoint supporting `ToolStrategy` for structured output using raw JSON schema dicts (not just Pydantic models).
+
 #### Fixed
 
 - **Reranker binding response handling**: Fixed `CloudflareWorkersAIReranker.arerank()` returning empty results when using native AI binding (`binding=env.AI`). `convert_reranker_response()` now handles the `response` key returned by `env.AI.run()` for reranker models.
+- **Pyodide namespace packages**: Fixed langgraph imports failing in Pyodide due to PEP 420 implicit namespace packages. The setup script now creates missing `__init__.py` files.
+- **ToolStrategy import isolation**: Separated `ToolStrategy` import from `create_agent` import so a missing `ToolStrategy` doesn't disable all agent endpoints.
+
+#### Changed
+
+- **Worker dev server flow**: `conftest.py` now uses a 3-step flow (`pywrangler sync` → `setup_pyodide_deps.sh` → `npx wrangler dev`) matching `package.json` scripts.
 
 #### Tests
 
 - Added unit tests for `convert_reranker_response()` covering all known response formats.
 - Added `TestReranker` integration tests for the REST API reranker path.
+- Added `TestWorkerAgentStructuredJsonSchema` worker integration tests for ToolStrategy with JSON schema.
+- Added `TestToolStrategyJsonSchema` REST API integration tests.
 - Strengthened reranker assertions in worker integration tests to assert result count > 0.
 
 ### [0.2.0]

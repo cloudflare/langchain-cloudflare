@@ -77,7 +77,13 @@ def sync_package_to_python_modules(project_dir: Path) -> None:
 def pywrangler_dev_server(
     project_dir: Path, timeout: int = 300
 ) -> tuple[subprocess.Popen, int]:
-    """Start a pywrangler dev server and return the process and port.
+    """Start a Worker dev server and return the process and port.
+
+    Follows the same sequence as the package.json "dev" script:
+    1. ``uv run pywrangler sync`` - install Pyodide-compatible deps
+    2. ``./scripts/setup_pyodide_deps.sh`` - install wheels/stubs that
+       pywrangler can't handle (langchain>=1.0.0, langgraph, xxhash, etc.)
+    3. ``npx wrangler dev`` - start the dev server with the prepared modules
 
     Args:
         project_dir: Path to the project directory containing wrangler.jsonc
@@ -97,15 +103,44 @@ def pywrangler_dev_server(
     env.pop("CLOUDFLARE_API_TOKEN", None)
     env.pop("TEST_CF_API_TOKEN", None)
 
+    # Step 1: Run pywrangler sync to install Pyodide-compatible deps
+    sync_result = subprocess.run(
+        ["uv", "run", "pywrangler", "sync"],
+        cwd=project_dir,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    if sync_result.returncode != 0:
+        raise RuntimeError(
+            f"pywrangler sync failed:\n{sync_result.stderr}\n{sync_result.stdout}"
+        )
+
+    # Step 2: Run setup_pyodide_deps.sh for wheels/stubs pywrangler can't handle
+    setup_script = project_dir / "scripts" / "setup_pyodide_deps.sh"
+    if setup_script.exists():
+        setup_result = subprocess.run(
+            [str(setup_script)],
+            cwd=project_dir,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        if setup_result.returncode != 0:
+            raise RuntimeError(
+                f"setup_pyodide_deps.sh failed:\n"
+                f"{setup_result.stderr}\n{setup_result.stdout}"
+            )
+
     # Collect output lines for better error reporting
     output_lines = []
 
-    # Start the dev server
+    # Step 3: Start the dev server via npx wrangler dev
     # AI and Vectorize bindings require remote: true in wrangler.jsonc
     # (they don't support local simulation, only remote binding connections)
     # D1 supports both local and remote
     process = subprocess.Popen(
-        ["uv", "run", "pywrangler", "dev", "--port", str(port)],
+        ["npx", "wrangler", "dev", "--port", str(port)],
         cwd=project_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -155,7 +190,10 @@ def initialized_worker():
     """Session-scoped fixture that sets up the Worker environment once.
 
     This runs once per test session to sync the package source to python_modules
-    (workaround for pywrangler bug).
+    (workaround for pywrangler bug that doesn't update bundled packages).
+
+    Note: The full dependency setup (pywrangler sync + setup_pyodide_deps.sh +
+    wrangler dev) is handled by pywrangler_dev_server().
     """
     project_dir = get_worker_project_dir()
 
