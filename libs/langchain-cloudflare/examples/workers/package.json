@@ -1,0 +1,13 @@
+{
+  "name": "langchain-cloudflare-example",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "uv run pywrangler sync && ./scripts/setup_pyodide_deps.sh && npx wrangler dev",
+    "deploy": "uv run pywrangler sync && ./scripts/setup_pyodide_deps.sh && npx wrangler deploy",
+    "start": "uv run pywrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "^4.58.0"
+  }
+}

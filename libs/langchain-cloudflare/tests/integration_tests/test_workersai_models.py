@@ -39,10 +39,12 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from langchain_cloudflare import ChatCloudflareWorkersAI
+from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
 # Agent imports
 try:
     from langchain.agents import create_agent
+    from langchain.agents.structured_output import ToolStrategy
 
     CREATE_AGENT_AVAILABLE = True
 except ImportError:
@@ -487,6 +489,137 @@ class TestCreateAgent:
         assert len(results) == 2, f"Expected 2 results, got {len(results)} for {model}"
         for i, result in enumerate(results):
             assert result is not None, f"Result {i} is None for {model}"
+
+
+# MARK: - ToolStrategy JSON Schema Tests
+
+
+class TestToolStrategyJsonSchema:
+    """Test create_agent with ToolStrategy using a JSON schema dict via REST API."""
+
+    SYSTEM_PROMPT = (
+        "You are a press release analyst. Extract announcements from the "
+        "given text. Classify each announcement as one of: partnership, "
+        "investment, regulatory, milestone, event, m&a, none. "
+        "Return the results in the structured format."
+    )
+
+    @pytest.mark.skipif(
+        not CREATE_AGENT_AVAILABLE,
+        reason="langchain.agents.create_agent not available",
+    )
+    @pytest.mark.parametrize("model", MODELS)
+    def test_tool_strategy_json_schema_invoke(
+        self, model, account_id, api_token, ai_gateway
+    ):
+        """Test create_agent with ToolStrategy(json_schema_dict) via REST API."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+
+        # Use JSON schema dict instead of Pydantic model
+        json_schema = Data.model_json_schema()
+
+        agent = create_agent(
+            model=llm,
+            response_format=ToolStrategy(json_schema),
+            system_prompt=self.SYSTEM_PROMPT,
+            tools=[],
+        )
+
+        result = agent.invoke(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            "Text: Acme Corp announced a "
+                            "partnership with TechGiant Inc."
+                        ),
+                    }
+                ]
+            }
+        )
+
+        print(f"\n[{model}] ToolStrategy JSON Schema (invoke):")
+        print(f"  Result: {result}")
+
+        assert result is not None, f"Result is None for {model}"
+        # ToolStrategy with json_schema kind returns raw dict
+        if isinstance(result, dict):
+            structured = result.get("structured_response", result)
+            assert structured is not None
+
+
+# MARK: - Reranker Tests
+
+
+class TestReranker:
+    """Test CloudflareWorkersAIReranker via REST API."""
+
+    def test_rerank_basic(self, account_id, api_token):
+        """Test reranker returns ranked results with scores."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        reranker = CloudflareWorkersAIReranker(
+            model_name="@cf/baai/bge-reranker-base",
+            account_id=account_id,
+            api_token=api_token,
+        )
+
+        results = reranker.rerank(
+            query="What is the capital of France?",
+            documents=[
+                "Paris is the capital and largest city of France.",
+                "Berlin is the capital of Germany.",
+                "The Eiffel Tower is located in Paris, France.",
+                "London is the capital of the United Kingdom.",
+            ],
+            top_k=3,
+        )
+
+        assert len(results) > 0, "Reranker returned no results"
+        assert len(results) <= 3
+        # Results should have index and relevance_score
+        for r in results:
+            assert hasattr(r, "index")
+            assert hasattr(r, "relevance_score")
+            assert r.relevance_score >= 0.0
+
+    @pytest.mark.asyncio
+    async def test_arerank_basic(self, account_id, api_token):
+        """Test async reranker returns ranked results with scores."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        reranker = CloudflareWorkersAIReranker(
+            model_name="@cf/baai/bge-reranker-base",
+            account_id=account_id,
+            api_token=api_token,
+        )
+
+        results = await reranker.arerank(
+            query="What is the capital of France?",
+            documents=[
+                "Paris is the capital and largest city of France.",
+                "Berlin is the capital of Germany.",
+                "The Eiffel Tower is located in Paris, France.",
+                "London is the capital of the United Kingdom.",
+            ],
+            top_k=3,
+        )
+
+        assert len(results) > 0, "Reranker returned no results"
+        assert len(results) <= 3
+        for r in results:
+            assert hasattr(r, "index")
+            assert hasattr(r, "relevance_score")
+            assert r.relevance_score >= 0.0
+
+
+# MARK: - Basic Invoke Tests
 
 
 class TestBasicInvoke:

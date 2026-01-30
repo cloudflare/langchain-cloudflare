@@ -50,8 +50,14 @@ try:
 
     CREATE_AGENT_AVAILABLE = True
 except ImportError:
-    # create_agent not available - agent endpoints will return 501
     CREATE_AGENT_AVAILABLE = False
+
+try:
+    from langchain.agents.structured_output import ToolStrategy
+
+    TOOL_STRATEGY_AVAILABLE = True
+except ImportError:
+    TOOL_STRATEGY_AVAILABLE = False
 
 
 # MARK: - Worker Entrypoint
@@ -78,6 +84,8 @@ class Default(WorkerEntrypoint):
                 return await self.handle_multi_turn(request)
             elif path == "agent-structured":
                 return await self.handle_agent_structured_output(request)
+            elif path == "agent-structured-json":
+                return await self.handle_agent_structured_json_schema(request)
             elif path == "agent-tools":
                 return await self.handle_agent_tools(request)
             # Vectorize endpoints
@@ -421,6 +429,82 @@ Return JSON with an "announcements" array. Each announcement should have:
             {
                 "input": text,
                 "result": str(result),
+            }
+        )
+
+    # MARK: - Agent Structured JSON Schema Handler
+
+    async def handle_agent_structured_json_schema(self, request):
+        """Handle create_agent with ToolStrategy using a JSON schema dict.
+
+        This tests the code path where response_format is a raw JSON schema
+        dict wrapped in ToolStrategy, rather than a Pydantic model.
+        """
+        if not CREATE_AGENT_AVAILABLE:
+            return Response.json(
+                {"error": "create_agent is not available"},
+                status=501,
+            )
+        if not TOOL_STRATEGY_AVAILABLE:
+            return Response.json(
+                {"error": "ToolStrategy is not available"},
+                status=501,
+            )
+
+        data = await request.json()
+        text = data.get(
+            "text",
+            "Acme Corp announced a partnership with TechGiant Inc.",
+        )
+        model = data.get("model", DEFAULT_MODEL)
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+        )
+
+        # Use JSON schema dict instead of Pydantic model
+        json_schema = Data.model_json_schema()
+
+        system_prompt = (
+            "You are a press release analyst. Extract announcements. "
+            "Classify as: partnership, investment, regulatory, milestone, "
+            "event, m&a, or none. Return in structured format."
+        )
+
+        agent = create_agent(
+            model=llm,
+            response_format=ToolStrategy(json_schema),
+            system_prompt=system_prompt,
+            tools=[],
+        )
+
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": f"Text: {text}"}]}
+        )
+
+        if isinstance(result, dict):
+            structured = result.get("structured_response", result)
+            if hasattr(structured, "model_dump"):
+                structured = structured.model_dump()
+            return Response.json(
+                {
+                    "success": True,
+                    "input": text,
+                    "result": structured,
+                    "strategy": "ToolStrategy",
+                    "schema_type": "json_schema",
+                }
+            )
+
+        return Response.json(
+            {
+                "success": True,
+                "input": text,
+                "result": str(result),
+                "strategy": "ToolStrategy",
+                "schema_type": "json_schema",
             }
         )
 

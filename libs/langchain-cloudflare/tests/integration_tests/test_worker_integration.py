@@ -199,6 +199,43 @@ class TestWorkerAgentStructuredOutput:
         assert "result" in data
 
 
+class TestWorkerAgentStructuredJsonSchema:
+    """Test create_agent with ToolStrategy using JSON schema dict.
+
+    This verifies that passing a raw JSON schema dict (from
+    model_json_schema()) wrapped in ToolStrategy works via the
+    Worker binding, not just Pydantic models.
+    """
+
+    @pytest.mark.parametrize("model", MODELS)
+    def test_agent_structured_json_schema(self, dev_server, model):
+        """POST /agent-structured-json should work with ToolStrategy(json_schema)."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/agent-structured-json",
+            json={
+                "text": "Apple Inc announced record Q4 earnings.",
+                "model": model,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        if response.status_code == 501:
+            pytest.skip("create_agent or ToolStrategy unavailable in Pyodide")
+
+        assert response.status_code == 200, (
+            f"Expected 200, got {response.status_code}. Response: {response.text}"
+        )
+        data = response.json()
+
+        assert data.get("success") is True, (
+            f"ToolStrategy with JSON schema failed: {data}"
+        )
+        assert "result" in data
+        assert data.get("strategy") == "ToolStrategy"
+        assert data.get("schema_type") == "json_schema"
+
+
 class TestWorkerAgentTools:
     """Test create_agent with tools endpoint.
 
@@ -485,6 +522,7 @@ class TestWorkerReranker:
         assert "results" in data
         assert "query" in data
         assert len(data["results"]) <= 3
+        assert len(data["results"]) > 0, "Reranker returned no results"
 
         # Results should be sorted by score (descending)
         # The Paris-related documents should score higher
@@ -513,6 +551,9 @@ class TestWorkerReranker:
 
         assert data["success"] is True
         assert "results" in data
+        assert len(data["results"]) > 0, (
+            "Reranker returned no results for default documents"
+        )
 
     def test_vectorize_search_with_rerank(self, dev_server_with_vectorize):
         """POST /vectorize-search with rerank=true should rerank results."""
@@ -720,3 +761,6 @@ class TestWorkerAIGateway:
         assert data["results"]["chat"]["success"] is True
         assert data["results"]["embeddings"]["success"] is True
         assert data["results"]["reranker"]["success"] is True
+        assert data["results"]["reranker"]["count"] > 0, (
+            "AI Gateway reranker returned no results"
+        )
