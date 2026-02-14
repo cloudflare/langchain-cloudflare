@@ -56,6 +56,7 @@ MODELS = [
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/zai-org/glm-4.7-flash",
 ]
 
 
@@ -582,11 +583,11 @@ class TestReranker:
 
         assert len(results) > 0, "Reranker returned no results"
         assert len(results) <= 3
-        # Results should have index and relevance_score
+        # Results should have index and score
         for r in results:
             assert hasattr(r, "index")
-            assert hasattr(r, "relevance_score")
-            assert r.relevance_score >= 0.0
+            assert hasattr(r, "score")
+            assert r.score >= 0.0
 
     @pytest.mark.asyncio
     async def test_arerank_basic(self, account_id, api_token):
@@ -615,8 +616,8 @@ class TestReranker:
         assert len(results) <= 3
         for r in results:
             assert hasattr(r, "index")
-            assert hasattr(r, "relevance_score")
-            assert r.relevance_score >= 0.0
+            assert hasattr(r, "score")
+            assert r.score >= 0.0
 
 
 # MARK: - Basic Invoke Tests
@@ -666,6 +667,83 @@ class TestBasicInvoke:
         for i, result in enumerate(results):
             assert result is not None, f"Result {i} is None for {model}"
             assert result.content, f"Empty content for result {i} for {model}"
+
+
+# MARK: - Reasoning Content Tests
+
+
+class TestReasoningContent:
+    """Test reasoning_content extraction from models that support it."""
+
+    REASONING_MODELS = [
+        "@cf/qwen/qwen3-30b-a3b-fp8",
+        "@cf/zai-org/glm-4.7-flash",
+    ]
+
+    @pytest.mark.parametrize("model", REASONING_MODELS)
+    def test_reasoning_content_sync(self, model, account_id, api_token, ai_gateway):
+        """Test that reasoning_content appears in response_metadata."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        result = llm.invoke("What is 25 * 37? Think step by step.")
+
+        print(f"\n[{model}] Reasoning Content (sync):")
+        print(f"  Content: {result.content[:200]}")
+        print(f"  response_metadata keys: {list(result.response_metadata.keys())}")
+
+        assert result.content, f"Expected non-empty content for {model}"
+        assert "reasoning_content" in result.response_metadata, (
+            f"Expected reasoning_content in response_metadata for {model}"
+        )
+        assert len(result.response_metadata["reasoning_content"]) > 0, (
+            f"Expected non-empty reasoning_content for {model}"
+        )
+
+    @pytest.mark.parametrize("model", REASONING_MODELS)
+    @pytest.mark.asyncio
+    async def test_reasoning_content_async(
+        self, model, account_id, api_token, ai_gateway
+    ):
+        """Test that reasoning_content appears in response_metadata (async)."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        result = await llm.ainvoke("What is 25 * 37? Think step by step.")
+
+        print(f"\n[{model}] Reasoning Content (async):")
+        print(f"  Content: {result.content[:200]}")
+        print(f"  response_metadata keys: {list(result.response_metadata.keys())}")
+
+        assert result.content, f"Expected non-empty content for {model}"
+        assert "reasoning_content" in result.response_metadata, (
+            f"Expected reasoning_content in response_metadata for {model}"
+        )
+        assert len(result.response_metadata["reasoning_content"]) > 0, (
+            f"Expected non-empty reasoning_content for {model}"
+        )
+
+    def test_no_reasoning_content_for_llama(self, account_id, api_token, ai_gateway):
+        """Test that Llama doesn't have reasoning_content in response_metadata."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            account_id,
+            api_token,
+            ai_gateway,
+        )
+        result = llm.invoke("Say hello.")
+
+        print("\n[llama] Reasoning Content check:")
+        print(f"  response_metadata keys: {list(result.response_metadata.keys())}")
+
+        assert "reasoning_content" not in result.response_metadata, (
+            "Llama should not have reasoning_content in response_metadata"
+        )
 
 
 if __name__ == "__main__":

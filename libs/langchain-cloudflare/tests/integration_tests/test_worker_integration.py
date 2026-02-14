@@ -23,9 +23,12 @@ import uuid
 import pytest
 import requests
 
-# Models to test against (subset for faster tests)
+# Models to test against
 MODELS = [
+    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/zai-org/glm-4.7-flash",
 ]
 
 
@@ -763,4 +766,67 @@ class TestWorkerAIGateway:
         assert data["results"]["reranker"]["success"] is True
         assert data["results"]["reranker"]["count"] > 0, (
             "AI Gateway reranker returned no results"
+        )
+
+
+# MARK: - Reasoning Content Tests
+
+
+class TestWorkerReasoningContent:
+    """Test reasoning_content extraction from Qwen models via Worker binding."""
+
+    def test_reasoning_content_returned(self, dev_server):
+        """POST /reasoning should return reasoning_content in response_metadata."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/reasoning",
+            json={
+                "message": "What is 25 * 37? Think step by step.",
+                "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200, f"Failed: {response.text}"
+        data = response.json()
+
+        assert "content" in data
+        assert len(data["content"]) > 0, "Expected non-empty content"
+        assert data["model"] == "@cf/qwen/qwen3-30b-a3b-fp8"
+
+        # Qwen should return reasoning_content
+        assert data["has_reasoning_content"] is True, (
+            "Expected reasoning_content in response_metadata for Qwen model"
+        )
+        assert data["reasoning_content"] is not None
+        assert len(data["reasoning_content"]) > 0, (
+            "Expected non-empty reasoning_content"
+        )
+
+    def test_reasoning_content_returned_glm(self, dev_server):
+        """POST /reasoning should return reasoning_content for GLM model."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/reasoning",
+            json={
+                "message": "What is 25 * 37? Think step by step.",
+                "model": "@cf/zai-org/glm-4.7-flash",
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200, f"Failed: {response.text}"
+        data = response.json()
+
+        assert "content" in data
+        assert len(data["content"]) > 0, "Expected non-empty content"
+        assert data["model"] == "@cf/zai-org/glm-4.7-flash"
+
+        # GLM should return reasoning_content
+        assert data["has_reasoning_content"] is True, (
+            "Expected reasoning_content in response_metadata for GLM model"
+        )
+        assert data["reasoning_content"] is not None
+        assert len(data["reasoning_content"]) > 0, (
+            "Expected non-empty reasoning_content"
         )

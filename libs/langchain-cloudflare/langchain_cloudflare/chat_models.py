@@ -1,5 +1,6 @@
 """Cloudflare Workers AI Chat wrapper."""
 
+# MARK: - Imports
 from __future__ import annotations
 
 import json
@@ -73,12 +74,7 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-# =============================================================================
-# Model Behavior Registry
-# =============================================================================
-# Centralized configuration for model-specific behaviors and capabilities.
-# This makes it easy to add new models and documents differences in one place.
-# =============================================================================
+# MARK: - Model Behavior Registry
 
 
 class ModelBehavior(BaseModel):
@@ -115,6 +111,15 @@ class ModelBehavior(BaseModel):
         ),
     )
 
+    supports_reasoning_content: bool = Field(
+        default=False,
+        description=(
+            "When True, the model may return a 'reasoning_content' field in "
+            "its response message. This is surfaced via response_metadata on "
+            "the AIMessage. Currently Qwen and GLM models expose this."
+        ),
+    )
+
 
 def _transform_response_format_to_guided_json(
     params: Dict[str, Any],
@@ -134,7 +139,7 @@ def _transform_response_format_to_guided_json(
     return params
 
 
-# Registry of model behaviors keyed by model family identifier
+# MARK: - Model Behavior Registry Entries
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
     "llama": ModelBehavior(
         embed_tool_calls_in_content=True,
@@ -146,10 +151,15 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
     ),
     "qwen": ModelBehavior(
         embed_tool_calls_in_content=False,
+        supports_reasoning_content=True,
+    ),
+    "glm": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
+        supports_reasoning_content=True,
     ),
 }
 
-# Default behavior for unknown models (conservative defaults)
 DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
 
 
@@ -173,6 +183,7 @@ def get_model_behavior(model_name: str) -> ModelBehavior:
     return DEFAULT_MODEL_BEHAVIOR
 
 
+# MARK: - ChatCloudflareWorkersAI
 class ChatCloudflareWorkersAI(BaseChatModel):
     """`Cloudflare Workers AI` Chat large language models API.
 
@@ -426,9 +437,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return self
 
-    #
-    # Serializable class method overrides
-    #
+    # MARK: - Serializable Overrides
     @property
     def lc_secrets(self) -> Dict[str, str]:
         return {"api_token": "CF_AI_API_TOKEN"}
@@ -447,9 +456,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         """
         return get_model_behavior(self.model)
 
-    #
-    # BaseChatModel method overrides
-    #
+    # MARK: - BaseChatModel Overrides
     @property
     def _llm_type(self) -> str:
         """Return type of model."""
@@ -472,6 +479,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             ls_params["ls_stop"] = ls_stop if isinstance(ls_stop, list) else [ls_stop]
         return ls_params
 
+    # MARK: - Tool Call Extraction
     def _extract_tool_calls_from_content(self, content: str) -> List[Dict[str, Any]]:
         """Extract tool calls from content if it appears to be a JSON tool call."""
         tool_calls: List[Dict[str, Any]] = []
@@ -665,6 +673,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return params
 
+    # MARK: - Generate
     def _generate(  # type: ignore
         self,
         messages: List[BaseMessage],
@@ -746,6 +755,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return self._create_chat_result(response_data)
 
+    # MARK: - Streaming
     def _stream(
         self,
         messages: List[BaseMessage],
@@ -1088,9 +1098,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
                     yield generation_chunk
 
-    #
-    # Internal methods
-    #
+    # MARK: - Internal Methods
     async def _call_binding(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Call the Workers AI binding with the given payload.
 
@@ -1288,6 +1296,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 # Not JSON, treat as regular content
                 pass
 
+        # Extract reasoning_content if model supports it
+        behavior = self._model_behavior
+        reasoning_content = None
+        if behavior.supports_reasoning_content:
+            reasoning_content = message_data.get("reasoning_content")
+
         # Create the AI message
         # When tool calls exist, set content to empty string
         if tool_calls:
@@ -1302,6 +1316,10 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             message = AIMessage(
                 content=content,
             )
+
+        # Surface reasoning_content in response_metadata
+        if reasoning_content:
+            message.response_metadata["reasoning_content"] = reasoning_content
 
         # Add usage metadata
         if token_usage and isinstance(message, AIMessage):
@@ -1460,6 +1478,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         combined = {"token_usage": overall_token_usage, "model_name": self.model}
         return combined
 
+    # MARK: - Tool Binding & Structured Output
     def bind_tools(
         self,
         tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
@@ -1618,9 +1637,7 @@ def _is_pydantic_class(obj: Any) -> bool:
     return isinstance(obj, type) and is_basemodel_subclass(obj)
 
 
-#
-# Type conversion helpers
-#
+# MARK: - Type Conversion Helpers
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """Convert a LangChain message to a dictionary,
     meeting Cloudflare AI Workers requirements."""
@@ -1731,6 +1748,7 @@ def _lc_invalid_tool_call_to_cf_tool_call(
     }
 
 
+# MARK: - Output Parsers
 class CloudflarePydanticToolsParser(PydanticToolsParser):
     """Parser for Cloudflare Workers AI tool outputs with Pydantic validation."""
 

@@ -32,6 +32,7 @@ SUPPORTED_MODELS = [
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/zai-org/glm-4.7-flash",
 ]
 
 DEFAULT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
@@ -76,6 +77,8 @@ class Default(WorkerEntrypoint):
 
             if path == "chat":
                 return await self.handle_chat(request)
+            elif path == "reasoning":
+                return await self.handle_reasoning(request)
             elif path == "structured":
                 return await self.handle_structured_output(request)
             elif path == "tools":
@@ -142,6 +145,7 @@ class Default(WorkerEntrypoint):
                 "embedding_model": EMBEDDING_MODEL,
                 "endpoints": {
                     "/chat": "Basic chat completion",
+                    "/reasoning": "Chat with reasoning_content extraction",
                     "/structured": "Structured output with Pydantic models",
                     "/tools": "Tool calling example",
                     "/multi-turn": "Multi-turn conversation with tools",
@@ -182,6 +186,34 @@ class Default(WorkerEntrypoint):
             {
                 "response": response.content,
                 "model": llm.model,
+            }
+        )
+
+    # MARK: - Reasoning Content Handler
+
+    async def handle_reasoning(self, request):
+        """Handle chat with reasoning_content extraction."""
+        data = await request.json()
+        message = data.get("message", "What is 25 * 37? Think step by step.")
+        model = data.get("model", DEFAULT_MODEL)
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+        )
+
+        response = await llm.ainvoke(message)
+
+        return Response.json(
+            {
+                "content": response.content,
+                "model": llm.model,
+                "reasoning_content": response.response_metadata.get(
+                    "reasoning_content"
+                ),
+                "has_reasoning_content": "reasoning_content"
+                in response.response_metadata,
             }
         )
 
