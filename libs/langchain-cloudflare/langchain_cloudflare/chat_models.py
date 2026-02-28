@@ -115,8 +115,13 @@ class ModelBehavior(BaseModel):
         default=False,
         description=(
             "When True, the model may return a 'reasoning_content' field in "
-            "its response message. This is surfaced via response_metadata on "
-            "the AIMessage. Currently Qwen and GLM models expose this."
+            "its response message. This is surfaced as content blocks on the "
+            "AIMessage, consistent with langchain-anthropic and "
+            "langchain-google-genai. When reasoning is present, content "
+            "becomes a list of typed blocks: "
+            '[{"type": "thinking", "thinking": "..."}, '
+            '{"type": "text", "text": "..."}]. '
+            "Currently Qwen, GLM, and GPT-OSS models expose this."
         ),
     )
 
@@ -139,6 +144,44 @@ def _transform_response_format_to_guided_json(
     return params
 
 
+def _normalize_response_format_for_cloudflare(
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Normalize OpenAI-style response_format to Cloudflare Workers AI format.
+
+    OpenAI uses a nested structure for json_schema:
+        {"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}}
+
+    Cloudflare Workers AI expects the schema directly:
+        {"type": "json_schema", "json_schema": {...schema...}}
+
+    If the json_schema value contains a nested "schema" key (OpenAI format),
+    extract it and place it directly under json_schema.
+    """
+    if "response_format" not in params:
+        return params
+
+    response_format = params["response_format"]
+    if not isinstance(response_format, dict):
+        return params
+
+    if response_format.get("type") != "json_schema":
+        return params
+
+    json_schema = response_format.get("json_schema", {})
+    if not isinstance(json_schema, dict):
+        return params
+
+    # Detect OpenAI nested format: {"name": "...", "schema": {...}}
+    if "schema" in json_schema and "name" in json_schema:
+        params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": json_schema["schema"],
+        }
+
+    return params
+
+
 # MARK: - Model Behavior Registry Entries
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
     "llama": ModelBehavior(
@@ -156,6 +199,10 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
     "glm": ModelBehavior(
         embed_tool_calls_in_content=False,
         unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
+        supports_reasoning_content=True,
+    ),
+    "gpt-oss": ModelBehavior(
+        embed_tool_calls_in_content=False,
         supports_reasoning_content=True,
     ),
 }
@@ -670,6 +717,10 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             and "response_format" in params
         ):
             params = _transform_response_format_to_guided_json(params)
+
+        # Normalize OpenAI-style response_format to Cloudflare format
+        # (e.g. from langchain create_agent ProviderStrategy)
+        params = _normalize_response_format_for_cloudflare(params)
 
         return params
 
@@ -1302,13 +1353,27 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         if behavior.supports_reasoning_content:
             reasoning_content = message_data.get("reasoning_content")
 
-        # Create the AI message
-        # When tool calls exist, set content to empty string
-        if tool_calls:
+        # MARK: - Create the AI message
+        if tool_calls and reasoning_content:
+            # Both tool calls and reasoning: surface reasoning as content blocks
+            content_blocks: list = [{"type": "thinking", "thinking": reasoning_content}]
+            if content:
+                content_blocks.append({"type": "text", "text": content})
+            message = AIMessage(
+                content=content_blocks,
+                tool_calls=tool_calls,
+            )
+        elif tool_calls:
             message = AIMessage(
                 content="",  # Empty string instead of None to pass validation
                 tool_calls=tool_calls,
             )
+        elif reasoning_content:
+            # Content blocks: thinking + text (matches Anthropic/Gemini convention)
+            content_blocks = [{"type": "thinking", "thinking": reasoning_content}]
+            if content:
+                content_blocks.append({"type": "text", "text": content})
+            message = AIMessage(content=content_blocks)
         else:
             # Use empty string if content is None
             if content is None:
@@ -1316,10 +1381,6 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             message = AIMessage(
                 content=content,
             )
-
-        # Surface reasoning_content in response_metadata
-        if reasoning_content:
-            message.response_metadata["reasoning_content"] = reasoning_content
 
         # Add usage metadata
         if token_usage and isinstance(message, AIMessage):
@@ -1380,8 +1441,20 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 if message.tool_calls:
                     msg = self._format_ai_message_with_tool_calls(message, behavior)
                 else:
-                    # Regular assistant messages without tool calls
-                    msg = {"role": "assistant", "content": message.content or ""}
+                    # Handle list content (content blocks from reasoning models)
+                    if isinstance(message.content, list):
+                        text_parts = [
+                            b["text"]
+                            for b in message.content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        msg = {
+                            "role": "assistant",
+                            "content": " ".join(text_parts) or "",
+                        }
+                    else:
+                        # Regular assistant messages without tool calls
+                        msg = {"role": "assistant", "content": message.content or ""}
 
                     # Handle legacy function_call format for backward compatibility
                     if "function_call" in message.additional_kwargs:

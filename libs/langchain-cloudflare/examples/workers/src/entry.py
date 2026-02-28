@@ -33,6 +33,8 @@ SUPPORTED_MODELS = [
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/zai-org/glm-4.7-flash",
+    "@cf/openai/gpt-oss-120b",
+    "@cf/openai/gpt-oss-20b",
 ]
 
 DEFAULT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
@@ -79,6 +81,8 @@ class Default(WorkerEntrypoint):
                 return await self.handle_chat(request)
             elif path == "reasoning":
                 return await self.handle_reasoning(request)
+            elif path == "reasoning-tools":
+                return await self.handle_reasoning_with_tools(request)
             elif path == "structured":
                 return await self.handle_structured_output(request)
             elif path == "tools":
@@ -117,6 +121,9 @@ class Default(WorkerEntrypoint):
                 return await self.handle_d1_query(request)
             elif path == "d1-drop-table":
                 return await self.handle_d1_drop_table(request)
+            # Multi-modal endpoint
+            elif path == "multi-modal":
+                return await self.handle_multi_modal(request)
             else:
                 return await self.handle_index()
 
@@ -146,6 +153,7 @@ class Default(WorkerEntrypoint):
                 "endpoints": {
                     "/chat": "Basic chat completion",
                     "/reasoning": "Chat with reasoning_content extraction",
+                    "/reasoning-tools": "Reasoning content preserved with tool calls",
                     "/structured": "Structured output with Pydantic models",
                     "/tools": "Tool calling example",
                     "/multi-turn": "Multi-turn conversation with tools",
@@ -162,6 +170,7 @@ class Default(WorkerEntrypoint):
                     "/d1-insert": "Insert records into D1",
                     "/d1-query": "Query D1 table",
                     "/d1-drop-table": "Drop a D1 table",
+                    "/multi-modal": "Multi-modal image input test",
                 },
             }
         )
@@ -192,7 +201,7 @@ class Default(WorkerEntrypoint):
     # MARK: - Reasoning Content Handler
 
     async def handle_reasoning(self, request):
-        """Handle chat with reasoning_content extraction."""
+        """Handle chat with reasoning_content extraction from content blocks."""
         data = await request.json()
         message = data.get("message", "What is 25 * 37? Think step by step.")
         model = data.get("model", DEFAULT_MODEL)
@@ -205,15 +214,81 @@ class Default(WorkerEntrypoint):
 
         response = await llm.ainvoke(message)
 
+        # Extract reasoning from content blocks
+        reasoning_content = None
+        has_reasoning = False
+        content_text = response.content
+
+        if isinstance(response.content, list):
+            thinking_blocks = [
+                b
+                for b in response.content
+                if isinstance(b, dict) and b.get("type") == "thinking"
+            ]
+            text_blocks = [
+                b
+                for b in response.content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            if thinking_blocks:
+                reasoning_content = thinking_blocks[0]["thinking"]
+                has_reasoning = True
+            content_text = (
+                " ".join(b["text"] for b in text_blocks) if text_blocks else ""
+            )
+
         return Response.json(
             {
-                "content": response.content,
+                "content": content_text,
                 "model": llm.model,
-                "reasoning_content": response.response_metadata.get(
-                    "reasoning_content"
-                ),
-                "has_reasoning_content": "reasoning_content"
-                in response.response_metadata,
+                "reasoning_content": reasoning_content,
+                "has_reasoning_content": has_reasoning,
+            }
+        )
+
+    # MARK: - Reasoning Content with Tools Handler
+
+    async def handle_reasoning_with_tools(self, request):
+        """Handle tool calling and verify reasoning_content is preserved."""
+        data = await request.json()
+        message = data.get("message", "What's the weather in San Francisco?")
+        model = data.get("model", DEFAULT_MODEL)
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+        )
+
+        llm_with_tools = llm.bind_tools([get_weather])
+        response = await llm_with_tools.ainvoke(message)
+
+        # Extract reasoning from content blocks
+        reasoning_content = None
+        has_reasoning = False
+        has_tool_calls = len(response.tool_calls) > 0 if response.tool_calls else False
+
+        if isinstance(response.content, list):
+            thinking_blocks = [
+                b
+                for b in response.content
+                if isinstance(b, dict) and b.get("type") == "thinking"
+            ]
+            if thinking_blocks:
+                reasoning_content = thinking_blocks[0]["thinking"]
+                has_reasoning = True
+
+        return Response.json(
+            {
+                "model": llm.model,
+                "has_reasoning_content": has_reasoning,
+                "reasoning_content": reasoning_content,
+                "has_tool_calls": has_tool_calls,
+                "tool_calls": [
+                    {"name": tc["name"], "args": tc["args"]}
+                    for tc in (response.tool_calls or [])
+                ],
+                "content_type": type(response.content).__name__,
             }
         )
 
@@ -1118,3 +1193,66 @@ Return JSON with an "announcements" array. Each announcement should have:
                 },
                 status=500,
             )
+
+    # MARK: - Multi-Modal Handler
+
+    async def handle_multi_modal(self, request):
+        """Handle multi-modal image input via native AI binding.
+
+        Accepts a base64-encoded image and a text prompt, constructs a
+        HumanMessage with content blocks, and invokes the model.
+
+        Request body:
+            - model: Workers AI model name (optional, defaults to DEFAULT_MODEL)
+            - image_base64: base64-encoded PNG/JPEG image data
+            - prompt: text prompt to accompany the image (optional)
+        """
+        data = await request.json()
+        model = data.get("model", DEFAULT_MODEL)
+        image_base64 = data.get("image_base64", "")
+        prompt = data.get("prompt", "Describe this image in one sentence.")
+
+        if not image_base64:
+            return Response.json(
+                {"error": "image_base64 is required"},
+                status=400,
+            )
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+        )
+
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{image_base64}",
+                    },
+                },
+            ]
+        )
+
+        response = await llm.ainvoke([message])
+
+        # Extract text content
+        content = response.content
+        if isinstance(content, list):
+            text_parts = [
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            content = " ".join(text_parts)
+
+        return Response.json(
+            {
+                "model": model,
+                "prompt": prompt,
+                "response": content,
+                "content_type": type(response.content).__name__,
+            }
+        )

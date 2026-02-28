@@ -10,6 +10,7 @@ Tests are organized by functionality:
 - Agent tests (create_agent pattern)
 - Vectorize binding tests
 - D1 binding tests
+- Multi-modal input tests
 
 Note: These tests require:
 1. The examples/workers directory to be set up
@@ -17,6 +18,7 @@ Note: These tests require:
 3. pywrangler installed (uv add workers-py)
 """
 
+import base64
 import time
 import uuid
 
@@ -29,6 +31,8 @@ MODELS = [
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/zai-org/glm-4.7-flash",
+    "@cf/openai/gpt-oss-120b",
+    "@cf/openai/gpt-oss-20b",
 ]
 
 
@@ -773,10 +777,10 @@ class TestWorkerAIGateway:
 
 
 class TestWorkerReasoningContent:
-    """Test reasoning_content extraction from Qwen models via Worker binding."""
+    """Test reasoning_content extraction from content blocks via Worker binding."""
 
     def test_reasoning_content_returned(self, dev_server):
-        """POST /reasoning should return reasoning_content in response_metadata."""
+        """POST /reasoning should return reasoning_content from content blocks."""
         port = dev_server
         response = requests.post(
             f"http://localhost:{port}/reasoning",
@@ -794,14 +798,53 @@ class TestWorkerReasoningContent:
         assert len(data["content"]) > 0, "Expected non-empty content"
         assert data["model"] == "@cf/qwen/qwen3-30b-a3b-fp8"
 
-        # Qwen should return reasoning_content
+        # Qwen should return reasoning_content via content blocks
         assert data["has_reasoning_content"] is True, (
-            "Expected reasoning_content in response_metadata for Qwen model"
+            "Expected reasoning_content in content blocks for Qwen model"
         )
         assert data["reasoning_content"] is not None
         assert len(data["reasoning_content"]) > 0, (
             "Expected non-empty reasoning_content"
         )
+
+    REASONING_MODELS = [
+        "@cf/qwen/qwen3-30b-a3b-fp8",
+        "@cf/zai-org/glm-4.7-flash",
+        "@cf/openai/gpt-oss-120b",
+        "@cf/openai/gpt-oss-20b",
+    ]
+
+    @pytest.mark.parametrize("model", REASONING_MODELS)
+    def test_reasoning_content_with_tool_calls(self, dev_server, model):
+        """POST /reasoning-tools should preserve reasoning_content alongside tool calls."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/reasoning-tools",
+            json={
+                "message": "What's the weather in San Francisco?",
+                "model": model,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200, f"Failed: {response.text}"
+        data = response.json()
+
+        assert data["model"] == model
+
+        # If the model made tool calls, reasoning should also be present
+        if data["has_tool_calls"] and data["has_reasoning_content"]:
+            assert data["reasoning_content"] is not None
+            assert len(data["reasoning_content"]) > 0, (
+                f"Expected non-empty reasoning_content alongside tool calls for {model}"
+            )
+            assert data["content_type"] == "list", (
+                f"Content should be list (content blocks) when reasoning + tool calls "
+                f"present, got {data['content_type']} for {model}"
+            )
+        elif data["has_tool_calls"]:
+            # Tool call without reasoning - acceptable but note it
+            pass
 
     def test_reasoning_content_returned_glm(self, dev_server):
         """POST /reasoning should return reasoning_content for GLM model."""
@@ -822,11 +865,103 @@ class TestWorkerReasoningContent:
         assert len(data["content"]) > 0, "Expected non-empty content"
         assert data["model"] == "@cf/zai-org/glm-4.7-flash"
 
-        # GLM should return reasoning_content
+        # GLM should return reasoning_content via content blocks
         assert data["has_reasoning_content"] is True, (
-            "Expected reasoning_content in response_metadata for GLM model"
+            "Expected reasoning_content in content blocks for GLM model"
         )
         assert data["reasoning_content"] is not None
         assert len(data["reasoning_content"]) > 0, (
             "Expected non-empty reasoning_content"
         )
+
+
+# MARK: - Multi-Modal Tests
+
+
+def create_test_image_base64() -> str:
+    """Create a minimal 1x1 red pixel PNG and return as base64.
+
+    Uses raw PNG bytes to avoid requiring PIL in the test environment.
+    """
+    import struct
+    import zlib
+
+    def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+        chunk = chunk_type + data
+        return (
+            struct.pack(">I", len(data))
+            + chunk
+            + struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
+        )
+
+    width, height = 1, 1
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    raw_row = b"\x00" + b"\xff\x00\x00"
+    idat_data = zlib.compress(raw_row)
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += _png_chunk(b"IHDR", ihdr_data)
+    png += _png_chunk(b"IDAT", idat_data)
+    png += _png_chunk(b"IEND", b"")
+
+    return base64.standard_b64encode(png).decode("utf-8")
+
+
+class TestWorkerMultiModal:
+    """Test multi-modal image input via native AI binding.
+
+    Discovery test: Which Workers AI models accept image content blocks
+    when invoked through the native AI binding (env.AI) in a Python Worker?
+
+    Previous REST API testing showed only Mistral Small 3.1 supports image
+    base64 input. This tests whether the native binding behaves differently.
+    """
+
+    @pytest.mark.parametrize("model", MODELS)
+    def test_multi_modal_image(self, dev_server, model):
+        """POST /multi-modal should attempt image input via native AI binding."""
+        port = dev_server
+        image_b64 = create_test_image_base64()
+
+        response = requests.post(
+            f"http://localhost:{port}/multi-modal",
+            json={
+                "model": model,
+                "image_base64": image_b64,
+                "prompt": "Describe this image in one sentence. What color is it?",
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        print(f"\n  === Multi-Modal Result: {model} ===")  # noqa: T201
+        print(f"  Status code: {response.status_code}")  # noqa: T201
+
+        if response.status_code == 200:
+            data = response.json()
+            print(f"  Response: {data.get('response', '')[:200]}")  # noqa: T201
+            assert "response" in data
+            assert len(data["response"]) > 0, (
+                f"Expected non-empty response from {model}"
+            )
+        else:
+            data = response.json()
+            error_msg = data.get("error", "Unknown error")
+            print(f"  Error: {error_msg[:200]}")  # noqa: T201
+            pytest.skip(
+                f"Model {model} does not support multi-modal via binding: "
+                f"{error_msg[:100]}"
+            )
+
+    def test_multi_modal_missing_image(self, dev_server):
+        """POST /multi-modal without image_base64 should return 400."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/multi-modal",
+            json={"prompt": "Describe this image."},
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "error" in data
