@@ -33,6 +33,8 @@ MODELS = [
     "@cf/zai-org/glm-4.7-flash",
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
+    "@cf/nvidia/nemotron-3-120b-a12b",
+    "@cf/moonshotai/kimi-k2.5",
 ]
 
 
@@ -85,6 +87,29 @@ class TestWorkerChat:
         assert "model" in data
         assert len(data["response"]) > 0
 
+    @pytest.mark.parametrize("model", MODELS)
+    def test_chat_batch(self, dev_server, model):
+        """POST /chat-batch should return batch responses."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/chat-batch",
+            json={
+                "messages": [
+                    "Say 'Hello' and nothing else.",
+                    "Say 'World' and nothing else.",
+                ],
+                "model": model,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "results" in data
+        assert data["count"] == 2
+        assert len(data["results"]) == 2
+
     def test_chat_default_message(self, dev_server):
         """POST /chat with empty body should use default message."""
         port = dev_server
@@ -126,6 +151,36 @@ class TestWorkerStructuredOutput:
         assert "announcements" in data["extracted"] or "raw" in data["extracted"]
 
 
+class TestWorkerStructuredOutputBatch:
+    """Test batch structured output endpoint with Worker binding."""
+
+    @pytest.mark.parametrize("model", MODELS)
+    def test_structured_output_batch(self, dev_server, model):
+        """POST /structured-batch should return batch results."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/structured-batch",
+            json={
+                "texts": [
+                    "Acme Corp announced a partnership with TechGiant.",
+                    "Apple Inc announced record Q4 earnings.",
+                ],
+                "model": model,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "results" in data
+        assert data["count"] == 2
+        assert len(data["results"]) == 2
+
+        for i, result in enumerate(data["results"]):
+            assert result is not None, f"Result {i} is None for {model}"
+
+
 # MARK: - Tool Calling Tests
 
 
@@ -147,6 +202,36 @@ class TestWorkerToolCalling:
 
         assert "input" in data
         assert "tool_calls" in data or "response_content" in data
+
+
+class TestWorkerToolCallingBatch:
+    """Test batch tool calling endpoint with Worker binding."""
+
+    @pytest.mark.parametrize("model", MODELS)
+    def test_tools_batch(self, dev_server, model):
+        """POST /tools-batch should return batch tool calling results."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/tools-batch",
+            json={
+                "messages": [
+                    "What's the weather in New York?",
+                    "What's the stock price of AAPL?",
+                ],
+                "model": model,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "results" in data
+        assert data["count"] == 2
+        assert len(data["results"]) == 2
+
+        for i, result in enumerate(data["results"]):
+            assert result is not None, f"Result {i} is None for {model}"
 
 
 # MARK: - Multi-Turn Tests
@@ -779,14 +864,24 @@ class TestWorkerAIGateway:
 class TestWorkerReasoningContent:
     """Test reasoning_content extraction from content blocks via Worker binding."""
 
-    def test_reasoning_content_returned(self, dev_server):
-        """POST /reasoning should return reasoning_content from content blocks."""
+    REASONING_MODELS = [
+        "@cf/qwen/qwen3-30b-a3b-fp8",
+        "@cf/zai-org/glm-4.7-flash",
+        "@cf/openai/gpt-oss-120b",
+        "@cf/openai/gpt-oss-20b",
+        "@cf/moonshotai/kimi-k2.5",
+        "@cf/nvidia/nemotron-3-120b-a12b",
+    ]
+
+    @pytest.mark.parametrize("model", REASONING_MODELS)
+    def test_reasoning_content_returned(self, dev_server, model):
+        """POST /reasoning should return reasoning_content."""
         port = dev_server
         response = requests.post(
             f"http://localhost:{port}/reasoning",
             json={
                 "message": "What is 25 * 37? Think step by step.",
-                "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+                "model": model,
             },
             headers={"Content-Type": "application/json"},
         )
@@ -795,28 +890,20 @@ class TestWorkerReasoningContent:
         data = response.json()
 
         assert "content" in data
-        assert len(data["content"]) > 0, "Expected non-empty content"
-        assert data["model"] == "@cf/qwen/qwen3-30b-a3b-fp8"
+        assert len(data["content"]) > 0, f"Expected non-empty content for {model}"
+        assert data["model"] == model
 
-        # Qwen should return reasoning_content via content blocks
         assert data["has_reasoning_content"] is True, (
-            "Expected reasoning_content in content blocks for Qwen model"
+            f"Expected reasoning_content for {model}"
         )
         assert data["reasoning_content"] is not None
         assert len(data["reasoning_content"]) > 0, (
-            "Expected non-empty reasoning_content"
+            f"Expected non-empty reasoning_content for {model}"
         )
-
-    REASONING_MODELS = [
-        "@cf/qwen/qwen3-30b-a3b-fp8",
-        "@cf/zai-org/glm-4.7-flash",
-        "@cf/openai/gpt-oss-120b",
-        "@cf/openai/gpt-oss-20b",
-    ]
 
     @pytest.mark.parametrize("model", REASONING_MODELS)
     def test_reasoning_content_with_tool_calls(self, dev_server, model):
-        """POST /reasoning-tools should preserve reasoning_content alongside tool calls."""
+        """POST /reasoning-tools should preserve reasoning_content."""
         port = dev_server
         response = requests.post(
             f"http://localhost:{port}/reasoning-tools",
@@ -832,47 +919,19 @@ class TestWorkerReasoningContent:
 
         assert data["model"] == model
 
-        # If the model made tool calls, reasoning should also be present
         if data["has_tool_calls"] and data["has_reasoning_content"]:
             assert data["reasoning_content"] is not None
             assert len(data["reasoning_content"]) > 0, (
                 f"Expected non-empty reasoning_content alongside tool calls for {model}"
             )
             assert data["content_type"] == "list", (
-                f"Content should be list (content blocks) when reasoning + tool calls "
-                f"present, got {data['content_type']} for {model}"
+                f"Content should be list when reasoning + tool "
+                f"calls present, got {data['content_type']} "
+                f"for {model}"
             )
         elif data["has_tool_calls"]:
-            # Tool call without reasoning - acceptable but note it
+            # Tool call without reasoning - acceptable
             pass
-
-    def test_reasoning_content_returned_glm(self, dev_server):
-        """POST /reasoning should return reasoning_content for GLM model."""
-        port = dev_server
-        response = requests.post(
-            f"http://localhost:{port}/reasoning",
-            json={
-                "message": "What is 25 * 37? Think step by step.",
-                "model": "@cf/zai-org/glm-4.7-flash",
-            },
-            headers={"Content-Type": "application/json"},
-        )
-
-        assert response.status_code == 200, f"Failed: {response.text}"
-        data = response.json()
-
-        assert "content" in data
-        assert len(data["content"]) > 0, "Expected non-empty content"
-        assert data["model"] == "@cf/zai-org/glm-4.7-flash"
-
-        # GLM should return reasoning_content via content blocks
-        assert data["has_reasoning_content"] is True, (
-            "Expected reasoning_content in content blocks for GLM model"
-        )
-        assert data["reasoning_content"] is not None
-        assert len(data["reasoning_content"]) > 0, (
-            "Expected non-empty reasoning_content"
-        )
 
 
 # MARK: - Multi-Modal Tests

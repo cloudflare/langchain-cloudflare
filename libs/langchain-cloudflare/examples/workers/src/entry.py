@@ -35,6 +35,8 @@ SUPPORTED_MODELS = [
     "@cf/zai-org/glm-4.7-flash",
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
+    "@cf/nvidia/nemotron-3-120b-a12b",
+    "@cf/moonshotai/kimi-k2.5",
 ]
 
 DEFAULT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
@@ -79,14 +81,20 @@ class Default(WorkerEntrypoint):
 
             if path == "chat":
                 return await self.handle_chat(request)
+            elif path == "chat-batch":
+                return await self.handle_chat_batch(request)
             elif path == "reasoning":
                 return await self.handle_reasoning(request)
             elif path == "reasoning-tools":
                 return await self.handle_reasoning_with_tools(request)
             elif path == "structured":
                 return await self.handle_structured_output(request)
+            elif path == "structured-batch":
+                return await self.handle_structured_output_batch(request)
             elif path == "tools":
                 return await self.handle_tool_calling(request)
+            elif path == "tools-batch":
+                return await self.handle_tool_calling_batch(request)
             elif path == "multi-turn":
                 return await self.handle_multi_turn(request)
             elif path == "agent-structured":
@@ -152,10 +160,13 @@ class Default(WorkerEntrypoint):
                 "embedding_model": EMBEDDING_MODEL,
                 "endpoints": {
                     "/chat": "Basic chat completion",
+                    "/chat-batch": "Batch chat completion",
                     "/reasoning": "Chat with reasoning_content extraction",
                     "/reasoning-tools": "Reasoning content preserved with tool calls",
                     "/structured": "Structured output with Pydantic models",
+                    "/structured-batch": "Batch structured output",
                     "/tools": "Tool calling example",
+                    "/tools-batch": "Batch tool calling",
                     "/multi-turn": "Multi-turn conversation with tools",
                     "/agent-structured": "create_agent with structured output",
                     "/agent-tools": "create_agent with tools",
@@ -194,6 +205,30 @@ class Default(WorkerEntrypoint):
         return Response.json(
             {
                 "response": response.content,
+                "model": llm.model,
+            }
+        )
+
+    # MARK: - Chat Batch Handler
+
+    async def handle_chat_batch(self, request):
+        """Handle batch chat completion using abatch()."""
+        data = await request.json()
+        messages = data.get("messages", ["Say 'Hello'", "Say 'World'"])
+        model = data.get("model", DEFAULT_MODEL)
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.7,
+        )
+
+        results = await llm.abatch(messages)
+
+        return Response.json(
+            {
+                "results": [r.content for r in results],
+                "count": len(results),
                 "model": llm.model,
             }
         )
@@ -349,6 +384,57 @@ Return JSON with an "announcements" array. Each announcement should have:
                 }
             )
 
+    # MARK: - Structured Output Batch Handler
+
+    async def handle_structured_output_batch(self, request):
+        """Handle batch structured output using abatch()."""
+        from pydantic import ValidationError
+
+        data = await request.json()
+        texts = data.get(
+            "texts",
+            [
+                "Acme Corp announced a partnership with TechGiant Inc.",
+                "Apple Inc announced record Q4 earnings.",
+            ],
+        )
+        model = data.get("model", DEFAULT_MODEL)
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+        )
+
+        structured_llm = llm.with_structured_output(Data)
+
+        prompts = [f"Extract announcements from this text:\n\n{t}" for t in texts]
+
+        results = await structured_llm.abatch(prompts)
+
+        extracted = []
+        for result in results:
+            if isinstance(result, Data):
+                extracted.append(result.model_dump())
+            elif isinstance(result, dict):
+                try:
+                    validated = Data(**result)
+                    extracted.append(validated.model_dump())
+                except (ValidationError, Exception):
+                    extracted.append(result)
+            elif result is None:
+                extracted.append(None)
+            else:
+                extracted.append({"raw": str(result)})
+
+        return Response.json(
+            {
+                "results": extracted,
+                "count": len(results),
+                "model": llm.model,
+            }
+        )
+
     # MARK: - Tool Calling Handler
 
     async def handle_tool_calling(self, request):
@@ -394,6 +480,47 @@ Return JSON with an "announcements" array. Each announcement should have:
                 "response_content": response.content,
                 "tool_calls": response.tool_calls,
                 "tool_results": tool_results,
+            }
+        )
+
+    # MARK: - Tool Calling Batch Handler
+
+    async def handle_tool_calling_batch(self, request):
+        """Handle batch tool calling using abatch()."""
+        data = await request.json()
+        messages = data.get(
+            "messages",
+            [
+                "What's the weather in New York?",
+                "What's the stock price of AAPL?",
+            ],
+        )
+        model = data.get("model", DEFAULT_MODEL)
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+        )
+
+        llm_with_tools = llm.bind_tools(ALL_TOOLS)
+
+        results = await llm_with_tools.abatch(messages)
+
+        batch_results = []
+        for response in results:
+            batch_results.append(
+                {
+                    "content": response.content,
+                    "tool_calls": response.tool_calls or [],
+                }
+            )
+
+        return Response.json(
+            {
+                "results": batch_results,
+                "count": len(results),
+                "model": llm.model,
             }
         )
 

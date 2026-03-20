@@ -233,7 +233,7 @@ class TestReasoningContent:
         assert text_blocks[0]["text"] == "925"
 
     def test_reasoning_content_with_tool_calls_qwen(self):
-        """Qwen response with both reasoning_content and tool_calls should preserve both."""
+        """Qwen reasoning_content + tool_calls should preserve both."""
         llm = self._create_llm("@cf/qwen/qwen3-30b-a3b-fp8")
         response = {
             "result": {
@@ -281,7 +281,7 @@ class TestReasoningContent:
         assert msg.tool_calls[0]["args"] == {"city": "SF"}
 
     def test_reasoning_content_with_tool_calls_glm(self):
-        """GLM response with both reasoning_content and tool_calls should preserve both."""
+        """GLM reasoning_content + tool_calls should preserve both."""
         llm = self._create_llm("@cf/zai-org/glm-4.7-flash")
         response = {
             "result": {
@@ -327,7 +327,7 @@ class TestReasoningContent:
         assert msg.tool_calls[0]["args"] == {"city": "NYC"}
 
     def test_reasoning_content_with_tool_calls_gpt_oss(self):
-        """GPT-OSS response with both reasoning_content and tool_calls should preserve both."""
+        """GPT-OSS reasoning_content + tool_calls should preserve both."""
         llm = self._create_llm("@cf/openai/gpt-oss-120b")
         response = {
             "result": {
@@ -373,7 +373,7 @@ class TestReasoningContent:
         assert msg.tool_calls[0]["args"] == {"ticker": "AAPL"}
 
     def test_tool_calls_without_reasoning_content_unchanged(self):
-        """Tool calls without reasoning_content should still produce empty string content."""
+        """Tool calls without reasoning_content produce empty string."""
         llm = self._create_llm("@cf/qwen/qwen3-30b-a3b-fp8")
         response = {
             "result": {

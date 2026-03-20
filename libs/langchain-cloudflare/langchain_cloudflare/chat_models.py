@@ -121,7 +121,7 @@ class ModelBehavior(BaseModel):
             "becomes a list of typed blocks: "
             '[{"type": "thinking", "thinking": "..."}, '
             '{"type": "text", "text": "..."}]. '
-            "Currently Qwen, GLM, and GPT-OSS models expose this."
+            "Currently Qwen, GLM, GPT-OSS, and Kimi models expose this."
         ),
     )
 
@@ -202,6 +202,14 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
         supports_reasoning_content=True,
     ),
     "gpt-oss": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        supports_reasoning_content=True,
+    ),
+    "kimi": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        supports_reasoning_content=True,
+    ),
+    "nemotron": ModelBehavior(
         embed_tool_calls_in_content=False,
         supports_reasoning_content=True,
     ),
@@ -1348,10 +1356,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 pass
 
         # Extract reasoning_content if model supports it
+        # Models use different field names: "reasoning_content" (Qwen, GLM,
+        # GPT-OSS, Kimi) or "reasoning" (Nemotron)
         behavior = self._model_behavior
         reasoning_content = None
         if behavior.supports_reasoning_content:
-            reasoning_content = message_data.get("reasoning_content")
+            reasoning_content = message_data.get(
+                "reasoning_content"
+            ) or message_data.get("reasoning")
 
         # MARK: - Create the AI message
         if tool_calls and reasoning_content:

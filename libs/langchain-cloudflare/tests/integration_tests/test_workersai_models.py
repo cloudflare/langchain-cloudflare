@@ -61,6 +61,8 @@ MODELS = [
     "@cf/zai-org/glm-4.7-flash",
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
+    "@cf/nvidia/nemotron-3-120b-a12b",
+    "@cf/moonshotai/kimi-k2.5",
 ]
 
 
@@ -701,6 +703,8 @@ class TestReasoningContent:
         "@cf/zai-org/glm-4.7-flash",
         "@cf/openai/gpt-oss-120b",
         "@cf/openai/gpt-oss-20b",
+        "@cf/moonshotai/kimi-k2.5",
+        "@cf/nvidia/nemotron-3-120b-a12b",
     ]
 
     @staticmethod
