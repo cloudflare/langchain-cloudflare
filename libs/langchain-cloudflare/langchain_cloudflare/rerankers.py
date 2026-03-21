@@ -7,6 +7,7 @@ Since LangChain does not have a base reranker class, this is a standalone
 implementation following the same patterns as the embeddings module.
 """
 
+# MARK: - Imports
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Union
 
@@ -15,9 +16,11 @@ from langchain_core.documents import Document
 from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
+# MARK: - Constants
 DEFAULT_RERANKER_MODEL = "@cf/baai/bge-reranker-base"
 
 
+# MARK: - RerankResult
 @dataclass
 class RerankResult:
     """Result from reranking a document.
@@ -35,6 +38,7 @@ class RerankResult:
     document: Optional[Document] = None
 
 
+# MARK: - CloudflareWorkersAIReranker
 class CloudflareWorkersAIReranker(BaseModel):
     """Cloudflare Workers AI reranker model.
 
@@ -144,6 +148,7 @@ class CloudflareWorkersAIReranker(BaseModel):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
+    # MARK: - Private Methods
     def _prepare_documents(
         self, documents: Sequence[Union[str, Document]]
     ) -> tuple[List[Dict[str, str]], List[Optional[Document]]]:
@@ -213,6 +218,7 @@ class CloudflareWorkersAIReranker(BaseModel):
 
         return results
 
+    # MARK: - Public Methods
     def rerank(
         self,
         query: str,
@@ -379,6 +385,7 @@ class CloudflareWorkersAIReranker(BaseModel):
             response_data, documents, original_docs, return_documents
         )
 
+    # MARK: - Document Compressor Interface
     def compress_documents(
         self,
         documents: Sequence[Document],

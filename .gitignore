@@ -123,3 +123,4 @@ python_modules/
 .venv-workers/
 .wrangler/
 node_modules/
+dev/

@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.0]
+
+#### Added
+
+- **Reasoning content support**: Models that return `reasoning_content` (Qwen, GLM, GPT-OSS) now surface it as content blocks on `AIMessage`, consistent with langchain-anthropic and langchain-google-genai. When reasoning is present, `content` becomes a list of typed blocks: `[{"type": "thinking", "thinking": "..."}, {"type": "text", "text": "..."}]`.
+- **`supports_reasoning_content` flag** on `ModelBehavior` to gate reasoning extraction per model family.
+- **GLM model support**: Added `@cf/zai-org/glm-4.7-flash` with `unsupported_params` for `max_tokens`, `top_k`, `repetition_penalty`, and `tool_choice`.
+- **GPT-OSS model support**: Added `@cf/openai/gpt-oss-120b` and `@cf/openai/gpt-oss-20b` with `supports_reasoning_content=True`.
+- **Nemotron model support**: Added `@cf/nvidia/nemotron-3-120b-a12b` (120B NVIDIA model with 32K context, tool calling, structured output).
+- **Kimi K2.5 model support**: Added `@cf/moonshotai/kimi-k2.5` (256K context, tool calling, structured output, reasoning content, vision/multi-modal).
+- **MARK sections**: Added `# MARK: -` comments across all modules for IDE minimap navigation.
+
+#### Fixed
+
+- **Reasoning content preserved with tool calls**: Fixed a bug where `reasoning_content` was silently discarded when the model also returned `tool_calls`. The `if tool_calls` branch in `_create_chat_result` took priority over `elif reasoning_content`.
+- **OpenAI response_format normalization**: Added `_normalize_response_format_for_cloudflare()` to transform OpenAI-style nested `response_format` to Cloudflare Workers AI format, fixing `create_agent` with `ProviderStrategy` for GPT-OSS models.
+
+#### Breaking Changes
+
+- **`AIMessage.content` type changes for reasoning models**: For models with `supports_reasoning_content=True` (Qwen, GLM, GPT-OSS, Kimi), when the model returns `reasoning_content`, `AIMessage.content` changes from a `str` to a `list[dict]` of typed content blocks: `[{"type": "thinking", "thinking": "..."}, {"type": "text", "text": "..."}]`. Downstream code that assumes `content` is always a string (e.g., `len(result.content)`, string concatenation, `print(result.content)`) will need to handle both types.
+
+#### Changed
+
+- **Version bump**: 0.2.1 → 0.3.0 (new model families and reasoning content feature).
+
+#### Tests
+
+- Added unit tests for reasoning content extraction across Qwen, GLM, and GPT-OSS models (with and without tool calls).
+- Added `TestReasoningContent` integration tests with sync/async parametrized tests across all reasoning models.
+- Added reasoning content with tool calls tests to both REST API and Worker integration suites.
+- Added Nemotron to all model test lists (REST API and Worker integration).
+
 ### [0.2.1]
 
 #### Added

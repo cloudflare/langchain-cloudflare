@@ -1,3 +1,4 @@
+# MARK: - Imports
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -5,9 +6,11 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
+# MARK: - Constants
 DEFAULT_MODEL_NAME = "@cf/baai/bge-base-en-v1.5"
 
 
+# MARK: - CloudflareWorkersAIEmbeddings
 class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
     """Cloudflare Workers AI embedding model.
 
@@ -155,6 +158,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
+    # MARK: - Embed Documents
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Compute doc embeddings using Cloudflare Workers AI.
 
@@ -221,6 +225,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         return embeddings
 
+    # MARK: - Binding Helper
     async def _aembed_with_binding(self, texts: List[str]) -> List[List[float]]:
         """Compute embeddings using the Workers AI binding.
 
@@ -266,6 +271,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         return embeddings
 
+    # MARK: - Embed Query
     def embed_query(self, text: str) -> List[float]:
         """Compute query embeddings using Cloudflare Workers AI.
 

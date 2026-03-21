@@ -1,3 +1,4 @@
+# MARK: - Imports
 from importlib import metadata
 
 from langchain_cloudflare.bindings import (
@@ -26,6 +27,7 @@ except metadata.PackageNotFoundError:
     __version__ = ""
 del metadata  # optional, avoids polluting the results of dir(__package__)
 
+# MARK: - Public API
 __all__ = [
     "ChatCloudflareWorkersAI",
     "CloudflareVectorize",

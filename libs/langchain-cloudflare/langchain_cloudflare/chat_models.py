@@ -1,5 +1,6 @@
 """Cloudflare Workers AI Chat wrapper."""
 
+# MARK: - Imports
 from __future__ import annotations
 
 import json
@@ -73,12 +74,7 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-# =============================================================================
-# Model Behavior Registry
-# =============================================================================
-# Centralized configuration for model-specific behaviors and capabilities.
-# This makes it easy to add new models and documents differences in one place.
-# =============================================================================
+# MARK: - Model Behavior Registry
 
 
 class ModelBehavior(BaseModel):
@@ -115,6 +111,20 @@ class ModelBehavior(BaseModel):
         ),
     )
 
+    supports_reasoning_content: bool = Field(
+        default=False,
+        description=(
+            "When True, the model may return a 'reasoning_content' field in "
+            "its response message. This is surfaced as content blocks on the "
+            "AIMessage, consistent with langchain-anthropic and "
+            "langchain-google-genai. When reasoning is present, content "
+            "becomes a list of typed blocks: "
+            '[{"type": "thinking", "thinking": "..."}, '
+            '{"type": "text", "text": "..."}]. '
+            "Currently Qwen, GLM, GPT-OSS, and Kimi models expose this."
+        ),
+    )
+
 
 def _transform_response_format_to_guided_json(
     params: Dict[str, Any],
@@ -134,7 +144,45 @@ def _transform_response_format_to_guided_json(
     return params
 
 
-# Registry of model behaviors keyed by model family identifier
+def _normalize_response_format_for_cloudflare(
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Normalize OpenAI-style response_format to Cloudflare Workers AI format.
+
+    OpenAI uses a nested structure for json_schema:
+        {"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}}
+
+    Cloudflare Workers AI expects the schema directly:
+        {"type": "json_schema", "json_schema": {...schema...}}
+
+    If the json_schema value contains a nested "schema" key (OpenAI format),
+    extract it and place it directly under json_schema.
+    """
+    if "response_format" not in params:
+        return params
+
+    response_format = params["response_format"]
+    if not isinstance(response_format, dict):
+        return params
+
+    if response_format.get("type") != "json_schema":
+        return params
+
+    json_schema = response_format.get("json_schema", {})
+    if not isinstance(json_schema, dict):
+        return params
+
+    # Detect OpenAI nested format: {"name": "...", "schema": {...}}
+    if "schema" in json_schema and "name" in json_schema:
+        params["response_format"] = {
+            "type": "json_schema",
+            "json_schema": json_schema["schema"],
+        }
+
+    return params
+
+
+# MARK: - Model Behavior Registry Entries
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
     "llama": ModelBehavior(
         embed_tool_calls_in_content=True,
@@ -146,10 +194,27 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
     ),
     "qwen": ModelBehavior(
         embed_tool_calls_in_content=False,
+        supports_reasoning_content=True,
+    ),
+    "glm": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
+        supports_reasoning_content=True,
+    ),
+    "gpt-oss": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        supports_reasoning_content=True,
+    ),
+    "kimi": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        supports_reasoning_content=True,
+    ),
+    "nemotron": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        supports_reasoning_content=True,
     ),
 }
 
-# Default behavior for unknown models (conservative defaults)
 DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
 
 
@@ -173,6 +238,7 @@ def get_model_behavior(model_name: str) -> ModelBehavior:
     return DEFAULT_MODEL_BEHAVIOR
 
 
+# MARK: - ChatCloudflareWorkersAI
 class ChatCloudflareWorkersAI(BaseChatModel):
     """`Cloudflare Workers AI` Chat large language models API.
 
@@ -426,9 +492,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return self
 
-    #
-    # Serializable class method overrides
-    #
+    # MARK: - Serializable Overrides
     @property
     def lc_secrets(self) -> Dict[str, str]:
         return {"api_token": "CF_AI_API_TOKEN"}
@@ -447,9 +511,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         """
         return get_model_behavior(self.model)
 
-    #
-    # BaseChatModel method overrides
-    #
+    # MARK: - BaseChatModel Overrides
     @property
     def _llm_type(self) -> str:
         """Return type of model."""
@@ -472,6 +534,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             ls_params["ls_stop"] = ls_stop if isinstance(ls_stop, list) else [ls_stop]
         return ls_params
 
+    # MARK: - Tool Call Extraction
     def _extract_tool_calls_from_content(self, content: str) -> List[Dict[str, Any]]:
         """Extract tool calls from content if it appears to be a JSON tool call."""
         tool_calls: List[Dict[str, Any]] = []
@@ -663,8 +726,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         ):
             params = _transform_response_format_to_guided_json(params)
 
+        # Normalize OpenAI-style response_format to Cloudflare format
+        # (e.g. from langchain create_agent ProviderStrategy)
+        params = _normalize_response_format_for_cloudflare(params)
+
         return params
 
+    # MARK: - Generate
     def _generate(  # type: ignore
         self,
         messages: List[BaseMessage],
@@ -746,6 +814,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return self._create_chat_result(response_data)
 
+    # MARK: - Streaming
     def _stream(
         self,
         messages: List[BaseMessage],
@@ -1088,9 +1157,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
                     yield generation_chunk
 
-    #
-    # Internal methods
-    #
+    # MARK: - Internal Methods
     async def _call_binding(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Call the Workers AI binding with the given payload.
 
@@ -1288,13 +1355,37 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 # Not JSON, treat as regular content
                 pass
 
-        # Create the AI message
-        # When tool calls exist, set content to empty string
-        if tool_calls:
+        # Extract reasoning_content if model supports it
+        # Models use different field names: "reasoning_content" (Qwen, GLM,
+        # GPT-OSS, Kimi) or "reasoning" (Nemotron)
+        behavior = self._model_behavior
+        reasoning_content = None
+        if behavior.supports_reasoning_content:
+            reasoning_content = message_data.get(
+                "reasoning_content"
+            ) or message_data.get("reasoning")
+
+        # MARK: - Create the AI message
+        if tool_calls and reasoning_content:
+            # Both tool calls and reasoning: surface reasoning as content blocks
+            content_blocks: list = [{"type": "thinking", "thinking": reasoning_content}]
+            if content:
+                content_blocks.append({"type": "text", "text": content})
+            message = AIMessage(
+                content=content_blocks,
+                tool_calls=tool_calls,
+            )
+        elif tool_calls:
             message = AIMessage(
                 content="",  # Empty string instead of None to pass validation
                 tool_calls=tool_calls,
             )
+        elif reasoning_content:
+            # Content blocks: thinking + text (matches Anthropic/Gemini convention)
+            content_blocks = [{"type": "thinking", "thinking": reasoning_content}]
+            if content:
+                content_blocks.append({"type": "text", "text": content})
+            message = AIMessage(content=content_blocks)
         else:
             # Use empty string if content is None
             if content is None:
@@ -1362,8 +1453,20 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 if message.tool_calls:
                     msg = self._format_ai_message_with_tool_calls(message, behavior)
                 else:
-                    # Regular assistant messages without tool calls
-                    msg = {"role": "assistant", "content": message.content or ""}
+                    # Handle list content (content blocks from reasoning models)
+                    if isinstance(message.content, list):
+                        text_parts = [
+                            b["text"]
+                            for b in message.content
+                            if isinstance(b, dict) and b.get("type") == "text"
+                        ]
+                        msg = {
+                            "role": "assistant",
+                            "content": " ".join(text_parts) or "",
+                        }
+                    else:
+                        # Regular assistant messages without tool calls
+                        msg = {"role": "assistant", "content": message.content or ""}
 
                     # Handle legacy function_call format for backward compatibility
                     if "function_call" in message.additional_kwargs:
@@ -1460,6 +1563,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         combined = {"token_usage": overall_token_usage, "model_name": self.model}
         return combined
 
+    # MARK: - Tool Binding & Structured Output
     def bind_tools(
         self,
         tools: Sequence[Union[Dict[str, Any], Type[BaseModel], Callable, BaseTool]],
@@ -1618,9 +1722,7 @@ def _is_pydantic_class(obj: Any) -> bool:
     return isinstance(obj, type) and is_basemodel_subclass(obj)
 
 
-#
-# Type conversion helpers
-#
+# MARK: - Type Conversion Helpers
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """Convert a LangChain message to a dictionary,
     meeting Cloudflare AI Workers requirements."""
@@ -1731,6 +1833,7 @@ def _lc_invalid_tool_call_to_cf_tool_call(
     }
 
 
+# MARK: - Output Parsers
 class CloudflarePydanticToolsParser(PydanticToolsParser):
     """Parser for Cloudflare Workers AI tool outputs with Pydantic validation."""
 

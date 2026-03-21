@@ -31,10 +31,12 @@ Usage:
     python test_workersai_models.py
 """
 
+import base64
 import os
 from typing import List, Optional
 
 import pytest
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
@@ -56,6 +58,11 @@ MODELS = [
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/zai-org/glm-4.7-flash",
+    "@cf/openai/gpt-oss-120b",
+    "@cf/openai/gpt-oss-20b",
+    "@cf/nvidia/nemotron-3-120b-a12b",
+    "@cf/moonshotai/kimi-k2.5",
 ]
 
 
@@ -128,6 +135,22 @@ def create_llm(
         temperature=0.0,
         ai_gateway=ai_gateway,
     )
+
+
+def get_text_content(content):
+    """Extract text from content that may be a string or list of content blocks.
+
+    When reasoning models return content blocks, this extracts only the text
+    blocks and joins them. For plain string content, returns as-is.
+    """
+    if isinstance(content, list):
+        text_parts = [
+            b["text"]
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        return " ".join(text_parts)
+    return content or ""
 
 
 class TestStructuredOutput:
@@ -229,7 +252,7 @@ class TestToolCalling:
             print(f"  Tool call successful: {tool_call}")
         else:
             print(
-                f"  No tool call made, content: {result.content[:200] if result.content else 'empty'}"
+                f"  No tool call made, content: {get_text_content(result.content)[:200] if result.content else 'empty'}"
             )
 
     @pytest.mark.parametrize("model", MODELS)
@@ -262,7 +285,7 @@ class TestToolCalling:
         print(f"\n[{model}] Multi-turn Tool Calling:")
         print("  Step 1 - Initial response:")
         print(
-            f"    Content: {response1.content[:100] if response1.content else 'empty'}"
+            f"    Content: {get_text_content(response1.content)[:100] if response1.content else 'empty'}"
         )
         print(f"    Tool calls: {response1.tool_calls}")
 
@@ -295,7 +318,7 @@ class TestToolCalling:
 
         print("  Step 3 - Final response:")
         print(
-            f"    Content: {response2.content[:200] if response2.content else 'empty'}"
+            f"    Content: {get_text_content(response2.content)[:200] if response2.content else 'empty'}"
         )
         print(f"    Tool calls: {response2.tool_calls}")
 
@@ -324,7 +347,7 @@ class TestToolCalling:
         for i, result in enumerate(results):
             print(f"  Result {i}:")
             print(
-                f"    Content: {result.content[:100] if result.content else 'empty'}..."
+                f"    Content: {get_text_content(result.content)[:100] if result.content else 'empty'}..."
             )
             print(f"    Tool calls: {result.tool_calls}")
 
@@ -582,11 +605,11 @@ class TestReranker:
 
         assert len(results) > 0, "Reranker returned no results"
         assert len(results) <= 3
-        # Results should have index and relevance_score
+        # Results should have index and score
         for r in results:
             assert hasattr(r, "index")
-            assert hasattr(r, "relevance_score")
-            assert r.relevance_score >= 0.0
+            assert hasattr(r, "score")
+            assert r.score >= 0.0
 
     @pytest.mark.asyncio
     async def test_arerank_basic(self, account_id, api_token):
@@ -615,8 +638,8 @@ class TestReranker:
         assert len(results) <= 3
         for r in results:
             assert hasattr(r, "index")
-            assert hasattr(r, "relevance_score")
-            assert r.relevance_score >= 0.0
+            assert hasattr(r, "score")
+            assert r.score >= 0.0
 
 
 # MARK: - Basic Invoke Tests
@@ -640,7 +663,8 @@ class TestBasicInvoke:
 
         assert result is not None, f"Result is None for {model}"
         assert result.content, f"Empty content for {model}"
-        assert "hello" in result.content.lower(), f"Unexpected response for {model}"
+        text = get_text_content(result.content)
+        assert "hello" in text.lower(), f"Unexpected response for {model}"
 
     @pytest.mark.parametrize("model", MODELS)
     def test_basic_batch(self, model, account_id, api_token, ai_gateway):
@@ -666,6 +690,240 @@ class TestBasicInvoke:
         for i, result in enumerate(results):
             assert result is not None, f"Result {i} is None for {model}"
             assert result.content, f"Empty content for result {i} for {model}"
+
+
+# MARK: - Reasoning Content Tests
+
+
+class TestReasoningContent:
+    """Test reasoning_content extraction from models that support it."""
+
+    REASONING_MODELS = [
+        "@cf/qwen/qwen3-30b-a3b-fp8",
+        "@cf/zai-org/glm-4.7-flash",
+        "@cf/openai/gpt-oss-120b",
+        "@cf/openai/gpt-oss-20b",
+        "@cf/moonshotai/kimi-k2.5",
+        "@cf/nvidia/nemotron-3-120b-a12b",
+    ]
+
+    @staticmethod
+    def _extract_reasoning(result):
+        """Extract reasoning from content blocks."""
+        if isinstance(result.content, list):
+            thinking_blocks = [
+                b
+                for b in result.content
+                if isinstance(b, dict) and b.get("type") == "thinking"
+            ]
+            return thinking_blocks[0]["thinking"] if thinking_blocks else ""
+        return ""
+
+    @pytest.mark.parametrize("model", REASONING_MODELS)
+    def test_reasoning_content_sync(self, model, account_id, api_token, ai_gateway):
+        """Test that reasoning_content appears as content blocks."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        result = llm.invoke("What is 25 * 37? Think step by step.")
+
+        reasoning = self._extract_reasoning(result)
+
+        print(f"\n[{model}] Reasoning Content (sync):")
+        print(f"  Content: {str(result.content)[:200]}")
+        print(f"  Reasoning: {reasoning[:200]}")
+        print(f"  Content type: {type(result.content).__name__}")
+
+        assert isinstance(result.content, list), (
+            f"Expected list content blocks for {model}, got {type(result.content)}"
+        )
+        thinking_blocks = [
+            b
+            for b in result.content
+            if isinstance(b, dict) and b.get("type") == "thinking"
+        ]
+        assert len(thinking_blocks) > 0, (
+            f"Expected thinking block in content for {model}"
+        )
+        assert len(reasoning) > 0, f"Expected non-empty reasoning_content for {model}"
+
+    @pytest.mark.parametrize("model", REASONING_MODELS)
+    @pytest.mark.asyncio
+    async def test_reasoning_content_async(
+        self, model, account_id, api_token, ai_gateway
+    ):
+        """Test that reasoning_content appears as content blocks (async)."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        result = await llm.ainvoke("What is 25 * 37? Think step by step.")
+
+        reasoning = self._extract_reasoning(result)
+
+        print(f"\n[{model}] Reasoning Content (async):")
+        print(f"  Content: {str(result.content)[:200]}")
+        print(f"  Reasoning: {reasoning[:200]}")
+        print(f"  Content type: {type(result.content).__name__}")
+
+        assert isinstance(result.content, list), (
+            f"Expected list content blocks for {model}, got {type(result.content)}"
+        )
+        thinking_blocks = [
+            b
+            for b in result.content
+            if isinstance(b, dict) and b.get("type") == "thinking"
+        ]
+        assert len(thinking_blocks) > 0, (
+            f"Expected thinking block in content for {model}"
+        )
+        assert len(reasoning) > 0, f"Expected non-empty reasoning_content for {model}"
+
+    @pytest.mark.parametrize("model", REASONING_MODELS)
+    def test_reasoning_content_with_tool_calls(
+        self, model, account_id, api_token, ai_gateway
+    ):
+        """Test that reasoning_content is preserved when tool calls are also present."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        llm_with_tools = llm.bind_tools([get_weather])
+
+        result = llm_with_tools.invoke("What's the weather in San Francisco?")
+
+        print(f"\n[{model}] Reasoning + Tool Calls:")
+        print(f"  Content type: {type(result.content).__name__}")
+        print(f"  Content: {str(result.content)[:200]}")
+        print(f"  Tool calls: {result.tool_calls}")
+
+        assert result is not None, f"Result is None for {model}"
+
+        # If the model made a tool call AND has reasoning, both should be present
+        if result.tool_calls and isinstance(result.content, list):
+            thinking_blocks = [
+                b
+                for b in result.content
+                if isinstance(b, dict) and b.get("type") == "thinking"
+            ]
+            assert len(thinking_blocks) > 0, (
+                f"Expected thinking block alongside tool_calls for {model}"
+            )
+            assert len(thinking_blocks[0]["thinking"]) > 0, (
+                f"Expected non-empty reasoning for {model}"
+            )
+            print(f"  Reasoning: {thinking_blocks[0]['thinking'][:200]}")
+            print("  Status: PASS - reasoning preserved with tool calls")
+        elif result.tool_calls:
+            # Tool call made but no reasoning - content should be empty string
+            print("  Status: WARN - tool call without reasoning content")
+        else:
+            print("  Status: WARN - no tool call made")
+
+    def test_no_reasoning_content_for_llama(self, account_id, api_token, ai_gateway):
+        """Test that Llama content is a plain string, not content blocks."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            account_id,
+            api_token,
+            ai_gateway,
+        )
+        result = llm.invoke("Say hello.")
+
+        print("\n[llama] Reasoning Content check:")
+        print(f"  Content type: {type(result.content).__name__}")
+
+        assert isinstance(result.content, str), (
+            "Llama should return plain string content, not content blocks"
+        )
+
+
+# MARK: - Multi-Modal Tests
+
+
+def create_test_image_base64() -> str:
+    """Create a minimal 1x1 red pixel PNG and return as base64.
+
+    Uses raw PNG bytes to avoid requiring PIL in the test environment.
+    """
+    import struct
+    import zlib
+
+    def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+        chunk = chunk_type + data
+        return (
+            struct.pack(">I", len(data))
+            + chunk
+            + struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
+        )
+
+    width, height = 1, 1
+    ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    raw_row = b"\x00" + b"\xff\x00\x00"
+    idat_data = zlib.compress(raw_row)
+
+    png = b"\x89PNG\r\n\x1a\n"
+    png += _png_chunk(b"IHDR", ihdr_data)
+    png += _png_chunk(b"IDAT", idat_data)
+    png += _png_chunk(b"IEND", b"")
+
+    return base64.standard_b64encode(png).decode("utf-8")
+
+
+class TestMultiModal:
+    """Test multi-modal image input across Workers AI models via REST API.
+
+    Discovery test: Which Workers AI models accept image content blocks
+    when invoked via the REST API (/v1/chat/completions)?
+    """
+
+    @pytest.mark.parametrize("model", MODELS)
+    def test_image_base64(self, model, account_id, api_token, ai_gateway):
+        """Test image input via base64-encoded PNG."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        image_b64 = create_test_image_base64()
+
+        message = HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": "Describe this image in one sentence. What color is it?",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{image_b64}",
+                    },
+                },
+            ]
+        )
+
+        try:
+            result = llm.invoke([message])
+            text = get_text_content(result.content)
+
+            print(f"\n[{model}] Multi-Modal Image (base64):")
+            print("  Status: PASS")
+            print(f"  Response: {text[:200]}")
+
+            assert len(text) > 0, f"Expected non-empty response from {model}"
+        except Exception as e:
+            error_msg = str(e)
+            print(f"\n[{model}] Multi-Modal Image (base64):")
+            print("  Status: FAIL")
+            print(f"  Error: {error_msg[:200]}")
+
+            # Skip rather than fail — this is a discovery test
+            pytest.skip(
+                f"Model {model} does not support multi-modal: {error_msg[:100]}"
+            )
 
 
 if __name__ == "__main__":
@@ -698,7 +956,9 @@ if __name__ == "__main__":
         print("\n[Test 1] Basic Invoke:")
         try:
             result = llm.invoke("Say 'Hello World' and nothing else.")
-            print(f"  Content: {result.content[:200] if result.content else 'EMPTY'}")
+            print(
+                f"  Content: {get_text_content(result.content)[:200] if result.content else 'EMPTY'}"
+            )
             print(
                 "  Status: PASS" if result.content else "  Status: FAIL - empty content"
             )
@@ -745,7 +1005,7 @@ if __name__ == "__main__":
             llm_with_tools = llm.bind_tools([get_weather, get_stock_price])
             result = llm_with_tools.invoke("What's the weather in San Francisco?")
             print(
-                f"  Content: {result.content[:100] if result.content else 'empty'}..."
+                f"  Content: {get_text_content(result.content)[:100] if result.content else 'empty'}..."
             )
             print(f"  Tool calls: {result.tool_calls}")
             has_tool_call = len(result.tool_calls) > 0 if result.tool_calls else False

@@ -1,5 +1,6 @@
 """CloudflareVectorize vector stores."""
 
+# MARK: - Imports
 from __future__ import annotations
 
 import asyncio
@@ -39,6 +40,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from typing_extensions import TypedDict
 
+# MARK: - Constants
 MAX_INSERT_SIZE = 5000
 DEFAULT_WAIT_SECONDS = 5
 DEFAULT_TOP_K = 20
