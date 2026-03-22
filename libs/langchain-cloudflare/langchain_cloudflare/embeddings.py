@@ -203,6 +203,9 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         Returns:
             List of embeddings, one for each text.
+
+        Raises:
+            httpx.HTTPStatusError: If the API request fails.
         """
         if self.strip_new_lines:
             texts = [text.replace("\n", " ") for text in texts]
