@@ -8,6 +8,8 @@ from more_itertools import chunked
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 from typing_extensions import TypedDict
 
+from ._errors import TokenErrors
+
 # MARK: - Constants
 DEFAULT_MODEL_NAME = "@cf/baai/bge-base-en-v1.5"
 
@@ -140,19 +142,11 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         # Validate credentials
         if not self.account_id:
-            raise ValueError(
-                "A Cloudflare account ID must be provided either through "
-                "the account_id parameter or CF_ACCOUNT_ID environment variable. "
-                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
-            )
+            raise ValueError(TokenErrors.NO_ACCOUNT_ID_SET)
 
         # Check if either api_token or CF_AI_API_TOKEN is provided
-        if not any([self.api_token, self.api_token.get_secret_value()]):
-            raise ValueError(
-                "A Cloudflare API token must be provided either through "
-                "the api_token parameter or CF_AI_API_TOKEN environment variable. "
-                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
-            )
+        if not self.api_token and not self.api_token.get_secret_value():
+            raise ValueError(TokenErrors.INSUFFICIENT_EMBEDDING_TOKENS)
 
         # Set up headers
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}

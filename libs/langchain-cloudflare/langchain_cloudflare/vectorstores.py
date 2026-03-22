@@ -7,7 +7,6 @@ import asyncio
 import json
 import time
 import uuid
-from enum import Enum
 from functools import cached_property
 from typing import (
     Any,
@@ -43,6 +42,8 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
 from typing_extensions import NotRequired, TypedDict
 
+from ._errors import TokenErrors
+
 # MARK: - Constants
 MAX_INSERT_SIZE = 5000
 DEFAULT_WAIT_SECONDS = 5
@@ -53,36 +54,6 @@ DEFAULT_METRIC = "cosine"
 
 # Type variable for class methods that return CloudflareVectorize
 VST = TypeVar("VST", bound="CloudflareVectorize")
-
-
-class StrEnum(str, Enum):
-    pass
-
-
-class TokenErrors(StrEnum):
-    """Error messages for missing or insufficient API token configuration."""
-
-    NO_ACCOUNT_ID_SET = (
-        "A Cloudflare account ID must be provided either through "
-        "the account_id parameter or "
-        "CF_ACCOUNT_ID environment variable. "
-        "Alternatively, when running in a Python Worker, you can "
-        "pass the 'binding' parameter (env.VECTORIZE) instead."
-    )
-
-    INSUFFICENT_TOKENS = (
-        "Not enough API token values provided. "
-        "Please provide a global `api_token` or `vectorize_api_token` "
-        "through parameters or environment variables "
-        "(CF_API_TOKEN, CF_VECTORIZE_API_TOKEN). "
-        "Alternatively, when running in a Python Worker, you can "
-        "pass the 'binding' parameter (env.VECTORIZE) instead."
-    )
-    NO_GLOBAL_TOKEN_WITH_D1_TOKEN = (
-        "`d1_database_id` provided, but no global `api_token` provided "
-        "and no `d1_api_token` provided. Please set these through parameters "
-        "or environment variables (CF_API_TOKEN, CF_D1_API_TOKEN)."
-    )
 
 
 # MARK: - RequestsKwargs
@@ -469,7 +440,7 @@ class CloudflareVectorize(VectorStore):
 
         # if we don't have a global token and no vectorize token, raise an error
         if not has_global_token and not self.vectorize_api_token:
-            raise ValueError(TokenErrors.INSUFFICENT_TOKENS)
+            raise ValueError(TokenErrors.INSUFFICENT_VECTORIZE_TOKENS)
 
         # if we have a D1 database ID but no global token and no D1 token, raise an error
         if self.d1_database_id and not has_global_token and not self.d1_api_token:
