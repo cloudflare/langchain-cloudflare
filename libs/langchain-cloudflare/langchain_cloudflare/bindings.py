@@ -117,9 +117,7 @@ def convert_binding_response_to_rest_format(
         response = response.to_py()
 
     if isinstance(response, dict):
-        if "result" in response:
-            return response
-        return {"result": response}
+        return response if "result" in response else {"result": response}
 
     return {"result": {"response": str(response)}}
 
@@ -186,15 +184,13 @@ def convert_vectorize_query_response(response: Any) -> Dict[str, Any]:
     if hasattr(response, "to_py"):
         response = response.to_py()
 
-    # Response should have a "matches" array
-    if isinstance(response, dict):
-        return response
-
-    # Handle list directly (some bindings return matches array directly)
-    if isinstance(response, list):
-        return {"matches": response}
-
-    return {"matches": []}
+    match response:
+        case dict():
+            return response
+        case list():
+            return {"matches": response}
+        case _:
+            return {"matches": []}
 
 
 def convert_vectorize_mutation_response(response: Any) -> Dict[str, Any]:
@@ -275,6 +271,24 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
     Returns:
         List of dicts with 'id' (int) and 'score' (float) keys
     """
+
+    def _handle_key_in_dict(response: dict, key: str) -> List[Dict[str, Any]]:
+        """Handle a specific key in the response dict.
+
+        Args:
+            response: The response dict
+            key: The key to handle
+
+        Returns:
+            List of dicts
+        """
+        result = response[key]
+        if hasattr(result, "to_py"):
+            result = result.to_py()
+        if isinstance(result, list):
+            return result
+        return []
+
     # Convert JS proxy to Python
     if hasattr(response, "to_py"):
         response = response.to_py()
@@ -284,29 +298,20 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
         return response
 
     # Handle wrapped response format
+    result = []
     if isinstance(response, dict):
         if "result" in response:
-            result = response["result"]
-            if hasattr(result, "to_py"):
-                result = result.to_py()
-            if isinstance(result, list):
-                return result
+            result = _handle_key_in_dict(response, key="result")
+
         # Native AI binding returns {"response": [...], "usage": {...}}
         if "response" in response:
-            resp = response["response"]
-            if hasattr(resp, "to_py"):
-                resp = resp.to_py()
-            if isinstance(resp, list):
-                return resp
+            result = _handle_key_in_dict(response, key="response")
+
         # Some responses might have a different structure
         if "data" in response:
-            data = response["data"]
-            if hasattr(data, "to_py"):
-                data = data.to_py()
-            if isinstance(data, list):
-                return data
+            result = _handle_key_in_dict(response, key="data")
 
-    return []
+    return result
 
 
 __all__ = [
