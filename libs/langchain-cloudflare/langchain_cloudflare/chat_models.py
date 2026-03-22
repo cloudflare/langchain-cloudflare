@@ -130,17 +130,22 @@ def _transform_response_format_to_guided_json(
     params: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Transform response_format to guided_json for Mistral models."""
-    if "response_format" in params:
-        response_format = params.pop("response_format")
-        if isinstance(response_format, dict):
-            if response_format.get("type") == "json_schema":
-                # Extract the schema from json_schema format
-                json_schema = response_format.get("json_schema", {})
-                schema = json_schema.get("schema", json_schema)
-                params["guided_json"] = schema
-            elif response_format.get("type") == "json_object":
-                # For simple json_object mode, use empty schema
-                params["guided_json"] = {}
+    if "response_format" not in params:
+        return params
+
+    response_format = params.pop("response_format")
+
+    match response_format:
+        # if response_format is a json_schema with a schema key
+        case {"type": "json_schema", "json_schema": json_schema}:
+            params["guided_json"] = json_schema.get("schema", json_schema)
+        # if response_format is a json_schema without a schema key
+        case {"type": "json_schema"}:
+            params["guided_json"] = {}
+        # if response_format is a json_object
+        case {"type": "json_object"}:
+            params["guided_json"] = {}
+
     return params
 
 
@@ -183,36 +188,29 @@ def _normalize_response_format_for_cloudflare(
 
 
 # MARK: - Model Behavior Registry Entries
-MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
-    "llama": ModelBehavior(
-        embed_tool_calls_in_content=True,
-    ),
-    "mistral": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        unsupported_params=("tool_choice",),
-        response_format_param="guided_json",
-    ),
-    "qwen": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
-    ),
+_MODELS = Literal["glm", "gpt-oss", "kimi", "llama", "mistral", "nemotron", "qwen"]
+
+_REASONING_BEHAVIOR = ModelBehavior(
+    embed_tool_calls_in_content=False,
+    supports_reasoning_content=True,
+)
+
+MODEL_BEHAVIORS: Dict[_MODELS, ModelBehavior] = {
     "glm": ModelBehavior(
         embed_tool_calls_in_content=False,
         unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
         supports_reasoning_content=True,
     ),
-    "gpt-oss": ModelBehavior(
+    "gpt-oss": _REASONING_BEHAVIOR,
+    "kimi": _REASONING_BEHAVIOR,
+    "llama": ModelBehavior(embed_tool_calls_in_content=True),
+    "mistral": ModelBehavior(
         embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
+        unsupported_params=("tool_choice",),
+        response_format_param="guided_json",
     ),
-    "kimi": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
-    ),
-    "nemotron": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
-    ),
+    "nemotron": _REASONING_BEHAVIOR,
+    "qwen": _REASONING_BEHAVIOR,
 }
 
 DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
@@ -1723,87 +1721,68 @@ def _is_pydantic_class(obj: Any) -> bool:
 
 
 # MARK: - Type Conversion Helpers
+def _convert_tool_call(tc: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert a LangChain tool call to the Cloudflare API format."""
+    args = json.dumps(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]
+    return {
+        "id": tc.get("id", str(uuid.uuid4())),
+        "type": "function",
+        "function": {"name": tc["name"], "arguments": args},
+    }
+
+
+def _convert_ai_message(message: AIMessage) -> Dict[str, Any]:
+    """Convert an AIMessage to a dict, handling tool calls and legacy function_call."""
+    if message.tool_calls:
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_convert_tool_call(tc) for tc in message.tool_calls],
+        }
+
+    content = message.content or None
+    message_dict: Dict[str, Any] = {"role": "assistant", "content": content}
+
+    # Handle legacy function_call format
+    if "function_call" in message.additional_kwargs:
+        message_dict["function_call"] = message.additional_kwargs["function_call"]
+        message_dict["content"] = None
+
+    return message_dict
+
+
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """Convert a LangChain message to a dictionary,
     meeting Cloudflare AI Workers requirements."""
-    message_dict: Dict[str, Any]
-
-    if isinstance(message, ChatMessage):
-        message_dict = {"role": message.role, "content": message.content}
-
-    elif isinstance(message, HumanMessage):
-        message_dict = {"role": "user", "content": message.content}
-
-    elif isinstance(message, AIMessage):
-        # For assistant messages, handle tool calls specially
-        if message.tool_calls:
-            # When there are tool calls, set content to None
-            tool_calls = []
-            for tc in message.tool_calls:
-                # Convert args to a JSON string if needed
-                args_str = (
-                    json.dumps(tc["args"])
-                    if isinstance(tc["args"], dict)
-                    else tc["args"]
-                )
-
-                tool_calls.append(
-                    {
-                        "id": tc.get("id", str(uuid.uuid4())),  # Generate ID if missing
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": args_str},
-                    }
-                )
-
-            # Create message with tool_calls but no content
+    match message:
+        case ChatMessage():
+            message_dict = {"role": message.role, "content": message.content}
+        case HumanMessage():
+            message_dict = {"role": "user", "content": message.content}
+        case AIMessage():
+            message_dict = _convert_ai_message(message)
+        case SystemMessage():
+            message_dict = {"role": "system", "content": message.content}
+        case FunctionMessage():
             message_dict = {
-                "role": "assistant",
-                "content": None,  # Must be null, not empty string
-                "tool_calls": tool_calls,
+                "role": "function",
+                "name": message.name,
+                "content": message.content,
             }
-        else:
-            # For regular assistant messages without tool calls
-            content = message.content
-            # Important: if content is empty string, convert to null
-            if content == "":
-                content = None  # type: ignore
-
-            message_dict = {"role": "assistant", "content": content}
-
-        # Handle legacy function_call format (backward compatibility)
-        if "function_call" in message.additional_kwargs and not message.tool_calls:
-            function_call = message.additional_kwargs["function_call"]
-            message_dict["function_call"] = function_call
-            # If function_call present, follow same pattern - set content to null
-            message_dict["content"] = None
-
-    elif isinstance(message, SystemMessage):
-        message_dict = {"role": "system", "content": message.content}
-
-    elif isinstance(message, FunctionMessage):
-        message_dict = {
-            "role": "function",
-            "name": message.name,
-            "content": message.content,
-        }
-
-    elif isinstance(message, ToolMessage):
-        message_dict = {
-            "role": "tool",
-            "name": message.name,
-            "content": message.content,
-        }
-
-        # Only include tool_call_id if it's set
-        if message.tool_call_id:
-            message_dict["tool_call_id"] = message.tool_call_id
-
-    else:
-        raise TypeError(f"Got unknown type {message}")
+        case ToolMessage():
+            message_dict = {
+                "role": "tool",
+                "name": message.name,
+                "content": message.content,
+            }
+            if message.tool_call_id:
+                message_dict["tool_call_id"] = message.tool_call_id
+        case _:
+            raise TypeError(f"Got unknown type {message}")
 
     # Add any additional kwargs not already handled
     for key, value in message.additional_kwargs.items():
-        if key not in message_dict and key not in ["function_call", "tool_calls"]:
+        if key not in message_dict and key not in {"function_call", "tool_calls"}:
             message_dict[key] = value
 
     return message_dict
