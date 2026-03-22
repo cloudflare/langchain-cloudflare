@@ -1,11 +1,12 @@
 # MARK: - Imports
-from typing import Any, List, Optional, TypedDict
+from typing import Any, List, Optional
 
 import requests
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import from_env, secret_from_env
 from more_itertools import chunked
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
+from typing_extensions import TypedDict
 
 # MARK: - Constants
 DEFAULT_MODEL_NAME = "@cf/baai/bge-base-en-v1.5"

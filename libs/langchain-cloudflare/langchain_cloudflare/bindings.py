@@ -272,46 +272,24 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
         List of dicts with 'id' (int) and 'score' (float) keys
     """
 
-    def _handle_key_in_dict(response: dict, key: str) -> List[Dict[str, Any]]:
-        """Handle a specific key in the response dict.
-
-        Args:
-            response: The response dict
-            key: The key to handle
-
-        Returns:
-            List of dicts
-        """
-        result = response[key]
-        if hasattr(result, "to_py"):
-            result = result.to_py()
-        if isinstance(result, list):
-            return result
-        return []
-
     # Convert JS proxy to Python
     if hasattr(response, "to_py"):
         response = response.to_py()
 
-    # Response should be a list of {id, score} objects
     if isinstance(response, list):
         return response
 
-    # Handle wrapped response format
-    result = []
     if isinstance(response, dict):
-        if "result" in response:
-            result = _handle_key_in_dict(response, key="result")
+        # Try known wrapper keys: "result", "response", "data"
+        for key in ("result", "response", "data"):
+            if key in response:
+                value = response[key]
+                if hasattr(value, "to_py"):
+                    value = value.to_py()
+                if isinstance(value, list):
+                    return value
 
-        # Native AI binding returns {"response": [...], "usage": {...}}
-        if "response" in response:
-            result = _handle_key_in_dict(response, key="response")
-
-        # Some responses might have a different structure
-        if "data" in response:
-            result = _handle_key_in_dict(response, key="data")
-
-    return result
+    return []
 
 
 __all__ = [

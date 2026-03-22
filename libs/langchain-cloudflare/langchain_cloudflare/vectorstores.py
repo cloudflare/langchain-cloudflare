@@ -7,6 +7,7 @@ import asyncio
 import json
 import time
 import uuid
+from enum import Enum
 from functools import cached_property
 from typing import (
     Any,
@@ -22,7 +23,6 @@ from typing import (
 )
 
 import requests
-from _typeshed import StrEnum
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import from_env, secret_from_env
@@ -53,6 +53,10 @@ DEFAULT_METRIC = "cosine"
 
 # Type variable for class methods that return CloudflareVectorize
 VST = TypeVar("VST", bound="CloudflareVectorize")
+
+
+class StrEnum(str, Enum):
+    pass
 
 
 class TokenErrors(StrEnum):
