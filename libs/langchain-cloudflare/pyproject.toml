@@ -17,6 +17,7 @@ dependencies = [
     "typing-extensions>=4.5.0",
     "sqlalchemy>=2.0.0",
     "sqlalchemy-cloudflare-d1>=0.3.1",
+    "more-itertools>=10.8.0",
 ]
 
 [project.optional-dependencies]
