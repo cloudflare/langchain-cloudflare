@@ -7,11 +7,13 @@ import asyncio
 import json
 import time
 import uuid
+from functools import cached_property
 from typing import (
     Any,
     Dict,
     Iterable,
     List,
+    Literal,
     Optional,
     Sequence,
     Type,
@@ -38,7 +40,9 @@ from sqlalchemy import (
 from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
+
+from ._errors import TokenErrors
 
 # MARK: - Constants
 MAX_INSERT_SIZE = 5000
@@ -57,6 +61,34 @@ class RequestsKwargs(TypedDict, total=False):
     """TypedDict for requests kwargs."""
 
     timeout: int
+
+
+# MARK: - Headers Typed Dict
+Headers = TypedDict(
+    "Headers",
+    {
+        "Authorization": str,
+        "Content-Type": str,
+    },
+)
+
+
+# Mark: - Binding Query Typed Dict
+class BindingQueryOptions(TypedDict):
+    topK: int
+    filter: NotRequired[Dict[str, Any]]
+    namespace: NotRequired[str]
+    returnMetadata: NotRequired[str]
+    returnValues: NotRequired[Literal[True]]
+
+
+# MARK: - VectorizedDict Resul Type
+class VectorizedDict(TypedDict):
+    id: str
+    text: str
+    values: list[float]
+    namespace: NotRequired[str | None]
+    metadata: NotRequired[Dict[str, Any] | None]
 
 
 # MARK: - VectorizeRecord
@@ -94,13 +126,9 @@ class VectorizeRecord:
         self.namespace = namespace
         self.metadata = metadata or {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> VectorizedDict:
         """Convert to dictionary format for API requests."""
-        vector_dict: Dict[str, Any] = {
-            "id": self.id,
-            "values": self.values,
-            "text": self.text,
-        }
+        vector_dict = VectorizedDict(id=self.id, values=self.values, text=self.text)
 
         if self.namespace:
             vector_dict["namespace"] = self.namespace
@@ -344,6 +372,9 @@ class CloudflareVectorize(VectorStore):
             "default_wait_seconds", DEFAULT_WAIT_SECONDS
         )
 
+        # set rest api version
+        self._api_version = "v2"
+
         # If binding is provided, skip REST API setup
         if self.binding is not None:
             # When using binding, we don't need account_id or api_token
@@ -373,76 +404,66 @@ class CloudflareVectorize(VectorStore):
         )
 
         # Extract and convert token kwargs to SecretStr
-        vectorize_token = kwargs.get("vectorize_api_token")
-        if vectorize_token is None:
-            vectorize_token = from_env("CF_VECTORIZE_API_TOKEN", default=None)()
+        vectorize_token = kwargs.get(
+            "vectorize_api_token", from_env("CF_VECTORIZE_API_TOKEN", default=None)()
+        )
         self.vectorize_api_token = (
             SecretStr(vectorize_token) if vectorize_token else None
         )
 
-        d1_token = kwargs.get("d1_api_token")
-        if d1_token is None:
-            d1_token = from_env("CF_D1_API_TOKEN", default=None)()
+        # Get D1 API token from kwargs or environment, if not present set to None
+        d1_token = kwargs.get(
+            "d1_api_token", from_env("CF_D1_API_TOKEN", default=None)()
+        )
         self.d1_api_token = SecretStr(d1_token) if d1_token else None
 
         # Validate the account ID
         if not self.account_id:
-            raise ValueError(
-                "A Cloudflare account ID must be provided either through "
-                "the account_id parameter or "
-                "CF_ACCOUNT_ID environment variable. "
-                "Alternatively, when running in a Python Worker, you can "
-                "pass the 'binding' parameter (env.VECTORIZE) instead."
-            )
+            raise ValueError(TokenErrors.NO_ACCOUNT_ID_SET)
 
         # Set headers for Vectorize and D1 using get_secret_value() for the tokens
-        self._headers = {
+        self._headers: Headers = {
             "Authorization": (
-                f"""Bearer {
-                    self.vectorize_api_token.get_secret_value()
-                    if self.vectorize_api_token
-                    else self.api_token.get_secret_value()
-                    if self.api_token and self.api_token.get_secret_value()
-                    else ""
-                }"""
+                f"""Bearer {self._get_token(token_name="vectorize_api_token")}"""
             ),
             "Content-Type": "application/json",
         }
-        self.d1_headers = {
+        self.d1_headers: Headers = {
             "Authorization": (
-                f"""Bearer {
-                    self.d1_api_token.get_secret_value()
-                    if self.d1_api_token
-                    else self.api_token.get_secret_value()
-                    if self.api_token and self.api_token.get_secret_value()
-                    else ""
-                }"""
+                f"""Bearer {self._get_token(token_name="d1_api_token")}"""
             ),
             "Content-Type": "application/json",
         }
 
-        if (
-            not self.api_token or not self.api_token.get_secret_value()
-        ) and not self.vectorize_api_token:
-            raise ValueError(
-                "Not enough API token values provided. "
-                "Please provide a global `api_token` or `vectorize_api_token` "
-                "through parameters or environment variables "
-                "(CF_API_TOKEN, CF_VECTORIZE_API_TOKEN). "
-                "Alternatively, when running in a Python Worker, you can "
-                "pass the 'binding' parameter (env.VECTORIZE) instead."
-            )
+        # check if we have a global token
+        has_global_token = bool(self.api_token and self.api_token.get_secret_value())
 
-        if (
-            self.d1_database_id
-            and (not self.api_token or not self.api_token.get_secret_value())
-            and not self.d1_api_token
-        ):
-            raise ValueError(
-                "`d1_database_id` provided, but no global `api_token` provided "
-                "and no `d1_api_token` provided. Please set these through parameters "
-                "or environment variables (CF_API_TOKEN, CF_D1_API_TOKEN)."
-            )
+        # if we don't have a global token and no vectorize token, raise an error
+        if not has_global_token and not self.vectorize_api_token:
+            raise ValueError(TokenErrors.INSUFFICENT_VECTORIZE_TOKENS)
+
+        # if we have a D1 database ID but no global token and no D1 token, raise an error
+        if self.d1_database_id and not has_global_token and not self.d1_api_token:
+            raise ValueError(TokenErrors.NO_GLOBAL_TOKEN_WITH_D1_TOKEN)
+
+    # Get token helper
+    def _get_token(self, token_name: str) -> str:
+        """
+        Get the token value from the instance attribute or global API token.
+
+        Args:
+            token_name (str): The name of the token attribute to retrieve.
+
+        Returns:
+            str: The token value or empty string if not found.
+        """
+        if token := getattr(self, token_name):
+            return token.get_secret_value()
+
+        if self.api_token and self.api_token.get_secret_value():
+            return self.api_token.get_secret_value()
+
+        return ""
 
     @property
     def embeddings(self) -> Embeddings:
@@ -452,6 +473,10 @@ class CloudflareVectorize(VectorStore):
             Embeddings: The embeddings model instance
         """
         return self.embedding
+
+    @cached_property
+    def fully_qualified_base_url(self) -> str:
+        return f"{self.base_url}/accounts/{self.account_id}"
 
     def _get_url(self, endpoint: str, index_name: str) -> str:
         """Get full URL for an API endpoint.
@@ -464,8 +489,8 @@ class CloudflareVectorize(VectorStore):
             str: The complete URL for the API endpoint
         """
         return (
-            f"{self.base_url}/accounts/{self.account_id}/"
-            f"vectorize/v2/indexes/{index_name}/{endpoint}"
+            f"{self.fully_qualified_base_url}/"
+            f"vectorize/{self._api_version}/indexes/{index_name}/{endpoint}"
         )
 
     def _get_base_url(self, endpoint: str) -> str:
@@ -477,9 +502,7 @@ class CloudflareVectorize(VectorStore):
         Returns:
             str: The complete URL for the API endpoint
         """
-        return (
-            f"{self.base_url}/accounts/{self.account_id}/vectorize/v2/indexes{endpoint}"
-        )
+        return f"{self.fully_qualified_base_url}/vectorize/{self._api_version}/indexes{endpoint}"
 
     def _get_d1_url(self, endpoint: str) -> str:
         """Get full URL for a D1 API endpoint.
@@ -930,8 +953,8 @@ class CloudflareVectorize(VectorStore):
             convert_vectorize_query_response,
         )
 
-        # Build options object
-        options: Dict[str, Any] = {"topK": top_k}
+        # Construct options dict
+        options: BindingQueryOptions = {"topK": top_k}
         if filter_dict:
             options["filter"] = filter_dict
         if namespace:
@@ -945,7 +968,7 @@ class CloudflareVectorize(VectorStore):
         from .bindings import convert_vectors_for_binding
 
         js_vector = convert_vectors_for_binding(vector)
-        js_options = convert_query_options_for_binding(options)
+        js_options = convert_query_options_for_binding(options)  # type: ignore
 
         response = await self.binding.query(js_vector, js_options)
 

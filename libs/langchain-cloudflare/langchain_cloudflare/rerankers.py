@@ -127,7 +127,7 @@ class CloudflareWorkersAIReranker(BaseModel):
                 "Or pass the 'binding' parameter (env.AI) in a Python Worker."
             )
 
-        if not self.api_token or self.api_token.get_secret_value() == "":
+        if not any([self.api_token, self.api_token.get_secret_value()]):
             raise ValueError(
                 "A Cloudflare API token must be provided either through "
                 "the api_token parameter or CF_AI_API_TOKEN environment variable. "
@@ -260,19 +260,19 @@ class CloudflareWorkersAIReranker(BaseModel):
         response_json = response.json()
         # Handle Cloudflare REST API response format:
         # {"result": {"response": [...], "usage": {...}}, "success": true, ...}
-        if "result" in response_json:
-            result = response_json["result"]
-            if isinstance(result, dict) and "response" in result:
-                response_data = result["response"]
-            else:
-                response_data = result
-        elif "response" in response_json:
+        result = response_json.get("result", response_json)
+        response_data = result
+        # Extract response data from nested structure
+        if isinstance(result, dict) and "response" in result:
+            response_data = result["response"]
+        elif isinstance(response_json, dict) and "response" in response_json:
             response_data = response_json["response"]
-        else:
-            response_data = response_json
 
         return self._process_response(
-            response_data, documents, original_docs, return_documents
+            response_data,  # type: ignore[arg-type]
+            documents,
+            original_docs,
+            return_documents,
         )
 
     async def arerank(
@@ -325,19 +325,19 @@ class CloudflareWorkersAIReranker(BaseModel):
         response_json = response.json()
         # Handle Cloudflare REST API response format:
         # {"result": {"response": [...], "usage": {...}}, "success": true, ...}
-        if "result" in response_json:
-            result = response_json["result"]
-            if isinstance(result, dict) and "response" in result:
-                response_data = result["response"]
-            else:
-                response_data = result
-        elif "response" in response_json:
+        result = response_json.get("result", response_json)
+        response_data = result
+        # Extract response data from nested structure
+        if isinstance(result, dict) and "response" in result:
+            response_data = result["response"]
+        elif isinstance(response_json, dict) and "response" in response_json:
             response_data = response_json["response"]
-        else:
-            response_data = response_json
 
         return self._process_response(
-            response_data, documents, original_docs, return_documents
+            response_data,  # type: ignore[arg-type]
+            documents,
+            original_docs,
+            return_documents,
         )
 
     async def _arerank_with_binding(

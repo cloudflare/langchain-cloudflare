@@ -1,13 +1,24 @@
 # MARK: - Imports
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import requests
 from langchain_core.embeddings import Embeddings
 from langchain_core.utils import from_env, secret_from_env
+from more_itertools import chunked
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
+from typing_extensions import TypedDict
+
+from ._errors import TokenErrors
 
 # MARK: - Constants
 DEFAULT_MODEL_NAME = "@cf/baai/bge-base-en-v1.5"
+
+
+# MARK: - Type Definitions
+class Headers(TypedDict):
+    Authorization: str
+    "Authorization header for Cloudflare API"
+    "Format: Bearer <api_token>"
 
 
 # MARK: - CloudflareWorkersAIEmbeddings
@@ -111,7 +122,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
     model_name: str = DEFAULT_MODEL_NAME
     batch_size: int = 50
     strip_new_lines: bool = True
-    headers: Dict[str, str] = {"Authorization": "Bearer "}
+    headers: Headers = {"Authorization": "Bearer "}
     ai_gateway: Optional[str] = Field(
         default_factory=from_env("AI_GATEWAY", default=None)
     )
@@ -131,21 +142,16 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         # Validate credentials
         if not self.account_id:
-            raise ValueError(
-                "A Cloudflare account ID must be provided either through "
-                "the account_id parameter or CF_ACCOUNT_ID environment variable. "
-                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
-            )
+            raise ValueError(TokenErrors.NO_ACCOUNT_ID_SET)
 
-        if not self.api_token or self.api_token.get_secret_value() == "":
-            raise ValueError(
-                "A Cloudflare API token must be provided either through "
-                "the api_token parameter or CF_AI_API_TOKEN environment variable. "
-                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
-            )
+        # Check if either api_token or CF_AI_API_TOKEN is provided
+        if not self.api_token and not self.api_token.get_secret_value():
+            raise ValueError(TokenErrors.INSUFFICIENT_EMBEDDING_TOKENS)
 
+        # Set up headers
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}
 
+        # Set up inference URL
         if self.ai_gateway:
             self._inference_url = (
                 f"https://gateway.ai.cloudflare.com/v1/"
@@ -171,16 +177,12 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         if self.strip_new_lines:
             texts = [text.replace("\n", " ") for text in texts]
 
-        batches = [
-            texts[i : i + self.batch_size]
-            for i in range(0, len(texts), self.batch_size)
-        ]
         embeddings = []
 
-        for batch in batches:
+        for batch in chunked(texts, self.batch_size):
             response = requests.post(
                 url=self._inference_url,
-                headers=self.headers,
+                headers=self.headers,  # type: ignore
                 json={"text": batch},
             )
             response.raise_for_status()
@@ -196,6 +198,9 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         Returns:
             List of embeddings, one for each text.
+
+        Raises:
+            httpx.HTTPStatusError: If the API request fails.
         """
         if self.strip_new_lines:
             texts = [text.replace("\n", " ") for text in texts]
@@ -206,18 +211,13 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         import httpx
 
-        batches = [
-            texts[i : i + self.batch_size]
-            for i in range(0, len(texts), self.batch_size)
-        ]
-
         embeddings = []
 
         async with httpx.AsyncClient() as client:
-            for batch in batches:
+            for batch in chunked(texts, self.batch_size):
                 response = await client.post(
                     url=self._inference_url,
-                    headers=self.headers,
+                    headers=self.headers,  # type: ignore
                     json={"text": batch},
                 )
                 response.raise_for_status()
@@ -237,19 +237,13 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         """
         from .bindings import convert_payload_for_binding, create_gateway_options
 
-        batches = [
-            texts[i : i + self.batch_size]
-            for i in range(0, len(texts), self.batch_size)
-        ]
-
         embeddings = []
 
         # Create AI Gateway options if configured
         gateway_options = create_gateway_options(self.ai_gateway)
 
-        for batch in batches:
-            payload = {"text": batch}
-            js_payload = convert_payload_for_binding(payload)
+        for batch in chunked(texts, self.batch_size):
+            js_payload = convert_payload_for_binding({"text": batch})
 
             # Call the binding with optional gateway
             if gateway_options is not None:
@@ -280,11 +274,14 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         Returns:
             Embeddings for the text.
+
+        Raises:
+            requests.HTTPError: If the request fails.
         """
         text = text.replace("\n", " ") if self.strip_new_lines else text
         response = requests.post(
             url=self._inference_url,
-            headers=self.headers,
+            headers=self.headers,  # type: ignore
             json={"text": [text]},
         )
         response.raise_for_status()
@@ -298,6 +295,9 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         Returns:
             Embeddings for the text.
+
+        Raises:
+            httpx.HTTPError: If the request fails.
         """
         text = text.replace("\n", " ") if self.strip_new_lines else text
 
@@ -311,7 +311,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url=self._inference_url,
-                headers=self.headers,
+                headers=self.headers,  # type: ignore
                 json={"text": [text]},
             )
             response.raise_for_status()
