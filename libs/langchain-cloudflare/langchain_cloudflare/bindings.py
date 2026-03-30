@@ -33,6 +33,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from ._types import BindingQueryOptions
+
 # MARK: - AI Gateway Options
 
 
@@ -68,7 +70,7 @@ def create_gateway_options(gateway_id: Optional[str]) -> Any:
 # MARK: - Payload Conversion
 
 
-def convert_payload_for_binding(payload: Dict[str, Any]) -> Any:
+def convert_payload_for_binding(payload: BindingQueryOptions) -> Any:
     """Convert a Python payload dict for Workers AI binding compatibility.
 
     In Pyodide, Python dicts with nested lists (like messages arrays) cause

@@ -13,7 +13,6 @@ from typing import (
     Dict,
     Iterable,
     List,
-    Literal,
     Optional,
     Sequence,
     Type,
@@ -40,9 +39,11 @@ from sqlalchemy import (
 from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Engine
-from typing_extensions import NotRequired, TypedDict
+from typing_extensions import TypedDict
 
+# local imports
 from ._errors import TokenErrors
+from ._types import BindingQueryOptions, VectorizedDict, VectorizeHeaders
 
 # MARK: - Constants
 MAX_INSERT_SIZE = 5000
@@ -61,34 +62,6 @@ class RequestsKwargs(TypedDict, total=False):
     """TypedDict for requests kwargs."""
 
     timeout: int
-
-
-# MARK: - Headers Typed Dict
-Headers = TypedDict(
-    "Headers",
-    {
-        "Authorization": str,
-        "Content-Type": str,
-    },
-)
-
-
-# Mark: - Binding Query Typed Dict
-class BindingQueryOptions(TypedDict):
-    topK: int
-    filter: NotRequired[Dict[str, Any]]
-    namespace: NotRequired[str]
-    returnMetadata: NotRequired[str]
-    returnValues: NotRequired[Literal[True]]
-
-
-# MARK: - VectorizedDict Resul Type
-class VectorizedDict(TypedDict):
-    id: str
-    text: str
-    values: list[float]
-    namespace: NotRequired[str | None]
-    metadata: NotRequired[Dict[str, Any] | None]
 
 
 # MARK: - VectorizeRecord
@@ -422,27 +395,26 @@ class CloudflareVectorize(VectorStore):
             raise ValueError(TokenErrors.NO_ACCOUNT_ID_SET)
 
         # Set headers for Vectorize and D1 using get_secret_value() for the tokens
-        self._headers: Headers = {
+        self._headers: VectorizeHeaders = {
             "Authorization": (
                 f"""Bearer {self._get_token(token_name="vectorize_api_token")}"""
             ),
             "Content-Type": "application/json",
         }
-        self.d1_headers: Headers = {
+        self.d1_headers: VectorizeHeaders = {
             "Authorization": (
                 f"""Bearer {self._get_token(token_name="d1_api_token")}"""
             ),
             "Content-Type": "application/json",
         }
 
-        # check if we have a global token
-        has_global_token = bool(self.api_token and self.api_token.get_secret_value())
+        has_global_token = (
+            self.api_token is not None and self.api_token.get_secret_value()
+        )
 
-        # if we don't have a global token and no vectorize token, raise an error
         if not has_global_token and not self.vectorize_api_token:
-            raise ValueError(TokenErrors.INSUFFICENT_VECTORIZE_TOKENS)
+            raise ValueError(TokenErrors.INSUFFICIENT_VECTORIZE_TOKENS)
 
-        # if we have a D1 database ID but no global token and no D1 token, raise an error
         if self.d1_database_id and not has_global_token and not self.d1_api_token:
             raise ValueError(TokenErrors.NO_GLOBAL_TOKEN_WITH_D1_TOKEN)
 
@@ -968,7 +940,7 @@ class CloudflareVectorize(VectorStore):
         from .bindings import convert_vectors_for_binding
 
         js_vector = convert_vectors_for_binding(vector)
-        js_options = convert_query_options_for_binding(options)  # type: ignore
+        js_options = convert_query_options_for_binding(options)
 
         response = await self.binding.query(js_vector, js_options)
 

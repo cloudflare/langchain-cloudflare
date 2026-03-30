@@ -1,10 +1,12 @@
 from enum import Enum
 
 
+# MARK: - StrEnum
 class StrEnum(str, Enum):
     pass
 
 
+# MARK: - Token Errors
 class TokenErrors(StrEnum):
     """Error messages for missing or insufficient API token configuration."""
 
@@ -16,13 +18,13 @@ class TokenErrors(StrEnum):
         "pass the 'binding' parameter (env.VECTORIZE) instead."
     )
 
-    INSUFFICIENT_EMBEDDING_TOKENS = (
+    INSUFFICIENT_AI_TOKENS = (
         "A Cloudflare API token must be provided either through "
         "the api_token parameter or CF_AI_API_TOKEN environment variable. "
         "Or pass the 'binding' parameter (env.AI) in a Python Worker."
     )
 
-    INSUFFICENT_VECTORIZE_TOKENS = (
+    INSUFFICIENT_VECTORIZE_TOKENS = (
         "Not enough API token values provided. "
         "Please provide a global `api_token` or `vectorize_api_token` "
         "through parameters or environment variables "

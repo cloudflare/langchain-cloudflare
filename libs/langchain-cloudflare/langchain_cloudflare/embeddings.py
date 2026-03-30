@@ -6,19 +6,12 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.utils import from_env, secret_from_env
 from more_itertools import chunked
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
-from typing_extensions import TypedDict
 
 from ._errors import TokenErrors
+from ._types import Headers
 
 # MARK: - Constants
 DEFAULT_MODEL_NAME = "@cf/baai/bge-base-en-v1.5"
-
-
-# MARK: - Type Definitions
-class Headers(TypedDict):
-    Authorization: str
-    "Authorization header for Cloudflare API"
-    "Format: Bearer <api_token>"
 
 
 # MARK: - CloudflareWorkersAIEmbeddings
@@ -145,8 +138,8 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             raise ValueError(TokenErrors.NO_ACCOUNT_ID_SET)
 
         # Check if either api_token or CF_AI_API_TOKEN is provided
-        if not self.api_token and not self.api_token.get_secret_value():
-            raise ValueError(TokenErrors.INSUFFICIENT_EMBEDDING_TOKENS)
+        if not self.api_token or not self.api_token.get_secret_value():
+            raise ValueError(TokenErrors.INSUFFICIENT_AI_TOKENS)
 
         # Set up headers
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}
