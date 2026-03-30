@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional
 from typing_extensions import NotRequired, TypedDict
 
 
+# MARK: - Headers
 class Headers(TypedDict):
     """Headers for Cloudflare requests."""
 
