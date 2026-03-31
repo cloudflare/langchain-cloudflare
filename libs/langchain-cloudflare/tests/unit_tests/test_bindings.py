@@ -1,7 +1,10 @@
 # ruff: noqa: T201
-"""Unit tests for convert_reranker_response in bindings.py."""
+"""Unit tests for bindings.py utilities."""
 
-from langchain_cloudflare.bindings import convert_reranker_response
+from langchain_cloudflare.bindings import (
+    convert_reranker_response,
+    create_binding_run_options,
+)
 
 # MARK: - convert_reranker_response Tests
 
@@ -68,3 +71,34 @@ class TestConvertRerankerResponse:
         }
         result = convert_reranker_response(data)
         assert result == [{"id": 0, "score": 0.9}]
+
+
+# MARK: - create_binding_run_options Tests
+class TestCreateBindingRunOptions:
+    """Test create_binding_run_options builds correct options objects."""
+
+    def test_no_options_returns_none(self):
+        """No gateway or session_id should return None."""
+        assert create_binding_run_options() is None
+
+    def test_gateway_only(self):
+        """Only gateway_id should produce gateway options."""
+        result = create_binding_run_options(gateway_id="my-gateway")
+        assert result == {"gateway": {"id": "my-gateway"}}
+        assert "headers" not in result
+
+    def test_session_id_only(self):
+        """Only session_id should produce headers options."""
+        result = create_binding_run_options(session_id="sess-123")
+        assert result == {"headers": {"x-session-affinity": "sess-123"}}
+        assert "gateway" not in result
+
+    def test_gateway_and_session_id(self):
+        """Both gateway_id and session_id should be combined."""
+        result = create_binding_run_options(
+            gateway_id="my-gateway", session_id="sess-123"
+        )
+        assert result == {
+            "gateway": {"id": "my-gateway"},
+            "headers": {"x-session-affinity": "sess-123"},
+        }

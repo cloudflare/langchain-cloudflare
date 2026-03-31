@@ -31,7 +31,9 @@ Example usage in a Python Worker:
 # MARK: - Imports
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
+
+from ._types import BindingQueryOptions
 
 # MARK: - AI Gateway Options
 
@@ -53,6 +55,46 @@ def create_gateway_options(gateway_id: Optional[str]) -> Any:
         return None
 
     options = {"gateway": {"id": gateway_id}}
+
+    try:
+        import json
+
+        from js import JSON  # type: ignore[import-not-found]
+
+        json_str = json.dumps(options)
+        return JSON.parse(json_str)
+    except ImportError:
+        return options
+
+
+def create_binding_run_options(
+    gateway_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> Any:
+    """Create the options object (third parameter) for env.AI.run().
+
+    Combines AI Gateway config and session affinity headers into a single
+    options object passed as the third parameter to the Workers AI binding.
+
+    Args:
+        gateway_id: Optional AI Gateway ID for routing requests.
+        session_id: Optional session ID for prompt caching via
+            x-session-affinity header.
+
+    Returns:
+        JS-compatible options object in Pyodide, Python dict otherwise,
+        or None if no options are needed.
+    """
+    options: Dict[str, Any] = {}
+
+    if gateway_id:
+        options["gateway"] = {"id": gateway_id}
+
+    if session_id:
+        options["headers"] = {"x-session-affinity": session_id}
+
+    if not options:
+        return None
 
     try:
         import json
@@ -117,9 +159,7 @@ def convert_binding_response_to_rest_format(
         response = response.to_py()
 
     if isinstance(response, dict):
-        if "result" in response:
-            return response
-        return {"result": response}
+        return response if "result" in response else {"result": response}
 
     return {"result": {"response": str(response)}}
 
@@ -151,7 +191,9 @@ def convert_vectors_for_binding(vectors: Any) -> Any:
         return vectors
 
 
-def convert_query_options_for_binding(options: Dict[str, Any]) -> Any:
+def convert_query_options_for_binding(
+    options: Union[BindingQueryOptions, Dict[str, Any]],
+) -> Any:
     """Convert query options dict for Vectorize binding compatibility.
 
     Args:
@@ -186,15 +228,13 @@ def convert_vectorize_query_response(response: Any) -> Dict[str, Any]:
     if hasattr(response, "to_py"):
         response = response.to_py()
 
-    # Response should have a "matches" array
-    if isinstance(response, dict):
-        return response
-
-    # Handle list directly (some bindings return matches array directly)
-    if isinstance(response, list):
-        return {"matches": response}
-
-    return {"matches": []}
+    match response:
+        case dict():
+            return response
+        case list():
+            return {"matches": response}
+        case _:
+            return {"matches": []}
 
 
 def convert_vectorize_mutation_response(response: Any) -> Dict[str, Any]:
@@ -279,32 +319,18 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
     if hasattr(response, "to_py"):
         response = response.to_py()
 
-    # Response should be a list of {id, score} objects
     if isinstance(response, list):
         return response
 
-    # Handle wrapped response format
     if isinstance(response, dict):
-        if "result" in response:
-            result = response["result"]
-            if hasattr(result, "to_py"):
-                result = result.to_py()
-            if isinstance(result, list):
-                return result
-        # Native AI binding returns {"response": [...], "usage": {...}}
-        if "response" in response:
-            resp = response["response"]
-            if hasattr(resp, "to_py"):
-                resp = resp.to_py()
-            if isinstance(resp, list):
-                return resp
-        # Some responses might have a different structure
-        if "data" in response:
-            data = response["data"]
-            if hasattr(data, "to_py"):
-                data = data.to_py()
-            if isinstance(data, list):
-                return data
+        # Try known wrapper keys: "result", "response", "data"
+        for key in ("result", "response", "data"):
+            if key in response:
+                value = response[key]
+                if hasattr(value, "to_py"):
+                    value = value.to_py()
+                if isinstance(value, list):
+                    return value
 
     return []
 
@@ -312,6 +338,7 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
 __all__ = [
     # Workers AI binding utilities
     "create_gateway_options",
+    "create_binding_run_options",
     "convert_payload_for_binding",
     "convert_binding_response_to_rest_format",
     # Vectorize binding utilities

@@ -8,6 +8,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.1]
+
+#### Added
+
+- **Prompt caching via session affinity**: New `session_id` parameter on `ChatCloudflareWorkersAI` sets the `x-session-affinity` header, enabling prompt prefix caching on supported models (e.g., `@cf/moonshotai/kimi-k2.5`). Works with both REST API (httpx client header) and Worker bindings (options parameter to `env.AI.run()`).
+- **AI Gateway request handling**: New `aig_request_timeout`, `aig_max_attempts`, `aig_retry_delay`, and `aig_backoff` parameters for controlling timeout and retry behavior when routing through AI Gateway. Headers are only sent when `ai_gateway` is configured.
+- **Centralized error messages**: New `_errors.py` module with `TokenErrors` StrEnum for consistent, reusable error messages across embeddings, rerankers, and vectorstores.
+- **Shared type definitions**: New `_types.py` module with `BindingQueryOptions`, `VectorizedDict`, `Headers`, and `VectorizeHeaders` TypedDicts to reduce duplication.
+- **`create_binding_run_options()`**: New binding utility that combines AI Gateway config and session affinity into a single options object for `env.AI.run()`.
+- **Worker `/session-affinity` endpoint**: Example endpoint demonstrating prompt caching with session affinity via binding.
+
+#### Fixed
+
+- **StrEnum `__str__` returning class name**: Custom `StrEnum(str, Enum)` returned `TokenErrors.MEMBER_NAME` instead of the actual error message when passed to `ValueError`. Added `__str__` override to return `self.value`.
+- **Token validation with `None` api_token**: Corrected boolean logic in embeddings and rerankers to safely handle `None` api_token without `AttributeError`.
+
+#### Changed
+
+- **DRY model behaviors**: Extracted `_REASONING_BEHAVIOR` shared `ModelBehavior` instance to eliminate duplication across reasoning model entries in `MODEL_BEHAVIORS`.
+- **Message conversion refactor**: Extracted `_convert_tool_call()` and `_convert_ai_message()` helpers, refactored `_convert_message_to_dict` to use structural pattern matching.
+- **Vectorstore helpers**: Added `_get_token()` method and `fully_qualified_base_url` cached property for cleaner token resolution and URL construction.
+- **Reranker response extraction**: Added `_extract_response_data` static method to DRY up sync/async response parsing.
+- **Version bump**: 0.3.0 → 0.3.1 (session affinity, AI Gateway headers, refactors).
+
+#### Tests
+
+- Added unit tests for token validation in embeddings and rerankers (catches `None` api_token bugs).
+- Added unit tests for `create_binding_run_options()` (gateway, session, combined).
+- Added unit tests for session affinity header plumbing and AI Gateway headers.
+- Added REST API integration tests for prompt caching with session affinity (sync + async).
+- Added Worker integration tests for session affinity via `/session-affinity` endpoint.
+
 ### [0.3.0]
 
 #### Added

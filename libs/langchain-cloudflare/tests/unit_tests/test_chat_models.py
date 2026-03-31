@@ -627,3 +627,99 @@ class TestGptOss:
         translated = llm._translate_params_for_model(params)
 
         assert translated["response_format"] == {"type": "json_object"}
+
+
+# MARK: - Session Affinity Tests
+class TestSessionAffinity:
+    """Tests for prompt caching via x-session-affinity header."""
+
+    def test_session_id_sets_header(self):
+        """session_id should set x-session-affinity header on the client."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            session_id="my-session-123",
+        )
+        assert llm.client.headers["x-session-affinity"] == "my-session-123"
+        assert llm.async_client.headers["x-session-affinity"] == "my-session-123"
+
+    def test_no_session_id_no_header(self):
+        """Without session_id, x-session-affinity header should not be set."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        )
+        assert "x-session-affinity" not in llm.client.headers
+
+    def test_session_id_with_binding_skips_client(self):
+        """With binding, session_id should be stored but no client created."""
+        llm = ChatCloudflareWorkersAI(
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            binding=object(),
+            session_id="my-session-123",
+        )
+        assert llm.session_id == "my-session-123"
+        assert llm.client is None
+
+
+# MARK: - AI Gateway Request Handling Tests
+class TestAIGatewayHeaders:
+    """Tests for AI Gateway timeout and retry headers."""
+
+    def test_aig_headers_set_with_gateway(self):
+        """AI Gateway headers should be set when ai_gateway is configured."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            ai_gateway="my-gateway",
+            aig_request_timeout=5000,
+            aig_max_attempts=3,
+            aig_retry_delay=1000,
+            aig_backoff="exponential",
+        )
+        assert llm.client.headers["cf-aig-request-timeout"] == "5000"
+        assert llm.client.headers["cf-aig-max-attempts"] == "3"
+        assert llm.client.headers["cf-aig-retry-delay"] == "1000"
+        assert llm.client.headers["cf-aig-backoff"] == "exponential"
+
+    def test_aig_headers_not_set_without_gateway(self):
+        """AI Gateway headers should NOT be set when ai_gateway is not configured."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            aig_request_timeout=5000,
+            aig_max_attempts=3,
+        )
+        assert "cf-aig-request-timeout" not in llm.client.headers
+        assert "cf-aig-max-attempts" not in llm.client.headers
+
+    def test_aig_partial_headers(self):
+        """Only specified AI Gateway headers should be set."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            ai_gateway="my-gateway",
+            aig_request_timeout=5000,
+        )
+        assert llm.client.headers["cf-aig-request-timeout"] == "5000"
+        assert "cf-aig-max-attempts" not in llm.client.headers
+        assert "cf-aig-retry-delay" not in llm.client.headers
+        assert "cf-aig-backoff" not in llm.client.headers
+
+    def test_session_id_with_aig_headers(self):
+        """Session affinity and AI Gateway headers should coexist."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            ai_gateway="my-gateway",
+            session_id="session-456",
+            aig_request_timeout=5000,
+        )
+        assert llm.client.headers["x-session-affinity"] == "session-456"
+        assert llm.client.headers["cf-aig-request-timeout"] == "5000"

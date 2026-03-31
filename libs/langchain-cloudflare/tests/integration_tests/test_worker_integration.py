@@ -1024,3 +1024,57 @@ class TestWorkerMultiModal:
         assert response.status_code == 400
         data = response.json()
         assert "error" in data
+
+
+# MARK: - Session Affinity (Prompt Caching) Tests
+class TestWorkerSessionAffinity:
+    """Test prompt caching via session_id on Worker binding.
+
+    Tests the /session-affinity endpoint which passes session_id
+    through to the binding options as x-session-affinity header.
+    Currently only kimi-k2.5 is known to support prompt caching.
+    """
+
+    def test_session_affinity_basic(self, dev_server):
+        """POST /session-affinity should return a response with session_id."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/session-affinity",
+            json={
+                "model": "@cf/moonshotai/kimi-k2.5",
+                "message": "Say hello in exactly 3 words.",
+                "session_id": "test-worker-session",
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=30,
+        )
+
+        print(f"  Status: {response.status_code}")  # noqa: T201
+        assert response.status_code == 200
+        data = response.json()
+        print(f"  Response: {data.get('response', '')[:200]}")  # noqa: T201
+        assert "response" in data
+        assert len(data["response"]) > 0
+        assert data["session_id"] == "test-worker-session"
+
+    def test_session_affinity_repeated_calls(self, dev_server):
+        """Two calls with the same session_id should both succeed."""
+        port = dev_server
+        session_id = f"test-repeat-{uuid.uuid4().hex[:8]}"
+
+        for i in range(2):
+            response = requests.post(
+                f"http://localhost:{port}/session-affinity",
+                json={
+                    "model": "@cf/moonshotai/kimi-k2.5",
+                    "message": f"What is {i + 1} + {i + 1}?",
+                    "session_id": session_id,
+                },
+                headers={"Content-Type": "application/json"},
+                timeout=30,
+            )
+
+            print(f"  Call {i + 1} status: {response.status_code}")  # noqa: T201
+            assert response.status_code == 200
+            data = response.json()
+            assert len(data["response"]) > 0
