@@ -29,7 +29,7 @@ async = ["greenlet>=3.0.0"]
 [dependency-groups]
 dev = [
     "ruff>=0.8.4",
-    "mypy>=1.15.0",
+    "mypy>=1.15.0,<2.0.0",
     "codespell>=2.2.6",
     "types-requests>=2.31.0",
 ]
