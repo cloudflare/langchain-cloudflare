@@ -3198,8 +3198,6 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If account_id or index_name is not provided
         """
-        index_name = index_name or cls.index_name
-
         if not account_id or not index_name:
             raise ValueError("account_id and index_name must be provided")
 
@@ -3289,9 +3287,6 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If account_id or index_name is not provided
         """
-
-        index_name = index_name or cls.index_name
-
         if not account_id or not index_name:
             raise ValueError("account_id and index_name must be provided")
 
@@ -3372,8 +3367,6 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If the number of documents exceeds MAX_INSERT_SIZE.
         """
-        index_name = index_name or cls.index_name
-
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
 
@@ -3444,8 +3437,6 @@ class CloudflareVectorize(VectorStore):
         Raises:
             ValueError: If the number of documents exceeds MAX_INSERT_SIZE.
         """
-        index_name = index_name or cls.index_name
-
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
 
