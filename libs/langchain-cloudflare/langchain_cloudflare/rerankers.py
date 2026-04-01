@@ -16,6 +16,8 @@ from langchain_core.documents import Document
 from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
+from ._errors import TokenErrors
+
 # MARK: - Constants
 DEFAULT_RERANKER_MODEL = "@cf/baai/bge-reranker-base"
 
@@ -121,18 +123,10 @@ class CloudflareWorkersAIReranker(BaseModel):
 
         # Validate credentials
         if not self.account_id:
-            raise ValueError(
-                "A Cloudflare account ID must be provided either through "
-                "the account_id parameter or CF_ACCOUNT_ID environment variable. "
-                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
-            )
+            raise ValueError(TokenErrors.NO_ACCOUNT_ID_SET)
 
-        if not self.api_token or self.api_token.get_secret_value() == "":
-            raise ValueError(
-                "A Cloudflare API token must be provided either through "
-                "the api_token parameter or CF_AI_API_TOKEN environment variable. "
-                "Or pass the 'binding' parameter (env.AI) in a Python Worker."
-            )
+        if not self.api_token or not self.api_token.get_secret_value():
+            raise ValueError(TokenErrors.INSUFFICIENT_AI_TOKENS)
 
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}
 
@@ -218,6 +212,25 @@ class CloudflareWorkersAIReranker(BaseModel):
 
         return results
 
+    @staticmethod
+    def _extract_response_data(response_json: Dict[str, Any]) -> Any:
+        """Extract response data from Cloudflare REST API response format.
+
+        Handles format: {"result": {"response": [...], "usage": {...}}, "success": true}
+
+        Args:
+            response_json: The parsed JSON response from the API.
+
+        Returns:
+            The response data list for processing.
+        """
+        result = response_json.get("result", response_json)
+        if isinstance(result, dict) and "response" in result:
+            return result["response"]
+        if "response" in response_json:
+            return response_json["response"]
+        return result
+
     # MARK: - Public Methods
     def rerank(
         self,
@@ -258,18 +271,7 @@ class CloudflareWorkersAIReranker(BaseModel):
         response.raise_for_status()
 
         response_json = response.json()
-        # Handle Cloudflare REST API response format:
-        # {"result": {"response": [...], "usage": {...}}, "success": true, ...}
-        if "result" in response_json:
-            result = response_json["result"]
-            if isinstance(result, dict) and "response" in result:
-                response_data = result["response"]
-            else:
-                response_data = result
-        elif "response" in response_json:
-            response_data = response_json["response"]
-        else:
-            response_data = response_json
+        response_data = self._extract_response_data(response_json)
 
         return self._process_response(
             response_data, documents, original_docs, return_documents
@@ -323,18 +325,7 @@ class CloudflareWorkersAIReranker(BaseModel):
             response.raise_for_status()
 
         response_json = response.json()
-        # Handle Cloudflare REST API response format:
-        # {"result": {"response": [...], "usage": {...}}, "success": true, ...}
-        if "result" in response_json:
-            result = response_json["result"]
-            if isinstance(result, dict) and "response" in result:
-                response_data = result["response"]
-            else:
-                response_data = result
-        elif "response" in response_json:
-            response_data = response_json["response"]
-        else:
-            response_data = response_json
+        response_data = self._extract_response_data(response_json)
 
         return self._process_response(
             response_data, documents, original_docs, return_documents

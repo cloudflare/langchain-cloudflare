@@ -183,36 +183,27 @@ def _normalize_response_format_for_cloudflare(
 
 
 # MARK: - Model Behavior Registry Entries
+_REASONING_BEHAVIOR = ModelBehavior(
+    embed_tool_calls_in_content=False,
+    supports_reasoning_content=True,
+)
+
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
-    "llama": ModelBehavior(
-        embed_tool_calls_in_content=True,
-    ),
-    "mistral": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        unsupported_params=("tool_choice",),
-        response_format_param="guided_json",
-    ),
-    "qwen": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
-    ),
     "glm": ModelBehavior(
         embed_tool_calls_in_content=False,
         unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
         supports_reasoning_content=True,
     ),
-    "gpt-oss": ModelBehavior(
+    "gpt-oss": _REASONING_BEHAVIOR,
+    "kimi": _REASONING_BEHAVIOR,
+    "llama": ModelBehavior(embed_tool_calls_in_content=True),
+    "mistral": ModelBehavior(
         embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
+        unsupported_params=("tool_choice",),
+        response_format_param="guided_json",
     ),
-    "kimi": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
-    ),
-    "nemotron": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        supports_reasoning_content=True,
-    ),
+    "nemotron": _REASONING_BEHAVIOR,
+    "qwen": _REASONING_BEHAVIOR,
 }
 
 DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
@@ -389,6 +380,27 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     """Optional httpx.AsyncClient. Only used for async invocations. Must specify
         http_client as well if you'd like a custom client for sync invocations."""
 
+    # MARK: - Session Affinity (Prompt Caching)
+    session_id: Optional[str] = None
+    """Session ID for prompt caching via x-session-affinity header.
+    Routes requests to the same model instance to enable cache hits.
+    See: https://developers.cloudflare.com/workers-ai/features/prompt-caching/"""
+
+    # MARK: - AI Gateway Request Handling
+    aig_request_timeout: Optional[int] = None
+    """AI Gateway request timeout in milliseconds. Triggers fallbacks or retries
+    if a provider takes too long to respond. Only used with ai_gateway.
+    Sets the cf-aig-request-timeout header."""
+    aig_max_attempts: Optional[int] = None
+    """Maximum number of retry attempts for AI Gateway. Only used with ai_gateway.
+    Sets the cf-aig-max-attempts header."""
+    aig_retry_delay: Optional[int] = None
+    """Delay between retries in milliseconds for AI Gateway. Only used with ai_gateway.
+    Sets the cf-aig-retry-delay header."""
+    aig_backoff: Optional[str] = None
+    """Backoff strategy for AI Gateway retries: "constant", "linear", or "exponential".
+    Only used with ai_gateway. Sets the cf-aig-backoff header."""
+
     model_config = ConfigDict(
         populate_by_name=True,
     )
@@ -465,23 +477,39 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 # Use the custom base_url if provided, otherwise use the default
                 base_url = self.base_url or "https://api.cloudflare.com/client/v4"
 
+            # Build request headers
+            headers: Dict[str, str] = {
+                "Authorization": f"Bearer {self.api_token.get_secret_value()}",
+            }
+
+            # Session affinity for prompt caching
+            if self.session_id:
+                headers["x-session-affinity"] = self.session_id
+
+            # AI Gateway request handling headers
+            if self.ai_gateway:
+                if self.aig_request_timeout is not None:
+                    headers["cf-aig-request-timeout"] = str(self.aig_request_timeout)
+                if self.aig_max_attempts is not None:
+                    headers["cf-aig-max-attempts"] = str(self.aig_max_attempts)
+                if self.aig_retry_delay is not None:
+                    headers["cf-aig-retry-delay"] = str(self.aig_retry_delay)
+                if self.aig_backoff is not None:
+                    headers["cf-aig-backoff"] = self.aig_backoff
+
             # Configure the httpx client
             if not self.client:
                 self.client = httpx.Client(
                     base_url=base_url,
                     timeout=self.request_timeout,  # type: ignore
-                    headers={
-                        "Authorization": f"Bearer {self.api_token.get_secret_value()}",
-                    },
+                    headers=headers,
                 )
 
             if not self.async_client:
                 self.async_client = httpx.AsyncClient(
                     base_url=base_url,
                     timeout=self.request_timeout,  # type: ignore
-                    headers={
-                        "Authorization": f"Bearer {self.api_token.get_secret_value()}",
-                    },
+                    headers=headers,
                 )
 
         except ImportError:
@@ -1170,18 +1198,21 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         from .bindings import (
             convert_binding_response_to_rest_format,
             convert_payload_for_binding,
-            create_gateway_options,
+            create_binding_run_options,
         )
 
         # Convert payload to JS-compatible format for Pyodide
         js_payload = convert_payload_for_binding(payload)
 
-        # Create AI Gateway options if configured
-        gateway_options = create_gateway_options(self.ai_gateway)
+        # Create options for the binding (gateway + session affinity)
+        run_options = create_binding_run_options(
+            gateway_id=self.ai_gateway,
+            session_id=self.session_id,
+        )
 
-        # Call the binding with optional gateway
-        if gateway_options is not None:
-            response = await self.binding.run(self.model, js_payload, gateway_options)
+        # Call the binding with optional options
+        if run_options is not None:
+            response = await self.binding.run(self.model, js_payload, run_options)
         else:
             response = await self.binding.run(self.model, js_payload)
 
@@ -1723,87 +1754,72 @@ def _is_pydantic_class(obj: Any) -> bool:
 
 
 # MARK: - Type Conversion Helpers
+def _convert_tool_call(tc: ToolCall) -> Dict[str, Any]:
+    """Convert a LangChain tool call to the Cloudflare API format."""
+    args = json.dumps(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]
+    return {
+        "id": tc.get("id", str(uuid.uuid4())),
+        "type": "function",
+        "function": {"name": tc["name"], "arguments": args},
+    }
+
+
+def _convert_ai_message(message: AIMessage) -> Dict[str, Any]:
+    """Convert an AIMessage to a dict, handling tool calls and legacy function_call."""
+    if message.tool_calls:
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [_convert_tool_call(tc) for tc in message.tool_calls],
+        }
+
+    content = message.content
+    if content == "":
+        content = None  # type: ignore
+
+    message_dict: Dict[str, Any] = {"role": "assistant", "content": content}
+
+    # Handle legacy function_call format (backward compatibility)
+    if "function_call" in message.additional_kwargs:
+        message_dict["function_call"] = message.additional_kwargs["function_call"]
+        message_dict["content"] = None
+
+    return message_dict
+
+
 def _convert_message_to_dict(message: BaseMessage) -> dict:
     """Convert a LangChain message to a dictionary,
     meeting Cloudflare AI Workers requirements."""
     message_dict: Dict[str, Any]
-
-    if isinstance(message, ChatMessage):
-        message_dict = {"role": message.role, "content": message.content}
-
-    elif isinstance(message, HumanMessage):
-        message_dict = {"role": "user", "content": message.content}
-
-    elif isinstance(message, AIMessage):
-        # For assistant messages, handle tool calls specially
-        if message.tool_calls:
-            # When there are tool calls, set content to None
-            tool_calls = []
-            for tc in message.tool_calls:
-                # Convert args to a JSON string if needed
-                args_str = (
-                    json.dumps(tc["args"])
-                    if isinstance(tc["args"], dict)
-                    else tc["args"]
-                )
-
-                tool_calls.append(
-                    {
-                        "id": tc.get("id", str(uuid.uuid4())),  # Generate ID if missing
-                        "type": "function",
-                        "function": {"name": tc["name"], "arguments": args_str},
-                    }
-                )
-
-            # Create message with tool_calls but no content
+    match message:
+        case ChatMessage():
+            message_dict = {"role": message.role, "content": message.content}
+        case HumanMessage():
+            message_dict = {"role": "user", "content": message.content}
+        case AIMessage():
+            message_dict = _convert_ai_message(message)
+        case SystemMessage():
+            message_dict = {"role": "system", "content": message.content}
+        case FunctionMessage():
             message_dict = {
-                "role": "assistant",
-                "content": None,  # Must be null, not empty string
-                "tool_calls": tool_calls,
+                "role": "function",
+                "name": message.name,
+                "content": message.content,
             }
-        else:
-            # For regular assistant messages without tool calls
-            content = message.content
-            # Important: if content is empty string, convert to null
-            if content == "":
-                content = None  # type: ignore
-
-            message_dict = {"role": "assistant", "content": content}
-
-        # Handle legacy function_call format (backward compatibility)
-        if "function_call" in message.additional_kwargs and not message.tool_calls:
-            function_call = message.additional_kwargs["function_call"]
-            message_dict["function_call"] = function_call
-            # If function_call present, follow same pattern - set content to null
-            message_dict["content"] = None
-
-    elif isinstance(message, SystemMessage):
-        message_dict = {"role": "system", "content": message.content}
-
-    elif isinstance(message, FunctionMessage):
-        message_dict = {
-            "role": "function",
-            "name": message.name,
-            "content": message.content,
-        }
-
-    elif isinstance(message, ToolMessage):
-        message_dict = {
-            "role": "tool",
-            "name": message.name,
-            "content": message.content,
-        }
-
-        # Only include tool_call_id if it's set
-        if message.tool_call_id:
-            message_dict["tool_call_id"] = message.tool_call_id
-
-    else:
-        raise TypeError(f"Got unknown type {message}")
+        case ToolMessage():
+            message_dict = {
+                "role": "tool",
+                "name": message.name,
+                "content": message.content,
+            }
+            if message.tool_call_id:
+                message_dict["tool_call_id"] = message.tool_call_id
+        case _:
+            raise TypeError(f"Got unknown type {message}")
 
     # Add any additional kwargs not already handled
     for key, value in message.additional_kwargs.items():
-        if key not in message_dict and key not in ["function_call", "tool_calls"]:
+        if key not in message_dict and key not in {"function_call", "tool_calls"}:
             message_dict[key] = value
 
     return message_dict

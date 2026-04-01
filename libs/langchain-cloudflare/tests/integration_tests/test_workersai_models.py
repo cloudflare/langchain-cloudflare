@@ -33,6 +33,7 @@ Usage:
 
 import base64
 import os
+import uuid
 from typing import List, Optional
 
 import pytest
@@ -1185,3 +1186,138 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("Tests Complete")
     print("=" * 60)
+
+
+# MARK: - Session Affinity (Prompt Caching) Tests
+class TestSessionAffinity:
+    """Test prompt caching via x-session-affinity header.
+
+    Currently only kimi-k2.5 is known to support prompt caching.
+    """
+
+    @pytest.mark.parametrize("model", ["@cf/moonshotai/kimi-k2.5"])
+    def test_session_affinity_basic_invoke(self, model: str):
+        """Verify that requests with session_id succeed and produce responses."""
+        llm = ChatCloudflareWorkersAI(
+            model=model,
+            session_id="test-session-integration",
+        )
+        result = llm.invoke("Say hello in exactly 3 words.")
+        text = get_text_content(result)
+        assert text, f"Empty response from {model} with session_id"
+
+    @pytest.mark.parametrize("model", ["@cf/moonshotai/kimi-k2.5"])
+    def test_session_affinity_cached_tokens(self, model: str):
+        """Two calls with same session_id should succeed; cache hits are best-effort.
+
+        Prompt caching depends on Cloudflare routing both requests to the same
+        machine, which session affinity makes *likely* but not guaranteed.
+        We verify the plumbing works and log cache metrics without asserting
+        on cached_tokens, since it's infrastructure-dependent.
+        """
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        # Long system prompt to ensure enough tokens to cache
+        system_prompt = "You are an expert assistant. " * 50
+        msgs = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content="Say hi in 3 words."),
+        ]
+
+        session = f"test-cache-{uuid.uuid4().hex[:8]}"
+        llm = ChatCloudflareWorkersAI(model=model, session_id=session)
+
+        # First call primes the cache
+        r1 = llm.invoke(msgs)
+        assert get_text_content(r1), "First call produced empty response"
+        usage1 = r1.response_metadata.get("token_usage", {})
+        cached1 = usage1.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+        print(f"  Call 1 cached_tokens: {cached1}")
+
+        # Second call may hit the cache (best-effort)
+        r2 = llm.invoke(msgs)
+        assert get_text_content(r2), "Second call produced empty response"
+        usage2 = r2.response_metadata.get("token_usage", {})
+        cached2 = usage2.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+        print(f"  Call 2 cached_tokens: {cached2}")
+        # Cache hits are best-effort; log but don't assert
+        if cached2 > 0:
+            print(f"  Cache HIT: {cached2} tokens cached")
+        else:
+            print("  Cache MISS: caching is best-effort, not guaranteed")
+
+    @pytest.mark.parametrize("model", ["@cf/moonshotai/kimi-k2.5"])
+    @pytest.mark.asyncio
+    async def test_session_affinity_cached_tokens_async(self, model: str):
+        """Async variant: two calls with same session_id should succeed."""
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        system_prompt = "You are an expert assistant. " * 50
+        msgs = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content="Say hi in 3 words."),
+        ]
+
+        session = f"test-cache-async-{uuid.uuid4().hex[:8]}"
+        llm = ChatCloudflareWorkersAI(model=model, session_id=session)
+
+        r1 = await llm.ainvoke(msgs)
+        assert get_text_content(r1), "First async call produced empty response"
+
+        r2 = await llm.ainvoke(msgs)
+        assert get_text_content(r2), "Second async call produced empty response"
+        usage2 = r2.response_metadata.get("token_usage", {})
+        cached2 = usage2.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+        print(f"  Async call 2 cached_tokens: {cached2}")
+        if cached2 > 0:
+            print(f"  Async cache HIT: {cached2} tokens cached")
+        else:
+            print("  Async cache MISS: caching is best-effort, not guaranteed")
+
+
+# MARK: - AI Gateway Request Handling Tests
+@pytest.mark.skipif(
+    not os.environ.get("AI_GATEWAY"),
+    reason="AI_GATEWAY env var not set",
+)
+class TestAIGatewayHeaders:
+    """Test AI Gateway timeout and retry headers.
+
+    Requires AI_GATEWAY environment variable to be set.
+    """
+
+    def test_aig_timeout_invoke(self):
+        """Request with AI Gateway timeout header should succeed."""
+        llm = ChatCloudflareWorkersAI(
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            ai_gateway=os.environ["AI_GATEWAY"],
+            aig_request_timeout=30000,
+        )
+        result = llm.invoke("Say hello in one word.")
+        text = get_text_content(result)
+        assert text, "Empty response with aig_request_timeout"
+
+    def test_aig_retries_invoke(self):
+        """Request with AI Gateway retry headers should succeed."""
+        llm = ChatCloudflareWorkersAI(
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            ai_gateway=os.environ["AI_GATEWAY"],
+            aig_max_attempts=2,
+            aig_retry_delay=1000,
+            aig_backoff="exponential",
+        )
+        result = llm.invoke("Say hello in one word.")
+        text = get_text_content(result)
+        assert text, "Empty response with aig retry headers"
+
+    def test_aig_timeout_with_session_id(self):
+        """AI Gateway headers and session_id should work together."""
+        llm = ChatCloudflareWorkersAI(
+            model="@cf/moonshotai/kimi-k2.5",
+            ai_gateway=os.environ["AI_GATEWAY"],
+            session_id="test-aig-session",
+            aig_request_timeout=30000,
+        )
+        result = llm.invoke("Say hello.")
+        text = get_text_content(result)
+        assert text, "Empty response with combined headers"

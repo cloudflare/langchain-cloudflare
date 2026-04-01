@@ -132,6 +132,9 @@ class Default(WorkerEntrypoint):
             # Multi-modal endpoint
             elif path == "multi-modal":
                 return await self.handle_multi_modal(request)
+            # Session affinity (prompt caching) endpoint
+            elif path == "session-affinity":
+                return await self.handle_session_affinity(request)
             else:
                 return await self.handle_index()
 
@@ -1381,5 +1384,49 @@ Return JSON with an "announcements" array. Each announcement should have:
                 "prompt": prompt,
                 "response": content,
                 "content_type": type(response.content).__name__,
+            }
+        )
+
+    # MARK: - Session Affinity Handler
+
+    async def handle_session_affinity(self, request):
+        """Handle chat with session affinity (prompt caching) via binding.
+
+        Passes session_id through to the binding options to enable
+        x-session-affinity routing to the same model instance.
+
+        Request body:
+            - model: Workers AI model name (optional, defaults to kimi-k2.5)
+            - message: User message text
+            - session_id: Session identifier for prompt caching
+        """
+        data = await request.json()
+        model = data.get("model", "@cf/moonshotai/kimi-k2.5")
+        message = data.get("message", "Hello!")
+        session_id = data.get("session_id", "test-session")
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.7,
+            session_id=session_id,
+        )
+
+        response = await llm.ainvoke(message)
+
+        content = response.content
+        if isinstance(content, list):
+            text_parts = [
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            content = " ".join(text_parts)
+
+        return Response.json(
+            {
+                "response": content,
+                "model": model,
+                "session_id": session_id,
             }
         )
