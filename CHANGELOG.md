@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.2]
+
+#### Added
+
+- **`@cf/google/gemma-4-26b-a4b-it`**: Adds Gemma 4 26B with reasoning content extraction, tool calling, structured output, and vision (image base64) support.
+
+---
+
 ### [0.3.1]
 
 #### Added
