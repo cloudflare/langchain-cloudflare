@@ -194,6 +194,7 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
         unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
         supports_reasoning_content=True,
     ),
+    "gemma": _REASONING_BEHAVIOR,
     "gpt-oss": _REASONING_BEHAVIOR,
     "kimi": _REASONING_BEHAVIOR,
     "llama": ModelBehavior(embed_tool_calls_in_content=True),

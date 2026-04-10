@@ -64,6 +64,7 @@ MODELS = [
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.5",
+    "@cf/google/gemma-4-26b-a4b-it",
 ]
 
 
@@ -705,6 +706,7 @@ class TestReasoningContent:
         "@cf/openai/gpt-oss-120b",
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.5",
+        "@cf/google/gemma-4-26b-a4b-it",
         "@cf/nvidia/nemotron-3-120b-a12b",
     ]
 

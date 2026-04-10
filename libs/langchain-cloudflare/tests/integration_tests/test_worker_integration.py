@@ -35,6 +35,7 @@ MODELS = [
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.5",
+    "@cf/google/gemma-4-26b-a4b-it",
 ]
 
 
@@ -871,6 +872,7 @@ class TestWorkerReasoningContent:
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.5",
         "@cf/nvidia/nemotron-3-120b-a12b",
+        "@cf/google/gemma-4-26b-a4b-it",
     ]
 
     @pytest.mark.parametrize("model", REASONING_MODELS)
