@@ -37,6 +37,7 @@ SUPPORTED_MODELS = [
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.5",
+    "@cf/google/gemma-4-26b-a4b-it",
 ]
 
 DEFAULT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
