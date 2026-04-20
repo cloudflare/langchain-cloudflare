@@ -18,10 +18,12 @@ AND
 
 OR (if using separately scoped tokens)
 
-- `CF_AI_API_TOKEN` (CloudflareWorkersAI and CloudflareWorkersAIEmbeddings)
+- `CF_AI_API_TOKEN` (CloudflareWorkersAI, CloudflareWorkersAIEmbeddings, CloudflareBrowserRunLoader, CloudflareBrowserRunTool)
 - `CF_VECTORIZE_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_DATABASE_ID` (CloudflareVectorize)
+
+> **Browser Run** requires the *Browser Rendering – Edit* permission on your API token. See [Browser Run setup](https://developers.cloudflare.com/browser-run/quick-actions/#before-you-begin).
 
 ## Chat Models
 
@@ -96,34 +98,86 @@ loader = CloudflareBrowserRunLoader(
     crawl_depth=2,
 )
 docs = loader.load()
+
+# Scrape specific elements with CSS selectors
+loader = CloudflareBrowserRunLoader(
+    urls=["https://example.com/pricing"],
+    mode="scrape",
+    elements=[{"selector": "h1"}, {"selector": ".plan-card"}],
+)
+docs = loader.load()  # one Document per matched selector group
+
+# Async support
+docs = await loader.aload()
 ```
 
-Supported modes: `markdown`, `crawl`, `scrape`, `content`.
+Supported modes:
 
-> **Note:** Requires an API token with *Browser Rendering – Edit* permission (`CF_API_TOKEN` or `CF_AI_API_TOKEN`).
+| Mode | Endpoint | Description |
+|------|----------|-------------|
+| `markdown` | [`/markdown`](https://developers.cloudflare.com/browser-run/quick-actions/markdown-endpoint/) | Clean markdown from any page |
+| `crawl` | [`/crawl`](https://developers.cloudflare.com/browser-run/quick-actions/crawl-endpoint/) | Multi-page crawl with async polling |
+| `scrape` | [`/scrape`](https://developers.cloudflare.com/browser-run/quick-actions/scrape-endpoint/) | CSS selector-based element extraction |
+| `content` | [`/content`](https://developers.cloudflare.com/browser-run/quick-actions/content-endpoint/) | Raw rendered HTML |
 
 ## Browser Run (Agent Tool)
 
 `CloudflareBrowserRunTool` gives [LangGraph](https://langchain-ai.github.io/langgraph/) agents the ability to interact with the live web.
 
 ```python
-from langchain_cloudflare import CloudflareBrowserRunTool, ChatCloudflareWorkersAI
-from langgraph.prebuilt import create_react_agent
+from langchain_cloudflare import CloudflareBrowserRunTool
 
-llm = ChatCloudflareWorkersAI()
+# Read any page as markdown
+tool = CloudflareBrowserRunTool(mode="markdown")
+content = tool.invoke({"url": "https://example.com"})
+
+# AI-powered structured data extraction
+tool = CloudflareBrowserRunTool(
+    mode="json",
+    json_prompt="Extract the company name, pricing plans, and key features.",
+)
+data = tool.invoke({"url": "https://www.cloudflare.com/plans/"})
+# Returns: {"company_name": "Cloudflare", "pricing_plans": [{"name": "Free", "price": "Free"}, ...]}
+
+# Extract with a JSON schema for strict typing
+tool = CloudflareBrowserRunTool(
+    mode="json",
+    json_response_format={
+        "type": "json_schema",
+        "schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "links": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+    },
+)
+
+# Discover links on a page
+tool = CloudflareBrowserRunTool(mode="links")
+links = tool.invoke({"url": "https://example.com"})
+
+# Use multiple tools in a LangGraph agent
+from langgraph.prebuilt import ToolNode
+
 tools = [
     CloudflareBrowserRunTool(mode="markdown"),
-    CloudflareBrowserRunTool(
-        mode="json",
-        json_prompt="Extract the company name, industry, and employee count.",
-    ),
+    CloudflareBrowserRunTool(mode="json", json_prompt="Extract key facts."),
     CloudflareBrowserRunTool(mode="links"),
 ]
-agent = create_react_agent(llm, tools)
-result = agent.invoke({"messages": [("user", "Research example.com")]})
+tool_node = ToolNode(tools)  # each tool auto-named: cloudflare_browser_run_markdown, etc.
 ```
 
-Supported modes: `markdown`, `json`, `links`, `screenshot`, `pdf`.
+Supported modes:
+
+| Mode | Endpoint | Description |
+|------|----------|-------------|
+| `markdown` | [`/markdown`](https://developers.cloudflare.com/browser-run/quick-actions/markdown-endpoint/) | Read any webpage as markdown |
+| `json` | [`/json`](https://developers.cloudflare.com/browser-run/quick-actions/json-endpoint/) | AI-powered structured data extraction |
+| `links` | [`/links`](https://developers.cloudflare.com/browser-run/quick-actions/links-endpoint/) | Discover all links on a page |
+| `screenshot` | [`/screenshot`](https://developers.cloudflare.com/browser-run/quick-actions/screenshot-endpoint/) | Capture screenshot (base64 PNG) |
+| `pdf` | [`/pdf`](https://developers.cloudflare.com/browser-run/quick-actions/pdf-endpoint/) | Generate PDF (base64) |
 
 ### Browser Run in LangGraph Workflows
 
