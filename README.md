@@ -18,6 +18,9 @@ It contains the following packages.
 - [ChatCloudflareWorkersAI](https://python.langchain.com/docs/integrations/chat/cloudflare_workersai/)
 - [CloudflareWorkersAIEmbeddings](https://python.langchain.com/docs/integrations/text_embedding/cloudflare_workersai/)
 - [CloudflareVectorize](https://python.langchain.com/docs/integrations/vectorstores/cloudflare_vectorize/)
+- CloudflareWorkersAIReranker
+- CloudflareBrowserRunLoader (Document Loader via [Browser Run](https://developers.cloudflare.com/browser-run/))
+- CloudflareBrowserRunTool (Agent Tool via [Browser Run](https://developers.cloudflare.com/browser-run/))
 
 ### LangGraph
 

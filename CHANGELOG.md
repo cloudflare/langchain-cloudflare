@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+
+### [0.3.5]
+
+#### Added
+
+- **`CloudflareBrowserRunLoader`**: New `BaseLoader` for document ingestion via [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/) REST API. Supports four modes: `markdown` (`/markdown`), `crawl` (`/crawl` with async polling), `scrape` (`/scrape` with CSS selectors), and `content` (`/content` for raw HTML). Includes sync (`load`, `lazy_load`) and async (`aload`, `alazy_load`) methods. Configurable crawl depth, page limit, poll interval, timeout, and all shared Browser Run options (viewport, cookies, headers, resource blocking).
+- **`CloudflareBrowserRunTool`**: New `BaseTool` for LangGraph agent workflows. Supports five modes: `markdown`, `json` (AI-powered structured data extraction via `/json`), `links` (`/links`), `screenshot` (`/screenshot`), and `pdf` (`/pdf`). Tool name is auto-set per mode (e.g. `cloudflare_browser_run_json`) for agent disambiguation. JSON mode supports both natural language prompts and JSON schema definitions for structured extraction.
+- **`TokenErrors.INSUFFICIENT_BROWSER_RUN_TOKEN`**: New centralized error message for missing Browser Run API credentials. Notes that Browser Run is REST-only (no Worker binding support).
+
+#### Changed
+
+- **Version bump**: 0.3.4 → 0.3.5 (Browser Run integration).
+
+#### Tests
+
+- Added unit tests for `CloudflareBrowserRunLoader` and `CloudflareBrowserRunTool`: token validation, configuration defaults, URL construction, header building, shared options builder.
+- Added integration tests covering markdown/content/scrape/crawl loader modes and markdown/json/links/screenshot tool modes, both sync and async.
+
+---
+
 ### [0.3.4]
 
 #### Changed

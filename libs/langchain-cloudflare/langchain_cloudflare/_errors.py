@@ -40,3 +40,10 @@ class TokenErrors(StrEnum):
         "and no `d1_api_token` provided. Please set these through parameters "
         "or environment variables (CF_API_TOKEN, CF_D1_API_TOKEN)."
     )
+
+    INSUFFICIENT_BROWSER_RUN_TOKEN = (
+        "A Cloudflare API token with Browser Rendering – Edit permission "
+        "must be provided either through the api_token parameter or "
+        "CF_API_TOKEN / CF_AI_API_TOKEN environment variable. "
+        "Browser Run is REST-only and does not support Worker bindings."
+    )

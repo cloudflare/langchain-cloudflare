@@ -59,6 +59,156 @@ vst = CloudflareVectorize(
 vst.create_index(index_name="my-cool-vectorstore")
 ```
 
+## Reranker
+
+`CloudflareWorkersAIReranker` reranks documents by relevance using [Workers AI](https://developers.cloudflare.com/workers-ai/).
+
+```python
+from langchain_cloudflare import CloudflareWorkersAIReranker
+
+reranker = CloudflareWorkersAIReranker()
+results = reranker.rerank(
+    query="What is the capital of France?",
+    documents=["Paris is the capital of France.", "Berlin is in Germany."],
+    top_k=2,
+)
+```
+
+## Browser Run (Document Loader)
+
+`CloudflareBrowserRunLoader` loads web pages as LangChain `Document` objects using [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/). It renders JavaScript-heavy pages on Cloudflare's global network and returns clean content via a simple REST API — no local browser required.
+
+```python
+from langchain_cloudflare import CloudflareBrowserRunLoader
+
+# Single page -> markdown
+loader = CloudflareBrowserRunLoader(
+    urls=["https://developers.cloudflare.com/workers-ai/"],
+    mode="markdown",
+)
+docs = loader.load()
+
+# Multi-page crawl -> knowledge base
+loader = CloudflareBrowserRunLoader(
+    urls=["https://developers.cloudflare.com/cloudflare-one/"],
+    mode="crawl",
+    crawl_limit=50,
+    crawl_depth=2,
+)
+docs = loader.load()
+```
+
+Supported modes: `markdown`, `crawl`, `scrape`, `content`.
+
+> **Note:** Requires an API token with *Browser Rendering – Edit* permission (`CF_API_TOKEN` or `CF_AI_API_TOKEN`).
+
+## Browser Run (Agent Tool)
+
+`CloudflareBrowserRunTool` gives [LangGraph](https://langchain-ai.github.io/langgraph/) agents the ability to interact with the live web.
+
+```python
+from langchain_cloudflare import CloudflareBrowserRunTool, ChatCloudflareWorkersAI
+from langgraph.prebuilt import create_react_agent
+
+llm = ChatCloudflareWorkersAI()
+tools = [
+    CloudflareBrowserRunTool(mode="markdown"),
+    CloudflareBrowserRunTool(
+        mode="json",
+        json_prompt="Extract the company name, industry, and employee count.",
+    ),
+    CloudflareBrowserRunTool(mode="links"),
+]
+agent = create_react_agent(llm, tools)
+result = agent.invoke({"messages": [("user", "Research example.com")]})
+```
+
+Supported modes: `markdown`, `json`, `links`, `screenshot`, `pdf`.
+
+### Browser Run in LangGraph Workflows
+
+Both the Loader and Tool integrate with all LangGraph patterns:
+
+**As a custom node in a DAG:**
+
+```python
+from typing import TypedDict
+from langchain_cloudflare import CloudflareBrowserRunLoader, CloudflareBrowserRunTool
+from langgraph.graph import StateGraph, START, END
+
+
+class ResearchState(TypedDict):
+    url: str
+    page_content: str
+    links: list[str]
+
+
+def fetch_page(state: ResearchState) -> dict:
+    loader = CloudflareBrowserRunLoader(urls=[state["url"]], mode="markdown")
+    docs = loader.load()
+    return {"page_content": docs[0].page_content}
+
+
+def extract_links(state: ResearchState) -> dict:
+    tool = CloudflareBrowserRunTool(mode="links")
+    links = tool.invoke({"url": state["url"]}).strip().split("\n")
+    return {"links": links}
+
+
+graph = StateGraph(ResearchState)
+graph.add_node("fetch_page", fetch_page)
+graph.add_node("extract_links", extract_links)
+graph.add_edge(START, "fetch_page")
+graph.add_edge(START, "extract_links")  # runs in parallel
+graph.add_edge("fetch_page", END)
+graph.add_edge("extract_links", END)
+app = graph.compile()
+
+result = app.invoke({"url": "https://example.com", "page_content": "", "links": []})
+```
+
+**As tools in a supervisor pattern:**
+
+```python
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph.prebuilt import ToolNode, tools_condition
+
+tools = [
+    CloudflareBrowserRunTool(mode="markdown"),
+    CloudflareBrowserRunTool(mode="json", json_prompt="Extract key facts."),
+    CloudflareBrowserRunTool(mode="links"),
+]
+tool_node = ToolNode(tools)
+
+graph = StateGraph(MessagesState)
+graph.add_node("supervisor", supervisor_fn)  # your LLM-based supervisor
+graph.add_node("browser_tools", tool_node)
+graph.add_edge(START, "supervisor")
+graph.add_conditional_edges("supervisor", tools_condition)
+graph.add_edge("browser_tools", "supervisor")
+app = graph.compile()
+```
+
+**In a research loop with cycles:**
+
+```python
+def should_continue(state) -> str:
+    if state["iteration"] >= 3 or not state["urls_to_visit"]:
+        return "done"
+    return "continue"
+
+graph = StateGraph(ResearchState)
+graph.add_node("discover", discover_links_node)
+graph.add_node("fetch", fetch_page_node)
+graph.add_edge(START, "discover")
+graph.add_edge("discover", "fetch")
+graph.add_conditional_edges("fetch", should_continue, {
+    "continue": "discover",
+    "done": END,
+})
+app = graph.compile()
+```
+
 ## Release Notes
 v0.1.1 (2025-04-08)
 
