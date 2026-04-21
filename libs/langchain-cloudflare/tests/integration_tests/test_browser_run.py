@@ -25,7 +25,7 @@ import os
 
 import pytest
 
-from langchain_cloudflare.browser_run import (
+from langchain_cloudflare.loaders import (
     CloudflareBrowserRunLoader,
     CloudflareBrowserRunTool,
 )

@@ -15,12 +15,12 @@ from langchain_cloudflare.bindings import (
     convert_vectorize_query_response,
     convert_vectors_for_binding,
 )
-from langchain_cloudflare.browser_run import (
+from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
+from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
+from langchain_cloudflare.loaders import (
     CloudflareBrowserRunLoader,
     CloudflareBrowserRunTool,
 )
-from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
-from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker, RerankResult
 from langchain_cloudflare.vectorstores import CloudflareVectorize
 

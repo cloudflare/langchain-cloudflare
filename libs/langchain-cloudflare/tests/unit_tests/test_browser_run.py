@@ -4,7 +4,7 @@
 import pytest
 
 from langchain_cloudflare._errors import TokenErrors
-from langchain_cloudflare.browser_run import (
+from langchain_cloudflare.loaders import (
     CloudflareBrowserRunLoader,
     CloudflareBrowserRunTool,
     _build_browser_run_url,
