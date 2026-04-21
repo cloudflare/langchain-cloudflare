@@ -37,6 +37,7 @@ SUPPORTED_MODELS = [
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.5",
+    "@cf/moonshotai/kimi-k2.6",
     "@cf/google/gemma-4-26b-a4b-it",
 ]
 
@@ -92,6 +93,8 @@ class Default(WorkerEntrypoint):
                 return await self.handle_structured_output(request)
             elif path == "structured-batch":
                 return await self.handle_structured_output_batch(request)
+            elif path == "structured-json-schema":
+                return await self.handle_structured_output_json_schema(request)
             elif path == "tools":
                 return await self.handle_tool_calling(request)
             elif path == "tools-batch":
@@ -438,6 +441,65 @@ Return JSON with an "announcements" array. Each announcement should have:
                 "model": llm.model,
             }
         )
+
+    # MARK: - Structured Output JSON Schema Handler
+
+    async def handle_structured_output_json_schema(self, request):
+        """Handle structured output using method='json_schema'."""
+        from pydantic import ValidationError
+
+        data = await request.json()
+        text = data.get("text", "Acme Corp announced a partnership with TechGiant Inc.")
+        model = data.get("model", DEFAULT_MODEL)
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+        )
+
+        structured_llm = llm.with_structured_output(Data, method="json_schema")
+
+        prompt = f"""Extract announcements from this text as structured data.
+
+Text: {text}
+
+Return JSON with an "announcements" array. Each announcement should have:
+- type: partnership, investment, regulatory, milestone, event, m&a, or none
+- context: brief description
+- entities: array with name, ticker (optional), and role"""
+
+        try:
+            result = await structured_llm.ainvoke(prompt)
+
+            if isinstance(result, Data):
+                result_dict = result.model_dump()
+            elif isinstance(result, dict):
+                try:
+                    validated = Data(**result)
+                    result_dict = validated.model_dump()
+                except ValidationError:
+                    result_dict = result
+            else:
+                result_dict = {"raw": str(result)}
+
+            return Response.json(
+                {
+                    "input": text,
+                    "extracted": result_dict,
+                    "method": "json_schema",
+                }
+            )
+
+        except ValidationError as e:
+            return Response.json(
+                {
+                    "input": text,
+                    "extracted": {"announcements": []},
+                    "validation_warning": str(e),
+                    "method": "json_schema",
+                }
+            )
 
     # MARK: - Tool Calling Handler
 

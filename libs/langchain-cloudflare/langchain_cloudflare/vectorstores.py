@@ -56,6 +56,12 @@ DEFAULT_METRIC = "cosine"
 VST = TypeVar("VST", bound="CloudflareVectorize")
 
 
+# MARK: - Helper Functions
+def _index_is_ready(index_info: Dict[str, Any]) -> bool:
+    """Return True when an index describe payload looks queryable."""
+    return bool(index_info.get("name") and index_info.get("config"))
+
+
 # MARK: - RequestsKwargs
 class RequestsKwargs(TypedDict, total=False):
     """TypedDict for requests kwargs."""
@@ -1027,8 +1033,8 @@ class CloudflareVectorize(VectorStore):
                 index_mutation_id = response_index.get("processedUpToMutation")
                 if index_mutation_id == mutation_id:
                     break
-            else:
-                return
+            elif _index_is_ready(response_index):
+                break
 
             time.sleep(poll_interval_seconds)
 
@@ -1071,8 +1077,8 @@ class CloudflareVectorize(VectorStore):
                 index_mutation_id = response_index.get("processedUpToMutation")
                 if index_mutation_id == mutation_id:
                     break
-            else:
-                return
+            elif _index_is_ready(response_index):
+                break
 
             await asyncio.sleep(poll_interval_seconds)
 

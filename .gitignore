@@ -118,6 +118,8 @@ install_and_test.sh
 **/.ruff_cache/
 .benchmarks/
 .claude/
+.codex/
+AGENTS.md
 uv.lock
 python_modules/
 .venv-workers/

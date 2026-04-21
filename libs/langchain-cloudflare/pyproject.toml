@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langchain-cloudflare"
-version = "0.3.2"
+version = "0.3.4"
 description = "Langchain Integrations for Cloudflare's WorkersAI and Vectorize"
 readme = "README.md"
 license = "MIT"
