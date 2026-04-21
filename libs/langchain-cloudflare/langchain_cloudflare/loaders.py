@@ -432,7 +432,12 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
             if cursor is not None:
                 params["cursor"] = cursor
 
-            page_resp = requests.get(results_url, headers=self._headers, params=params)
+            page_resp = requests.get(
+                results_url,
+                headers=self._headers,
+                params=params,
+                timeout=self.request_timeout,
+            )
             page_resp.raise_for_status()
             page_data = page_resp.json().get("result", {})
 
