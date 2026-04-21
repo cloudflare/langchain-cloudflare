@@ -21,6 +21,7 @@ Note:
 # MARK: - Imports
 from __future__ import annotations
 
+import base64
 import logging
 import time
 import warnings
@@ -43,6 +44,7 @@ DEFAULT_CRAWL_POLL_INTERVAL = 2.0  # seconds between /crawl status checks
 DEFAULT_CRAWL_TIMEOUT = 300.0  # max seconds to wait for a crawl job
 DEFAULT_CRAWL_LIMIT = 10
 DEFAULT_CRAWL_DEPTH = 2
+DEFAULT_REQUEST_TIMEOUT = 60.0  # seconds for individual HTTP requests
 
 
 # MARK: - Helpers
@@ -233,6 +235,9 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
     reject_resource_types: Optional[List[str]] = None
     """Resource types to block (e.g. ``["image", "stylesheet"]``)."""
 
+    request_timeout: float = DEFAULT_REQUEST_TIMEOUT
+    """Timeout in seconds for individual HTTP requests."""
+
     # Internal
     _headers: Dict[str, str] = PrivateAttr()
 
@@ -276,6 +281,7 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
             _build_browser_run_url(self.account_id, "markdown"),
             headers=self._headers,
             json=body,
+            timeout=self.request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -300,6 +306,7 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
             _build_browser_run_url(self.account_id, "content"),
             headers=self._headers,
             json=body,
+            timeout=self.request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -329,6 +336,7 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
             _build_browser_run_url(self.account_id, "scrape"),
             headers=self._headers,
             json=body,
+            timeout=self.request_timeout,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -374,7 +382,9 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
             "formats": ["markdown"],
             **self._shared_body(),
         }
-        resp = requests.post(crawl_url, headers=self._headers, json=body)
+        resp = requests.post(
+            crawl_url, headers=self._headers, json=body, timeout=self.request_timeout
+        )
         resp.raise_for_status()
         job_id = resp.json().get("result", "")
 
@@ -395,7 +405,9 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
                 )
                 break
 
-            poll = requests.get(results_url, headers=self._headers)
+            poll = requests.get(
+                results_url, headers=self._headers, timeout=self.request_timeout
+            )
             poll.raise_for_status()
             poll_data = poll.json().get("result", {})
             status = poll_data.get("status", "")
@@ -463,7 +475,7 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
         import httpx
 
         body: Dict[str, Any] = {"url": url, **self._shared_body()}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
             resp = await client.post(
                 _build_browser_run_url(self.account_id, "markdown"),
                 headers=self._headers,
@@ -491,7 +503,7 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
         import httpx
 
         body: Dict[str, Any] = {"url": url, **self._shared_body()}
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
             resp = await client.post(
                 _build_browser_run_url(self.account_id, "content"),
                 headers=self._headers,
@@ -523,7 +535,7 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
             "elements": elements,
             **self._shared_body(),
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
             resp = await client.post(
                 _build_browser_run_url(self.account_id, "scrape"),
                 headers=self._headers,
@@ -574,7 +586,7 @@ class CloudflareBrowserRunLoader(BaseLoader, BaseModel):  # type: ignore[misc]
             **self._shared_body(),
         }
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
             resp = await client.post(crawl_url, headers=self._headers, json=body)
             resp.raise_for_status()
             job_id = resp.json().get("result", "")
@@ -825,6 +837,9 @@ class CloudflareBrowserRunTool(BaseTool):
     reject_resource_types: Optional[List[str]] = None
     """Resource types to block."""
 
+    request_timeout: float = DEFAULT_REQUEST_TIMEOUT
+    """Timeout in seconds for individual HTTP requests."""
+
     # Internal
     _headers: Dict[str, str] = PrivateAttr()
 
@@ -904,14 +919,21 @@ class CloudflareBrowserRunTool(BaseTool):
             if self.json_response_format:
                 body["response_format"] = self.json_response_format
 
-        resp = requests.post(base, headers=self._headers, json=body)
+        resp = requests.post(
+            base, headers=self._headers, json=body, timeout=self.request_timeout
+        )
         resp.raise_for_status()
 
         if self.mode in ("screenshot", "pdf"):
-            import base64
-
-            encoded = base64.b64encode(resp.content).decode("utf-8")
-            return encoded
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type or "text/html" in content_type:
+                data = resp.json()
+                _check_api_response(data)
+                raise RuntimeError(
+                    f"Browser Run returned {content_type} instead of binary "
+                    f"data for /{self.mode}: {data}"
+                )
+            return base64.b64encode(resp.content).decode("utf-8")
 
         data = resp.json()
         _check_api_response(data)
@@ -953,13 +975,19 @@ class CloudflareBrowserRunTool(BaseTool):
             if self.json_response_format:
                 body["response_format"] = self.json_response_format
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=self.request_timeout) as client:
             resp = await client.post(base, headers=self._headers, json=body)
             resp.raise_for_status()
 
         if self.mode in ("screenshot", "pdf"):
-            import base64
-
+            content_type = resp.headers.get("content-type", "")
+            if "application/json" in content_type or "text/html" in content_type:
+                data = resp.json()
+                _check_api_response(data)
+                raise RuntimeError(
+                    f"Browser Run returned {content_type} instead of binary "
+                    f"data for /{self.mode}: {data}"
+                )
             encoded = base64.b64encode(resp.content).decode("utf-8")
             return encoded
 

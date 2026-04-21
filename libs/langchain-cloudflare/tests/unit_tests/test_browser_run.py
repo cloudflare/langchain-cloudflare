@@ -379,3 +379,321 @@ class TestToolConfiguration:
                 api_token="tok",
                 unknown_field="bad",
             )
+
+
+# MARK: - Mocked HTTP Behavior Tests
+
+
+class TestErrorEnvelopes:
+    """Verify _check_api_response raises on success=false envelopes."""
+
+    def test_success_false_raises(self):
+        """API error envelope should raise RuntimeError."""
+        from langchain_cloudflare.loaders import _check_api_response
+
+        with pytest.raises(RuntimeError, match="Browser Run API error"):
+            _check_api_response(
+                {"success": False, "errors": [{"message": "bad request"}]}
+            )
+
+    def test_success_true_passes(self):
+        """Normal response should not raise."""
+        from langchain_cloudflare.loaders import _check_api_response
+
+        _check_api_response({"success": True, "result": "ok"})
+
+    def test_non_dict_passes(self):
+        """Non-dict response should not raise."""
+        from langchain_cloudflare.loaders import _check_api_response
+
+        _check_api_response("plain string")
+        _check_api_response(["a", "list"])
+
+
+class TestBinaryEndpointErrorHandling:
+    """Verify screenshot/pdf detect JSON error responses instead of blindly encoding."""
+
+    def test_screenshot_json_error_raises(self, monkeypatch: pytest.MonkeyPatch):
+        """Screenshot mode should raise when API returns JSON error."""
+        from unittest.mock import MagicMock, patch
+
+        tool = CloudflareBrowserRunTool(
+            mode="screenshot",
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {"content-type": "application/json"}
+        mock_resp.json.return_value = {
+            "success": False,
+            "errors": [{"message": "invalid URL"}],
+        }
+
+        with patch(
+            "langchain_cloudflare.loaders.requests.post", return_value=mock_resp
+        ):
+            with pytest.raises(RuntimeError, match="Browser Run"):
+                tool._run("https://example.com")
+
+    def test_screenshot_html_error_raises(self):
+        """Screenshot mode should raise when API returns HTML error page."""
+        from unittest.mock import MagicMock, patch
+
+        tool = CloudflareBrowserRunTool(
+            mode="screenshot",
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {"content-type": "text/html"}
+        mock_resp.json.return_value = {"success": True, "result": "error page"}
+
+        with patch(
+            "langchain_cloudflare.loaders.requests.post", return_value=mock_resp
+        ):
+            with pytest.raises(RuntimeError, match="instead of binary"):
+                tool._run("https://example.com")
+
+    def test_screenshot_binary_success(self):
+        """Screenshot mode should return base64 when API returns image."""
+        from unittest.mock import MagicMock, patch
+
+        tool = CloudflareBrowserRunTool(
+            mode="screenshot",
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.headers = {"content-type": "image/png"}
+        mock_resp.content = b"\x89PNG\r\n\x1a\nfake"
+
+        with patch(
+            "langchain_cloudflare.loaders.requests.post", return_value=mock_resp
+        ):
+            result = tool._run("https://example.com")
+            assert isinstance(result, str)
+            assert len(result) > 0
+
+
+class TestCrawlPolling:
+    """Verify crawl timeout, error status, and pagination handling."""
+
+    def test_crawl_timeout_warns(self):
+        """Crawl should warn and return partial results on timeout."""
+        from unittest.mock import MagicMock, patch
+
+        loader = CloudflareBrowserRunLoader(
+            urls=["https://example.com"],
+            mode="crawl",
+            crawl_timeout=0.1,
+            crawl_poll_interval=0.05,
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        # Mock: POST /crawl returns job_id, GET always returns "processing"
+        mock_post = MagicMock()
+        mock_post.raise_for_status = MagicMock()
+        mock_post.json.return_value = {"result": "job-123"}
+
+        mock_get = MagicMock()
+        mock_get.raise_for_status = MagicMock()
+        mock_get.json.return_value = {"result": {"status": "processing", "records": []}}
+
+        with (
+            patch("langchain_cloudflare.loaders.requests.post", return_value=mock_post),
+            patch("langchain_cloudflare.loaders.requests.get", return_value=mock_get),
+        ):
+            with pytest.warns(UserWarning, match="timed out"):
+                docs = loader.load()
+
+        assert docs == []
+
+    def test_crawl_errored_status_stops(self):
+        """Crawl should stop polling when job status is errored."""
+        from unittest.mock import MagicMock, patch
+
+        loader = CloudflareBrowserRunLoader(
+            urls=["https://example.com"],
+            mode="crawl",
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_post = MagicMock()
+        mock_post.raise_for_status = MagicMock()
+        mock_post.json.return_value = {"result": "job-456"}
+
+        mock_get = MagicMock()
+        mock_get.raise_for_status = MagicMock()
+        mock_get.json.return_value = {"result": {"status": "errored", "records": []}}
+
+        with (
+            patch("langchain_cloudflare.loaders.requests.post", return_value=mock_post),
+            patch("langchain_cloudflare.loaders.requests.get", return_value=mock_get),
+        ):
+            docs = loader.load()
+
+        assert docs == []
+
+    def test_crawl_completed_with_records(self):
+        """Crawl should return Documents from completed records."""
+        from unittest.mock import MagicMock, patch
+
+        loader = CloudflareBrowserRunLoader(
+            urls=["https://example.com"],
+            mode="crawl",
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_post = MagicMock()
+        mock_post.raise_for_status = MagicMock()
+        mock_post.json.return_value = {"result": "job-789"}
+
+        mock_get = MagicMock()
+        mock_get.raise_for_status = MagicMock()
+        mock_get.json.return_value = {
+            "result": {
+                "status": "completed",
+                "records": [
+                    {
+                        "url": "https://example.com",
+                        "status": "completed",
+                        "markdown": "# Example\nHello world",
+                        "metadata": {"title": "Example", "status": 200},
+                    },
+                    {
+                        "url": "https://example.com/about",
+                        "status": "completed",
+                        "markdown": "# About\nAbout us",
+                        "metadata": {"title": "About", "status": 200},
+                    },
+                ],
+            }
+        }
+
+        with (
+            patch("langchain_cloudflare.loaders.requests.post", return_value=mock_post),
+            patch("langchain_cloudflare.loaders.requests.get", return_value=mock_get),
+        ):
+            docs = loader.load()
+
+        assert len(docs) == 2
+        assert docs[0].page_content == "# Example\nHello world"
+        assert docs[0].metadata["source"] == "https://example.com"
+        assert docs[0].metadata["title"] == "Example"
+        assert docs[1].metadata["source"] == "https://example.com/about"
+
+
+class TestRequestBodyConstruction:
+    """Verify request bodies are constructed correctly per mode."""
+
+    def test_markdown_body(self):
+        """Markdown mode sends url + shared options."""
+        from unittest.mock import MagicMock, patch
+
+        loader = CloudflareBrowserRunLoader(
+            urls=["https://example.com"],
+            mode="markdown",
+            viewport={"width": 1920, "height": 1080},
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"success": True, "result": "# Hello"}
+
+        with patch(
+            "langchain_cloudflare.loaders.requests.post", return_value=mock_resp
+        ) as mock_post:
+            loader.load()
+
+        call_kwargs = mock_post.call_args
+        body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+        assert body["url"] == "https://example.com"
+        assert body["viewport"] == {"width": 1920, "height": 1080}
+
+    def test_scrape_body_includes_elements(self):
+        """Scrape mode sends elements in the request body."""
+        from unittest.mock import MagicMock, patch
+
+        loader = CloudflareBrowserRunLoader(
+            urls=["https://example.com"],
+            mode="scrape",
+            elements=[{"selector": "h1"}, {"selector": ".price"}],
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"success": True, "result": []}
+
+        with patch(
+            "langchain_cloudflare.loaders.requests.post", return_value=mock_resp
+        ) as mock_post:
+            loader.load()
+
+        call_kwargs = mock_post.call_args
+        body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+        assert body["elements"] == [{"selector": "h1"}, {"selector": ".price"}]
+
+    def test_json_tool_body_includes_prompt_and_schema(self):
+        """JSON tool sends prompt and response_format in the body."""
+        from unittest.mock import MagicMock, patch
+
+        schema = {"type": "json_schema", "schema": {"type": "object"}}
+        tool = CloudflareBrowserRunTool(
+            mode="json",
+            json_prompt="Extract facts.",
+            json_response_format=schema,
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"success": True, "result": {"key": "val"}}
+
+        with patch(
+            "langchain_cloudflare.loaders.requests.post", return_value=mock_resp
+        ) as mock_post:
+            tool._run("https://example.com")
+
+        call_kwargs = mock_post.call_args
+        body = call_kwargs.kwargs.get("json") or call_kwargs[1].get("json")
+        assert body["prompt"] == "Extract facts."
+        assert body["response_format"] == schema
+
+    def test_loader_sends_timeout(self):
+        """All loader requests include the configured timeout."""
+        from unittest.mock import MagicMock, patch
+
+        loader = CloudflareBrowserRunLoader(
+            urls=["https://example.com"],
+            mode="markdown",
+            request_timeout=30.0,
+            account_id="abc123",
+            api_token="tok",
+        )
+
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"success": True, "result": "# Hello"}
+
+        with patch(
+            "langchain_cloudflare.loaders.requests.post", return_value=mock_resp
+        ) as mock_post:
+            loader.load()
+
+        call_kwargs = mock_post.call_args
+        timeout = call_kwargs.kwargs.get("timeout") or call_kwargs[1].get("timeout")
+        assert timeout == 30.0
