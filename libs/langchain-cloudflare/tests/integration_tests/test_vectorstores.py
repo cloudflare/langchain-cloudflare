@@ -16,6 +16,7 @@ In order to run this test, you need to:
 
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Generator, List
@@ -34,6 +35,20 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(env_path)
 
 MODEL_WORKERSAI = "@cf/baai/bge-large-en-v1.5"
+
+
+def wait_for_search_results(
+    search_fn, timeout_seconds: int = 30, poll_interval_seconds: int = 2
+):
+    """Poll a search callable until it returns at least one result."""
+    deadline = time.time() + timeout_seconds
+    last_results = []
+    while time.time() < deadline:
+        last_results = search_fn()
+        if last_results:
+            return last_results
+        time.sleep(poll_interval_seconds)
+    return last_results
 
 
 @pytest.fixture(scope="class")
@@ -253,8 +268,10 @@ class TestCloudflareVectorize:
         )
 
         # Search within the namespace
-        results = store.similarity_search(
-            query="storage solution", k=2, namespace=test_namespace
+        results = wait_for_search_results(
+            lambda: store.similarity_search(
+                query="storage solution", k=2, namespace=test_namespace
+            )
         )
 
         # Verify results

@@ -64,6 +64,19 @@ MODELS = [
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.5",
+    "@cf/moonshotai/kimi-k2.6",
+    "@cf/google/gemma-4-26b-a4b-it",
+]
+
+# Models live-validated in this suite for method='json_schema'.
+# Excluded families stay out of this list until their runtime behavior is
+# verified end-to-end in integration tests.
+JSON_SCHEMA_MODELS = [m for m in MODELS if "mistral" not in m and "gpt-oss" not in m]
+
+# Models confirmed to support vision (image input). Per CF docs and live testing.
+VISION_MODELS = [
+    "@cf/moonshotai/kimi-k2.5",
+    "@cf/moonshotai/kimi-k2.6",
     "@cf/google/gemma-4-26b-a4b-it",
 ]
 
@@ -220,6 +233,37 @@ class TestStructuredOutput:
 
         for i, result in enumerate(results):
             assert result is not None, f"Result {i} is None for {model}"
+
+    @pytest.mark.parametrize("model", JSON_SCHEMA_MODELS)
+    def test_structured_output_json_schema_method_invoke(
+        self, model, account_id, api_token, ai_gateway
+    ):
+        """method='json_schema' should work for models that support json_object mode."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        structured_llm = llm.with_structured_output(Data, method="json_schema")
+
+        result = structured_llm.invoke(
+            f"Extract announcements from this text:\n\n{self.SAMPLE_TEXT}"
+        )
+
+        print(f"\n[{model}] Structured Output json_schema (invoke):")
+        print(f"  Result type: {type(result)}")
+        print(f"  Result: {result}")
+
+        assert result is not None, f"Result is None for {model}"
+        assert isinstance(result, (dict, Data)), (
+            f"Unexpected type {type(result)} for {model}"
+        )
+
+        if isinstance(result, dict):
+            assert "announcements" in result, f"Missing 'announcements' key for {model}"
+        else:
+            assert hasattr(result, "announcements"), (
+                f"Missing 'announcements' attr for {model}"
+            )
 
 
 class TestToolCalling:
@@ -706,6 +750,7 @@ class TestReasoningContent:
         "@cf/openai/gpt-oss-120b",
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.5",
+        "@cf/moonshotai/kimi-k2.6",
         "@cf/google/gemma-4-26b-a4b-it",
         "@cf/nvidia/nemotron-3-120b-a12b",
     ]
@@ -927,6 +972,48 @@ class TestMultiModal:
             pytest.skip(
                 f"Model {model} does not support multi-modal: {error_msg[:100]}"
             )
+
+
+# MARK: - Vision Model Regression Tests
+
+
+class TestVisionModels:
+    """Regression tests for confirmed vision-capable models.
+
+    Unlike TestMultiModal (which skips failures), these tests assert that
+    VISION_MODELS must successfully process image input. A failure here means
+    vision support regressed for a model we know should work.
+    """
+
+    @pytest.mark.parametrize("model", VISION_MODELS)
+    def test_vision_invoke(self, model, account_id, api_token, ai_gateway):
+        """Vision models must return a non-empty response for image input."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        image_b64 = create_test_image_base64()
+
+        message = HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": "Describe this image in one sentence. What color is it?",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                },
+            ]
+        )
+
+        result = llm.invoke([message])
+        text = get_text_content(result.content)
+
+        print(f"\n[{model}] Vision invoke:")
+        print(f"  Response: {text[:200]}")
+
+        assert len(text) > 0, f"Expected non-empty vision response from {model}"
 
 
 if __name__ == "__main__":

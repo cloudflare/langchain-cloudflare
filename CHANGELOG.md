@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.4]
+
+#### Changed
+
+- **Structured output routing**: Adds `method="json_schema"` as a first-class `with_structured_output()` option, fixes prompt-value schema injection, and normalizes dict-shaped model responses before constructing `AIMessage` content blocks.
+- **Workers test startup**: Makes Wrangler startup non-interactive and prefers a modern `~/.nvm` Node runtime in Worker test fixtures so the full Worker suite can start reliably on machines with an older system Node in `PATH`.
+- **Vectorize readiness polling**: Hardens `create_index(wait=True)` / `acreate_index(wait=True)` readiness checks and makes the namespace integration test poll for query visibility instead of assuming immediate consistency.
+
+#### Added
+
+- **`@cf/moonshotai/kimi-k2.6`**: Adds Kimi K2.6 to the tested and example-supported model lists with verified reasoning content, multi-turn tool calling, structured output, and vision support on Workers AI.
+
+---
+
+### [0.3.3]
+
+#### Fixed
+
+- **Gemma structured output**: Gemma (`@cf/google/gemma-4-26b-a4b-it`) intermittently omitted required fields when using tool calling for `with_structured_output`. Switched to `json_object` response format with schema injected via system message for reliable output. Adds `use_json_object_for_structured_output` flag to `ModelBehavior` for future use with other models exhibiting the same behavior.
+
+---
+
 ### [0.3.2]
 
 #### Added

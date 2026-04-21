@@ -35,6 +35,19 @@ MODELS = [
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.5",
+    "@cf/moonshotai/kimi-k2.6",
+    "@cf/google/gemma-4-26b-a4b-it",
+]
+
+# Models live-validated in this suite for method='json_schema'.
+# Excluded families stay out of this list until their runtime behavior is
+# verified end-to-end in integration tests.
+JSON_SCHEMA_MODELS = [m for m in MODELS if "mistral" not in m and "gpt-oss" not in m]
+
+# Models confirmed to support vision (image input). Per CF docs and live testing.
+VISION_MODELS = [
+    "@cf/moonshotai/kimi-k2.5",
+    "@cf/moonshotai/kimi-k2.6",
     "@cf/google/gemma-4-26b-a4b-it",
 ]
 
@@ -149,6 +162,31 @@ class TestWorkerStructuredOutput:
 
         assert "input" in data
         assert "extracted" in data
+        assert "announcements" in data["extracted"] or "raw" in data["extracted"]
+
+
+class TestWorkerStructuredOutputJsonSchema:
+    """Test structured output with method='json_schema' via Worker binding."""
+
+    @pytest.mark.parametrize("model", JSON_SCHEMA_MODELS)
+    def test_structured_output_json_schema(self, dev_server, model):
+        """POST /structured-json-schema should work for any model."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/structured-json-schema",
+            json={
+                "text": "Acme Corp announced a partnership with TechGiant Inc.",
+                "model": model,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert "input" in data
+        assert "extracted" in data
+        assert data.get("method") == "json_schema"
         assert "announcements" in data["extracted"] or "raw" in data["extracted"]
 
 
@@ -871,6 +909,7 @@ class TestWorkerReasoningContent:
         "@cf/openai/gpt-oss-120b",
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.5",
+        "@cf/moonshotai/kimi-k2.6",
         "@cf/nvidia/nemotron-3-120b-a12b",
         "@cf/google/gemma-4-26b-a4b-it",
     ]
@@ -1026,6 +1065,44 @@ class TestWorkerMultiModal:
         assert response.status_code == 400
         data = response.json()
         assert "error" in data
+
+
+# MARK: - Vision Model Regression Tests
+
+
+class TestWorkerVisionModels:
+    """Regression tests for confirmed vision-capable models via Worker binding.
+
+    Unlike TestWorkerMultiModal (which skips failures), these tests assert that
+    VISION_MODELS must successfully process image input. A failure here means
+    vision support regressed for a model we know should work.
+    """
+
+    @pytest.mark.parametrize("model", VISION_MODELS)
+    def test_vision_invoke(self, dev_server, model):
+        """Vision models must return a non-empty response for image input."""
+        port = dev_server
+        image_b64 = create_test_image_base64()
+
+        response = requests.post(
+            f"http://localhost:{port}/multi-modal",
+            json={
+                "model": model,
+                "image_base64": image_b64,
+                "prompt": "Describe this image in one sentence. What color is it?",
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        assert response.status_code == 200, (
+            f"Vision model {model} failed with: {response.text}"
+        )
+        data = response.json()
+        assert "response" in data
+        assert len(data["response"]) > 0, (
+            f"Expected non-empty vision response from {model}"
+        )
 
 
 # MARK: - Session Affinity (Prompt Caching) Tests

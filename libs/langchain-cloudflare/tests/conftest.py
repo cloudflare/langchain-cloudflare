@@ -44,6 +44,23 @@ def get_worker_project_dir() -> Path:
     return Path(__file__).parent.parent / "examples" / "workers"
 
 
+def _get_nvm_node_bin() -> str | None:
+    """Return the newest installed nvm Node bin dir, if present."""
+    nvm_versions = Path.home() / ".nvm" / "versions" / "node"
+    if not nvm_versions.exists():
+        return None
+
+    bins = sorted(
+        (
+            path / "bin"
+            for path in nvm_versions.iterdir()
+            if (path / "bin" / "node").exists()
+        ),
+        reverse=True,
+    )
+    return str(bins[0]) if bins else None
+
+
 def sync_package_to_python_modules(project_dir: Path) -> None:
     """Copy the latest package source to python_modules for Workers.
 
@@ -103,6 +120,12 @@ def pywrangler_dev_server(
     env.pop("CLOUDFLARE_API_TOKEN", None)
     env.pop("TEST_CF_API_TOKEN", None)
 
+    # Prefer a modern nvm-managed Node when the shell PATH points at an older system
+    # install. Wrangler 4 requires Node >= 20.
+    nvm_node_bin = _get_nvm_node_bin()
+    if nvm_node_bin:
+        env["PATH"] = f"{nvm_node_bin}:{env['PATH']}"
+
     # Step 1: Run pywrangler sync to install Pyodide-compatible deps
     sync_result = subprocess.run(
         ["uv", "run", "pywrangler", "sync"],
@@ -140,7 +163,7 @@ def pywrangler_dev_server(
     # (they don't support local simulation, only remote binding connections)
     # D1 supports both local and remote
     process = subprocess.Popen(
-        ["npx", "wrangler", "dev", "--port", str(port)],
+        ["npx", "--yes", "wrangler", "dev", "--port", str(port)],
         cwd=project_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
