@@ -17,6 +17,10 @@ from langchain_cloudflare.bindings import (
 )
 from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
+from langchain_cloudflare.loaders import (
+    CloudflareBrowserRunLoader,
+    CloudflareBrowserRunTool,
+)
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker, RerankResult
 from langchain_cloudflare.vectorstores import CloudflareVectorize
 
@@ -30,6 +34,8 @@ del metadata  # optional, avoids polluting the results of dir(__package__)
 # MARK: - Public API
 __all__ = [
     "ChatCloudflareWorkersAI",
+    "CloudflareBrowserRunLoader",
+    "CloudflareBrowserRunTool",
     "CloudflareVectorize",
     "CloudflareWorkersAIEmbeddings",
     "CloudflareWorkersAIReranker",
