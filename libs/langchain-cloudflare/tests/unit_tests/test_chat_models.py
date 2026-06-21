@@ -903,6 +903,23 @@ class TestEndpointFormat:
         assert chunk.message.content == "Hello"
 
 
+# MARK: - LangSmith Params Tests
+class TestLangSmithParams:
+    """Tests for LangSmith tracing parameters."""
+
+    def test_get_ls_params_uses_per_call_model_override(self):
+        """LangSmith params should reflect per-call model overrides."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        )
+
+        params = llm._get_ls_params(model="test-model-override-sentinel")
+
+        assert params["ls_model_name"] == "test-model-override-sentinel"
+
+
 # MARK: - with_structured_output Routing Tests
 
 

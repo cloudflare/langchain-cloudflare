@@ -629,7 +629,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         params = self._get_invocation_params(stop=stop, **kwargs)
         ls_params = LangSmithParams(
             ls_provider="cloudflare-workers-ai",
-            ls_model_name=self.model,
+            ls_model_name=params.get("model", self.model),
             ls_model_type="chat",
             ls_temperature=params.get("temperature", self.temperature),
         )
@@ -1904,14 +1904,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                         return [schema_system_msg] + list(messages)
                     return messages
 
-                llm = self.bind(  # type: ignore[assignment]
+                schema_bound_llm = self.bind(
                     response_format={"type": "json_object"},
                     ls_structured_output_format={
                         "kwargs": {"method": "json_mode"},
                         "schema": schema,
                     },
                 )
-                pipeline = RunnableLambda(_inject_schema_message) | llm  # type: ignore[arg-type]
+                pipeline = RunnableLambda(_inject_schema_message) | schema_bound_llm  # type: ignore[arg-type]
 
             if include_raw:
                 parser_assign = RunnablePassthrough.assign(
@@ -1936,7 +1936,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
             formatted_tool = convert_to_openai_tool(schema)
             tool_name = formatted_tool["function"]["name"]
-            llm = self.bind_tools(
+            pipeline = self.bind_tools(
                 [schema],
                 ls_structured_output_format={
                     "kwargs": {"method": "function_calling"},
@@ -1954,7 +1954,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             )
 
         elif method == "json_mode":
-            llm = self.bind(  # type: ignore[assignment]
+            pipeline = self.bind(
                 response_format={"type": "json_object"},
                 ls_structured_output_format={
                     "kwargs": {"method": "json_mode"},
@@ -1985,9 +1985,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             parser_with_fallback = parser_assign.with_fallbacks(
                 [parser_none], exception_key="parsing_error"
             )
-            return RunnableMap(raw=llm) | parser_with_fallback
+            return RunnableMap(raw=pipeline) | parser_with_fallback
         else:
-            return llm | output_parser
+            return pipeline | output_parser
 
 
 def _is_pydantic_class(obj: Any) -> bool:
