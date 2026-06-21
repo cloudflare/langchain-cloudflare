@@ -34,6 +34,31 @@ llm = ChatCloudflareWorkersAI()
 llm.invoke("Sing a ballad of LangChain.")
 ```
 
+### REST endpoint format
+
+By default, `ChatCloudflareWorkersAI` uses the native Workers AI run endpoint:
+
+```python
+llm = ChatCloudflareWorkersAI(
+    model="@cf/moonshotai/kimi-k2.6",
+    endpoint_format="workers_ai",  # default
+)
+```
+
+For REST calls that need Cloudflare's OpenAI-compatible chat completions API,
+set `endpoint_format="openai_compatible"`:
+
+```python
+llm = ChatCloudflareWorkersAI(
+    model="@cf/moonshotai/kimi-k2.6",
+    endpoint_format="openai_compatible",
+)
+```
+
+When `ai_gateway` is configured, OpenAI-compatible mode routes through the
+Workers AI chat completions path on AI Gateway. This option is REST-only; Worker
+bindings use `env.AI.run()` and do not expose a chat completions route.
+
 ## Embeddings
 
 `CloudflareWorkersAIEmbeddings` class exposes embeddings from [CloudflareWorkersAI](https://developers.cloudflare.com/workers-ai/).

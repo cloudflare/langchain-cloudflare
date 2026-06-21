@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.5]
+
+#### Added
+
+- **`@cf/zai-org/glm-5.2`**: Adds GLM-5.2 to the tested and example-supported model lists with reasoning content, tool calling, structured output, and model-specific parameter handling for Workers AI's OpenAI-compatible schema.
+- **OpenAI-compatible endpoint mode**: Adds `endpoint_format="openai_compatible"` to `ChatCloudflareWorkersAI` for REST chat completions routing through `/ai/v1/chat/completions` or AI Gateway `/workers-ai/v1/chat/completions`, with focused text and structured vision regression coverage.
+
+---
+
 ### [0.3.4]
 
 #### Changed
