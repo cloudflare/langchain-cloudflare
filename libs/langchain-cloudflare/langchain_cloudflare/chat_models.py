@@ -218,6 +218,11 @@ _REASONING_BEHAVIOR = ModelBehavior(
 )
 
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
+    "glm-5.2": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        unsupported_params=("top_k", "repetition_penalty"),
+        supports_reasoning_content=True,
+    ),
     "glm": ModelBehavior(
         embed_tool_calls_in_content=False,
         unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
@@ -369,6 +374,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         base_url: Optional[str]
             Base URL path for API requests, leave blank if not using a proxy
             or service emulator.
+        endpoint_format: Literal["workers_ai", "openai_compatible"]
+            REST endpoint format. Defaults to native Workers AI run endpoints.
+            Set to ``"openai_compatible"`` to use chat completions endpoints.
         binding: Optional[Any]
             Workers AI binding (env.AI) for use in Python Workers.
             When provided, uses the binding instead of REST API calls.
@@ -414,6 +422,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         alias="cloudflare_ai_gateway",
         default_factory=from_env("AI_GATEWAY", default=None),
     )
+    endpoint_format: Literal["workers_ai", "openai_compatible"] = "workers_ai"
+    """REST endpoint format to use.
+
+    ``"workers_ai"`` uses Workers AI native run endpoints:
+    ``/ai/run/{model}`` or AI Gateway ``/workers-ai/run/{model}``.
+    ``"openai_compatible"`` uses chat completions endpoints and includes
+    ``model`` in the JSON payload:
+    ``/ai/v1/chat/completions`` or AI Gateway
+    ``/workers-ai/v1/chat/completions``.
+    """
     request_timeout: Union[float, Tuple[float, float], Any, None] = Field(
         default=None, alias="timeout"
     )
@@ -495,6 +513,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         # If binding is provided, skip REST API setup
         if self.binding is not None:
+            if self.endpoint_format != "workers_ai":
+                raise ValueError(
+                    "endpoint_format='openai_compatible' is only supported for "
+                    "REST API calls. Workers AI bindings use env.AI.run() and "
+                    "do not expose a chat completions endpoint."
+                )
             # When using binding, we don't need api_token or account_id
             return self
 
@@ -605,7 +629,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         params = self._get_invocation_params(stop=stop, **kwargs)
         ls_params = LangSmithParams(
             ls_provider="cloudflare-workers-ai",
-            ls_model_name=self.model,
+            ls_model_name=params.get("model", self.model),
             ls_model_type="chat",
             ls_temperature=params.get("temperature", self.temperature),
         )
@@ -813,6 +837,54 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return params
 
+    def _get_api_url(self) -> str:
+        """Return the REST API path for the configured endpoint format."""
+        if self.endpoint_format == "openai_compatible":
+            if self.ai_gateway:
+                return "workers-ai/v1/chat/completions"
+            return f"accounts/{self.account_id}/ai/v1/chat/completions"
+
+        if self.ai_gateway:
+            return f"workers-ai/run/{self.model}"
+        return f"accounts/{self.account_id}/ai/run/{self.model}"
+
+    def _create_request_payload(
+        self,
+        message_dicts: List[Dict[str, Any]],
+        params: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build the REST request payload for the configured endpoint format."""
+        if self.endpoint_format == "openai_compatible":
+            return {
+                **params,
+                "model": self.model,
+                "messages": message_dicts,
+            }
+
+        return {"messages": message_dicts, **params}
+
+    def _create_openai_stream_chunk(
+        self,
+        chunk: Dict[str, Any],
+    ) -> Optional[ChatGenerationChunk]:
+        """Convert an OpenAI-compatible SSE chunk to a LangChain chunk."""
+        choices = chunk.get("choices") or []
+        if not choices:
+            return None
+
+        choice = choices[0]
+        delta = choice.get("delta") or choice.get("message") or {}
+        response_text = _normalize_message_content(delta.get("content", ""))
+
+        generation_info = {}
+        if "usage" in chunk:
+            generation_info["usage"] = chunk["usage"]
+
+        return ChatGenerationChunk(
+            message=AIMessageChunk(content=response_text),
+            generation_info=generation_info or None,
+        )
+
     # MARK: - Generate
     def _generate(  # type: ignore
         self,
@@ -830,7 +902,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         params = self._translate_params_for_model(params)
 
         # Create the request payload
-        payload = {"messages": message_dicts, **params}
+        payload = self._create_request_payload(message_dicts, params)
 
         # Use binding if available (for Python Workers)
         if self.binding is not None:
@@ -846,13 +918,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             response_data = loop.run_until_complete(self._call_binding(payload))
         else:
             # Use REST API (httpx client)
-            # Construct the API URL
-            if self.ai_gateway:
-                # If using AI Gateway
-                api_url = f"workers-ai/run/{self.model}"
-            else:
-                # If using direct API
-                api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
+            api_url = self._get_api_url()
 
             # Make the API request
             response = self.client.post(api_url, json=payload)
@@ -875,18 +941,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         params = self._translate_params_for_model(params)
 
         # Create the request payload
-        payload = {"messages": message_dicts, **params}
+        payload = self._create_request_payload(message_dicts, params)
 
         # Use binding if available (for Python Workers)
         if self.binding is not None:
             response_data = await self._call_binding(payload)
         else:
             # Use REST API (httpx async client)
-            # Construct the Cloudflare Workers AI API URL
-            if self.ai_gateway:
-                api_url = f"workers-ai/run/{self.model}"
-            else:
-                api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
+            api_url = self._get_api_url()
 
             # Make the API request
             response = await self.async_client.post(api_url, json=payload)
@@ -916,14 +978,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         params = {**params, **kwargs, "stream": True}
         params = self._translate_params_for_model(params)
 
-        # Construct the Cloudflare Workers AI API URL
-        if self.ai_gateway:
-            api_url = f"workers-ai/run/{self.model}"
-        else:
-            api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
-
         # Create the request payload
-        payload = {"messages": message_dicts, **params}
+        api_url = self._get_api_url()
+        payload = self._create_request_payload(message_dicts, params)
 
         # Make the streaming API request
         with self.client.stream("POST", api_url, json=payload) as response:
@@ -950,8 +1007,21 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 except json.JSONDecodeError:
                     continue
 
+                if "choices" in chunk:
+                    generation_chunk = self._create_openai_stream_chunk(chunk)
+                    if generation_chunk is None:
+                        continue
+
+                    if run_manager:
+                        run_manager.on_llm_new_token(
+                            generation_chunk.text,
+                            chunk=generation_chunk,
+                        )
+
+                    yield generation_chunk
+
                 # Process streaming response
-                if "streamed_data" in chunk:
+                elif "streamed_data" in chunk:
                     # Handle streamed_data format from Cloudflare
                     for stream_chunk in chunk["streamed_data"]:
                         response_text = stream_chunk.get("response", "")
@@ -1080,14 +1150,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         params = {**params, **kwargs, "stream": True}
         params = self._translate_params_for_model(params)
 
-        # Construct the Cloudflare Workers AI API URL
-        if self.ai_gateway:
-            api_url = f"workers-ai/run/{self.model}"
-        else:
-            api_url = f"accounts/{self.account_id}/ai/run/{self.model}"
-
         # Create the request payload
-        payload = {"messages": message_dicts, **params}
+        api_url = self._get_api_url()
+        payload = self._create_request_payload(message_dicts, params)
 
         # Make the streaming API request
         async with self.async_client.stream("POST", api_url, json=payload) as response:
@@ -1114,8 +1179,21 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 except json.JSONDecodeError:
                     continue
 
+                if "choices" in chunk:
+                    generation_chunk = self._create_openai_stream_chunk(chunk)
+                    if generation_chunk is None:
+                        continue
+
+                    if run_manager:
+                        await run_manager.on_llm_new_token(
+                            token=generation_chunk.text,
+                            chunk=generation_chunk,
+                        )
+
+                    yield generation_chunk
+
                 # Handle the streamed_data format
-                if "streamed_data" in chunk:
+                elif "streamed_data" in chunk:
                     for stream_chunk in chunk["streamed_data"]:
                         response_text = stream_chunk.get("response", "")
                         accumulated_content += response_text
@@ -1826,14 +1904,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                         return [schema_system_msg] + list(messages)
                     return messages
 
-                llm = self.bind(  # type: ignore[assignment]
+                schema_bound_llm = self.bind(
                     response_format={"type": "json_object"},
                     ls_structured_output_format={
                         "kwargs": {"method": "json_mode"},
                         "schema": schema,
                     },
                 )
-                pipeline = RunnableLambda(_inject_schema_message) | llm  # type: ignore[arg-type]
+                pipeline = RunnableLambda(_inject_schema_message) | schema_bound_llm  # type: ignore[arg-type]
 
             if include_raw:
                 parser_assign = RunnablePassthrough.assign(
@@ -1858,7 +1936,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
             formatted_tool = convert_to_openai_tool(schema)
             tool_name = formatted_tool["function"]["name"]
-            llm = self.bind_tools(
+            pipeline = self.bind_tools(
                 [schema],
                 ls_structured_output_format={
                     "kwargs": {"method": "function_calling"},
@@ -1876,7 +1954,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             )
 
         elif method == "json_mode":
-            llm = self.bind(  # type: ignore[assignment]
+            pipeline = self.bind(
                 response_format={"type": "json_object"},
                 ls_structured_output_format={
                     "kwargs": {"method": "json_mode"},
@@ -1907,9 +1985,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             parser_with_fallback = parser_assign.with_fallbacks(
                 [parser_none], exception_key="parsing_error"
             )
-            return RunnableMap(raw=llm) | parser_with_fallback
+            return RunnableMap(raw=pipeline) | parser_with_fallback
         else:
-            return llm | output_parser
+            return pipeline | output_parser
 
 
 def _is_pydantic_class(obj: Any) -> bool:

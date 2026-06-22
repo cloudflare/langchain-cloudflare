@@ -463,6 +463,25 @@ class TestReasoningContent:
         assert "tool_choice" not in translated
         assert translated["temperature"] == 0.7
 
+    def test_glm_5_2_preserves_supported_params(self):
+        """GLM-5.2 should keep parameters supported by its OpenAI schema."""
+        llm = self._create_llm("@cf/zai-org/glm-5.2")
+        params = {
+            "max_tokens": 100,
+            "top_k": 50,
+            "repetition_penalty": 1.1,
+            "tool_choice": "required",
+            "temperature": 0.7,
+        }
+
+        translated = llm._translate_params_for_model(params)
+
+        assert translated["max_tokens"] == 100
+        assert "top_k" not in translated
+        assert "repetition_penalty" not in translated
+        assert translated["tool_choice"] == "required"
+        assert translated["temperature"] == 0.7
+
 
 # MARK: - GPT-OSS Model Tests
 
@@ -761,6 +780,144 @@ class TestAIGatewayHeaders:
         )
         assert llm.client.headers["x-session-affinity"] == "session-456"
         assert llm.client.headers["cf-aig-request-timeout"] == "5000"
+
+
+# MARK: - Endpoint Format Tests
+class TestEndpointFormat:
+    """Tests for native Workers AI vs OpenAI-compatible endpoint routing."""
+
+    def test_workers_ai_endpoint_format_uses_native_run_url_and_payload(self):
+        """Default endpoint format should preserve existing native run behavior."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        )
+
+        messages, params = llm._create_message_dicts(
+            [HumanMessage(content="Hello")],
+            stop=None,
+        )
+        payload = llm._create_request_payload(messages, params)
+
+        assert llm._get_api_url() == (
+            "accounts/test_account/ai/run/@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+        )
+        assert "model" not in payload
+        assert payload["messages"] == [{"role": "user", "content": "Hello"}]
+
+    def test_openai_compatible_endpoint_format_uses_chat_completions_payload(self):
+        """OpenAI-compatible format should route to chat completions."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/moonshotai/kimi-k2.6",
+            endpoint_format="openai_compatible",
+        )
+
+        messages, params = llm._create_message_dicts(
+            [HumanMessage(content="Hello")],
+            stop=None,
+        )
+        payload = llm._create_request_payload(messages, params)
+
+        assert llm._get_api_url() == ("accounts/test_account/ai/v1/chat/completions")
+        assert payload["model"] == "@cf/moonshotai/kimi-k2.6"
+        assert payload["messages"] == [{"role": "user", "content": "Hello"}]
+
+    def test_openai_compatible_endpoint_format_uses_gateway_chat_completions(self):
+        """AI Gateway should route OpenAI-compatible requests through Workers AI."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/moonshotai/kimi-k2.6",
+            ai_gateway="my-gateway",
+            endpoint_format="openai_compatible",
+        )
+
+        assert str(llm.client.base_url) == (
+            "https://gateway.ai.cloudflare.com/v1/test_account/my-gateway/"
+        )
+        assert llm._get_api_url() == "workers-ai/v1/chat/completions"
+
+    def test_openai_compatible_endpoint_format_rejects_binding(self):
+        """Bindings use env.AI.run() and cannot select chat completions."""
+        with pytest.raises(ValueError, match="openai_compatible"):
+            ChatCloudflareWorkersAI(
+                model="@cf/moonshotai/kimi-k2.6",
+                binding=object(),
+                endpoint_format="openai_compatible",
+            )
+
+    def test_create_chat_result_accepts_top_level_openai_response(self):
+        """OpenAI-compatible responses can arrive without a result wrapper."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/moonshotai/kimi-k2.6",
+            endpoint_format="openai_compatible",
+        )
+        response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Done",
+                        "reasoning_content": "Short reasoning",
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 3,
+                "completion_tokens": 4,
+                "total_tokens": 7,
+            },
+        }
+
+        result = llm._create_chat_result(response)
+        message = result.generations[0].message
+
+        assert isinstance(message.content, list)
+        assert message.content[0]["type"] == "thinking"
+        assert message.content[1] == {"type": "text", "text": "Done"}
+        assert message.usage_metadata == {
+            "input_tokens": 3,
+            "output_tokens": 4,
+            "total_tokens": 7,
+        }
+
+    def test_openai_compatible_stream_chunk_parsing(self):
+        """OpenAI-compatible streaming deltas should become message chunks."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            endpoint_format="openai_compatible",
+        )
+
+        chunk = llm._create_openai_stream_chunk(
+            {"choices": [{"delta": {"content": "Hello"}}]}
+        )
+
+        assert chunk is not None
+        assert chunk.message.content == "Hello"
+
+
+# MARK: - LangSmith Params Tests
+class TestLangSmithParams:
+    """Tests for LangSmith tracing parameters."""
+
+    def test_get_ls_params_uses_per_call_model_override(self):
+        """LangSmith params should reflect per-call model overrides."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        )
+
+        params = llm._get_ls_params(model="test-model-override-sentinel")
+
+        assert params["ls_model_name"] == "test-model-override-sentinel"
 
 
 # MARK: - with_structured_output Routing Tests

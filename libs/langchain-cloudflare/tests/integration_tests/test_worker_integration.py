@@ -31,6 +31,7 @@ MODELS = [
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/zai-org/glm-4.7-flash",
+    "@cf/zai-org/glm-5.2",
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
@@ -906,6 +907,7 @@ class TestWorkerReasoningContent:
     REASONING_MODELS = [
         "@cf/qwen/qwen3-30b-a3b-fp8",
         "@cf/zai-org/glm-4.7-flash",
+        "@cf/zai-org/glm-5.2",
         "@cf/openai/gpt-oss-120b",
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.5",

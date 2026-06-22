@@ -60,6 +60,7 @@ MODELS = [
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/zai-org/glm-4.7-flash",
+    "@cf/zai-org/glm-5.2",
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
@@ -78,6 +79,12 @@ VISION_MODELS = [
     "@cf/moonshotai/kimi-k2.5",
     "@cf/moonshotai/kimi-k2.6",
     "@cf/google/gemma-4-26b-a4b-it",
+]
+
+# Focused models for endpoint-format parity tests. Keep this small so adding
+# OpenAI-compatible coverage does not double the full integration matrix.
+OPENAI_COMPAT_MODELS = [
+    "@cf/moonshotai/kimi-k2.6",
 ]
 
 
@@ -110,6 +117,14 @@ class Data(BaseModel):
     announcements: List[Announcement] = Field(default_factory=list)
 
 
+class ImageExtraction(BaseModel):
+    """Fields extracted from a labeled test image."""
+
+    ticker: str = Field(description="Ticker symbol shown in the image")
+    timeframe: str = Field(description="Timeframe shown in the image")
+    date: str = Field(description="Date shown in the image")
+
+
 # Tool for tool calling tests
 @tool
 def get_weather(city: str) -> str:
@@ -140,7 +155,11 @@ def ai_gateway():
 
 
 def create_llm(
-    model: str, account_id: str, api_token: str, ai_gateway: Optional[str] = None
+    model: str,
+    account_id: str,
+    api_token: str,
+    ai_gateway: Optional[str] = None,
+    endpoint_format: str = "workers_ai",
 ):
     """Create a ChatCloudflareWorkersAI instance."""
     return ChatCloudflareWorkersAI(
@@ -149,6 +168,7 @@ def create_llm(
         model=model,
         temperature=0.0,
         ai_gateway=ai_gateway,
+        endpoint_format=endpoint_format,
     )
 
 
@@ -747,6 +767,7 @@ class TestReasoningContent:
     REASONING_MODELS = [
         "@cf/qwen/qwen3-30b-a3b-fp8",
         "@cf/zai-org/glm-4.7-flash",
+        "@cf/zai-org/glm-5.2",
         "@cf/openai/gpt-oss-120b",
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.5",
@@ -893,6 +914,19 @@ class TestReasoningContent:
 # MARK: - Multi-Modal Tests
 
 
+def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+    """Create a PNG chunk."""
+    import struct
+    import zlib
+
+    chunk = chunk_type + data
+    return (
+        struct.pack(">I", len(data))
+        + chunk
+        + struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
+    )
+
+
 def create_test_image_base64() -> str:
     """Create a minimal 1x1 red pixel PNG and return as base64.
 
@@ -900,14 +934,6 @@ def create_test_image_base64() -> str:
     """
     import struct
     import zlib
-
-    def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
-        chunk = chunk_type + data
-        return (
-            struct.pack(">I", len(data))
-            + chunk
-            + struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
-        )
 
     width, height = 1, 1
     ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
@@ -922,11 +948,83 @@ def create_test_image_base64() -> str:
     return base64.standard_b64encode(png).decode("utf-8")
 
 
+_BLOCK_FONT = {
+    "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+    "C": ["01111", "10000", "10000", "10000", "10000", "10000", "01111"],
+    "D": ["11110", "10001", "10001", "10001", "10001", "10001", "11110"],
+    "E": ["11111", "10000", "10000", "11110", "10000", "10000", "11111"],
+    "F": ["11111", "10000", "10000", "11110", "10000", "10000", "10000"],
+    "I": ["11111", "00100", "00100", "00100", "00100", "00100", "11111"],
+    "K": ["10001", "10010", "10100", "11000", "10100", "10010", "10001"],
+    "M": ["10001", "11011", "10101", "10101", "10001", "10001", "10001"],
+    "Q": ["01110", "10001", "10001", "10001", "10101", "10010", "01101"],
+    "R": ["11110", "10001", "10001", "11110", "10100", "10010", "10001"],
+    "T": ["11111", "00100", "00100", "00100", "00100", "00100", "00100"],
+    "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+    "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+    "2": ["01110", "10001", "00001", "00010", "00100", "01000", "11111"],
+    "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+    "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+    ":": ["00000", "00100", "00100", "00000", "00100", "00100", "00000"],
+    "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+    " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+}
+
+
+def _draw_block_text(
+    pixels: list,
+    width: int,
+    x: int,
+    y: int,
+    text: str,
+    scale: int = 7,
+) -> None:
+    """Draw uppercase block-font text into an RGB pixel buffer."""
+    height = len(pixels) // width
+    for char in text:
+        glyph = _BLOCK_FONT.get(char, _BLOCK_FONT[" "])
+        for row, pattern in enumerate(glyph):
+            for col, bit in enumerate(pattern):
+                if bit != "1":
+                    continue
+                for dy in range(scale):
+                    for dx in range(scale):
+                        px = x + col * scale + dx
+                        py = y + row * scale + dy
+                        if 0 <= px < width and 0 <= py < height:
+                            pixels[py * width + px] = (0, 0, 0)
+        x += 6 * scale
+
+
+def create_labeled_test_image_base64() -> str:
+    """Create a PNG with large text labels for vision extraction tests."""
+    import struct
+    import zlib
+
+    width, height = 700, 260
+    pixels = [(255, 255, 255)] * (width * height)
+    _draw_block_text(pixels, width, 30, 35, "TICKER: ACME")
+    _draw_block_text(pixels, width, 30, 115, "TIMEFRAME: Q4")
+    _draw_block_text(pixels, width, 30, 195, "DATE: 2026-06-21")
+
+    raw = b"".join(
+        b"\x00"
+        + b"".join(bytes(pixel) for pixel in pixels[y * width : (y + 1) * width])
+        for y in range(height)
+    )
+    png = b"\x89PNG\r\n\x1a\n"
+    png += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+    png += _png_chunk(b"IDAT", zlib.compress(raw))
+    png += _png_chunk(b"IEND", b"")
+
+    return base64.standard_b64encode(png).decode("utf-8")
+
+
 class TestMultiModal:
     """Test multi-modal image input across Workers AI models via REST API.
 
     Discovery test: Which Workers AI models accept image content blocks
-    when invoked via the REST API (/v1/chat/completions)?
+    when invoked via the native Workers AI REST API (/ai/run)?
     """
 
     @pytest.mark.parametrize("model", MODELS)
@@ -1014,6 +1112,84 @@ class TestVisionModels:
         print(f"  Response: {text[:200]}")
 
         assert len(text) > 0, f"Expected non-empty vision response from {model}"
+
+
+# MARK: - OpenAI-Compatible Endpoint Tests
+
+
+class TestOpenAICompatibleEndpoint:
+    """Focused coverage for endpoint_format='openai_compatible'."""
+
+    @pytest.mark.parametrize("model", OPENAI_COMPAT_MODELS)
+    @pytest.mark.parametrize("endpoint_format", ["workers_ai", "openai_compatible"])
+    def test_basic_invoke_endpoint_formats(
+        self, model, endpoint_format, account_id, api_token, ai_gateway
+    ):
+        """Basic text invoke should work through both REST endpoint formats."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(
+            model,
+            account_id,
+            api_token,
+            ai_gateway,
+            endpoint_format=endpoint_format,
+        )
+        result = llm.invoke("Say hello in exactly one word.")
+        text = get_text_content(result.content)
+
+        print(f"\n[{model}] endpoint_format={endpoint_format}:")
+        print(f"  Response: {text[:200]}")
+
+        assert len(text) > 0, (
+            f"Expected non-empty response from {model} via {endpoint_format}"
+        )
+
+    def test_openai_compatible_structured_vision_extracts_labeled_fields(
+        self, account_id, api_token, ai_gateway
+    ):
+        """OpenAI-compatible mode should extract structured fields from image text."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        model = "@cf/moonshotai/kimi-k2.6"
+        llm = create_llm(
+            model,
+            account_id,
+            api_token,
+            ai_gateway,
+            endpoint_format="openai_compatible",
+        )
+        structured_llm = llm.with_structured_output(
+            ImageExtraction,
+            method="json_schema",
+        )
+        image_b64 = create_labeled_test_image_base64()
+        message = HumanMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": (
+                        "Extract the ticker, timeframe, and date from this image."
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+                },
+            ]
+        )
+
+        result = structured_llm.invoke([message])
+
+        print("\n[openai_compatible] Structured vision extraction:")
+        print(f"  Result: {result}")
+
+        assert isinstance(result, ImageExtraction)
+        assert result.ticker == "ACME"
+        assert result.timeframe == "Q4"
+        assert result.date == "2026-06-21"
 
 
 if __name__ == "__main__":
