@@ -302,12 +302,7 @@ class TestWorkerMultiTurn:
 
 
 class TestWorkerAgentStructuredOutput:
-    """Test create_agent with structured output endpoint.
-
-    Note: These tests will fail with 501 if create_agent is not available in the
-    Pyodide environment due to the uuid-utils dependency in langsmith.
-    See .claude/create_agent_pyodide_issue.md for details.
-    """
+    """Test create_agent with structured output endpoint."""
 
     @pytest.mark.parametrize("model", MODELS)
     def test_agent_structured_output(self, dev_server, model):
@@ -318,9 +313,6 @@ class TestWorkerAgentStructuredOutput:
             json={"text": "Apple Inc announced record Q4 earnings.", "model": model},
             headers={"Content-Type": "application/json"},
         )
-
-        if response.status_code == 501:
-            pytest.skip("create_agent unavailable (uuid-utils not in Pyodide)")
 
         assert response.status_code == 200, (
             f"Expected 200, got {response.status_code}. Response: {response.text}"
@@ -352,9 +344,6 @@ class TestWorkerAgentStructuredJsonSchema:
             headers={"Content-Type": "application/json"},
         )
 
-        if response.status_code == 501:
-            pytest.skip("create_agent or ToolStrategy unavailable in Pyodide")
-
         assert response.status_code == 200, (
             f"Expected 200, got {response.status_code}. Response: {response.text}"
         )
@@ -369,12 +358,7 @@ class TestWorkerAgentStructuredJsonSchema:
 
 
 class TestWorkerAgentTools:
-    """Test create_agent with tools endpoint.
-
-    Note: These tests will fail with 501 if create_agent is not available in the
-    Pyodide environment due to the uuid-utils dependency in langsmith.
-    See .claude/create_agent_pyodide_issue.md for details.
-    """
+    """Test create_agent with tools endpoint."""
 
     @pytest.mark.parametrize("model", MODELS)
     def test_agent_tools(self, dev_server, model):
@@ -385,9 +369,6 @@ class TestWorkerAgentTools:
             json={"message": "What is the weather in San Francisco?", "model": model},
             headers={"Content-Type": "application/json"},
         )
-
-        if response.status_code == 501:
-            pytest.skip("create_agent unavailable (uuid-utils not in Pyodide)")
 
         assert response.status_code == 200, (
             f"Expected 200, got {response.status_code}. Response: {response.text}"

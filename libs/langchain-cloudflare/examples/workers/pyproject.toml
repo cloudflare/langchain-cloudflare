@@ -7,8 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
     "webtypy>=0.1.7",
     "langchain-cloudflare @ file:////Users/collierking/Desktop/github/langchain-cloudflare/libs/langchain-cloudflare",
+    # Keep pywrangler sync on the latest Pyodide-compatible 0.3.x core.
+    # scripts/setup_pyodide_deps.sh replaces this with LangChain 1.x wheels.
     "langchain-core>=0.3.81,<1.0.0",
-    "langchain>=0.3.0,<1.0.0",
     "sqlalchemy-cloudflare-d1 @ file:////Users/collierking/Desktop/github/sqlalchemy-cloudflare-d1",
     # NOTE: Do NOT include pydantic - use Pyodide's built-in version
     # pydantic_core requires compiled Rust binaries that aren't available for WebAssembly

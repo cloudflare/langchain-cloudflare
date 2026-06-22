@@ -8,7 +8,7 @@ This example demonstrates how to use `langchain-cloudflare` with Cloudflare Pyth
 - Structured output with Pydantic models
 - Tool calling
 - Multi-turn conversations
-- `create_agent` pattern (requires langchain>=0.3.0)
+- `create_agent` pattern (requires langchain>=1.0.0)
 - Vectorize operations (insert, search, delete)
 - D1 database operations
 

@@ -677,7 +677,7 @@ Return JSON with an "announcements" array. Each announcement should have:
         """Handle create_agent with structured output."""
         if not CREATE_AGENT_AVAILABLE:
             return Response.json(
-                {"error": "create_agent is not available. Install langchain>=0.3.0"},
+                {"error": "create_agent is not available. Install langchain>=1.0.0"},
                 status=501,
             )
 
@@ -815,7 +815,7 @@ Return JSON with an "announcements" array. Each announcement should have:
         """Handle create_agent with tools."""
         if not CREATE_AGENT_AVAILABLE:
             return Response.json(
-                {"error": "create_agent is not available. Install langchain>=0.3.0"},
+                {"error": "create_agent is not available. Install langchain>=1.0.0"},
                 status=501,
             )
 
