@@ -13,8 +13,9 @@
 # - pywrangler sync fails when it encounters these missing wheels
 #
 # Solution:
-# - Install langchain-core>=1.0.0 via pywrangler (pure Python, has wheels)
-# - Manually extract langchain, langgraph, langgraph_sdk wheels
+# - Install a Pyodide-compatible langchain-core 0.3.x via pywrangler
+# - Replace it by manually extracting langchain-core 1.x plus langchain,
+#   langgraph, and langgraph_sdk wheels
 # - Use pure Python stubs for xxhash and ormsgpack
 
 set -e
@@ -27,8 +28,9 @@ TEMP_DIR="$PROJECT_DIR/.wheels_temp"
 
 # MARK: - Configuration
 
-# Wheel versions to download
-# NOTE: langchain 1.0.0 actually needs langchain-core 1.1.0 for all imports to work
+# Wheel versions to download.
+# This stack is known to keep create_agent available in Python Workers without
+# pulling newer native dependencies that do not have Pyodide wheels.
 LANGCHAIN_VERSION="1.0.0"
 LANGCHAIN_CORE_VERSION="1.1.0"
 LANGGRAPH_VERSION="1.0.0"
@@ -107,6 +109,8 @@ rm -rf "$PYTHON_MODULES/langchain_core" "$PYTHON_MODULES/langchain_core-"*.dist-
 rm -rf "$PYTHON_MODULES/langgraph" "$PYTHON_MODULES/langgraph-"*.dist-info 2>/dev/null || true
 rm -rf "$PYTHON_MODULES/langgraph_sdk" "$PYTHON_MODULES/langgraph_sdk-"*.dist-info 2>/dev/null || true
 rm -rf "$PYTHON_MODULES/langgraph_checkpoint" "$PYTHON_MODULES/langgraph_checkpoint-"*.dist-info 2>/dev/null || true
+rm -rf "$PYTHON_MODULES/langchain_protocol" "$PYTHON_MODULES/langchain_protocol-"*.dist-info 2>/dev/null || true
+rm -rf "$PYTHON_MODULES/langgraph_prebuilt" "$PYTHON_MODULES/langgraph_prebuilt-"*.dist-info 2>/dev/null || true
 
 download_and_extract_wheel "langchain" "$LANGCHAIN_VERSION"
 download_and_extract_wheel "langchain-core" "$LANGCHAIN_CORE_VERSION"
@@ -131,6 +135,9 @@ echo "Step 3: Building and copying stubs..."
 # Remove old stub copies
 rm -rf "$PYTHON_MODULES/xxhash" 2>/dev/null || true
 rm -rf "$PYTHON_MODULES/ormsgpack" 2>/dev/null || true
+rm -rf "$PYTHON_MODULES/orjson" "$PYTHON_MODULES/orjson-"*.dist-info 2>/dev/null || true
+rm -rf "$PYTHON_MODULES/uuid_utils" "$PYTHON_MODULES/uuid_utils-"*.dist-info 2>/dev/null || true
+rm -rf "$PYTHON_MODULES/websockets" "$PYTHON_MODULES/websockets-"*.dist-info 2>/dev/null || true
 
 build_stub "xxhash"
 build_stub "ormsgpack"
