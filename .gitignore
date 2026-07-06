@@ -51,6 +51,7 @@ logs/
 
 # Poetry
 poetry.lock
+pylock.toml
 
 # Unit test / coverage reports
 htmlcov/

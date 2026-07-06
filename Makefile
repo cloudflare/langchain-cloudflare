@@ -5,6 +5,7 @@ all: help
 
 # Define a variable for the test file path.
 TEST_FILE ?= tests/unit_tests/
+INTEGRATION_TEST_ARGS ?= --ignore=tests/integration_tests/test_worker_integration.py
 integration_test integration_tests: TEST_FILE = tests/integration_tests/
 
 # Auto-detect the package name based on current directory
@@ -23,7 +24,7 @@ integration_test integration_tests:
 	@if [ -f ../../.env ]; then set -a && . ../../.env && set +a; fi && \
 	export TEST_CF_API_TOKEN="$${TEST_CF_API_TOKEN:-$$CF_API_TOKEN}" && \
 	unset VIRTUAL_ENV && \
-	uv run pytest $(TEST_FILE) -v
+	uv run pytest $(TEST_FILE) $(INTEGRATION_TEST_ARGS) -v
 
 # Worker integration tests (requires wrangler OAuth login)
 # These test the Python Workers bindings with pywrangler dev server
@@ -87,7 +88,7 @@ help:
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
-	@echo 'integration_tests            - run all integration tests (loads .env automatically)'
+	@echo 'integration_tests            - run non-Worker integration tests (loads .env automatically)'
 	@echo 'worker_sync                  - sync Worker dependencies (pywrangler sync)'
 	@echo 'worker_tests                 - run Worker integration tests (requires wrangler login)'
 	@echo 'dev_server                   - start pywrangler dev server for debugging'
