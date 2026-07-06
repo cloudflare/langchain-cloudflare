@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.6]
+
+#### Added
+
+- **`CloudflareAISearchRetriever`**: A LangChain `BaseRetriever` for Cloudflare AI Search (the managed retrieval / RAG service, fka AutoRAG). Supports hybrid/vector/keyword retrieval, metadata filtering, boosting, reranking, query rewriting, and caching, plus an `ai_search_options` parameter for any other AI Search option. Works over the REST API and, inside Python Workers, the dedicated `ai_search` binding (async). Chunks are returned as `Document`s with citation metadata.
+
+---
+
 ### [0.3.5]
 
 #### Added

@@ -40,3 +40,18 @@ class TokenErrors(StrEnum):
         "and no `d1_api_token` provided. Please set these through parameters "
         "or environment variables (CF_API_TOKEN, CF_D1_API_TOKEN)."
     )
+
+    INSUFFICIENT_AI_SEARCH_TOKENS = (
+        "A Cloudflare AI Search API token (with the AI Search:Run permission) "
+        "must be provided either through the api_token parameter or the "
+        "CF_AI_SEARCH_API_TOKEN (or CF_API_TOKEN) environment variable. "
+        "Alternatively, when running in a Python Worker, you can pass the "
+        "'binding' parameter (a dedicated ai_search binding) instead."
+    )
+
+    NO_AI_SEARCH_INSTANCE = (
+        "An AI Search instance_name must be provided through the instance_name "
+        "parameter or the CF_AI_SEARCH_INSTANCE_NAME environment variable when "
+        "using the REST API. Alternatively, when running in a Python Worker, "
+        "you can pass the 'binding' parameter instead."
+    )
