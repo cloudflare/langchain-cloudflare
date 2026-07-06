@@ -1,6 +1,6 @@
 # LangChain Cloudflare Worker Example
 
-This example demonstrates how to use `langchain-cloudflare` with Cloudflare Python Workers, using the Workers AI, Vectorize, and D1 bindings directly for optimal performance.
+This example demonstrates how to use `langchain-cloudflare` with Cloudflare Python Workers, using the Workers AI, Vectorize, AI Search, and D1 bindings directly for optimal performance.
 
 ## Features
 
@@ -10,11 +10,12 @@ This example demonstrates how to use `langchain-cloudflare` with Cloudflare Pyth
 - Multi-turn conversations
 - `create_agent` pattern (requires langchain>=1.0.0)
 - Vectorize operations (insert, search, delete)
+- AI Search retrieval
 - D1 database operations
 
 ## Prerequisites
 
-1. Cloudflare account with Workers, AI, Vectorize, and D1 access
+1. Cloudflare account with Workers, AI, Vectorize, AI Search, and D1 access
 2. Python 3.12+
 3. [uv](https://docs.astral.sh/uv/) package manager
 4. [pywrangler](https://pypi.org/project/workers-py/) for local development
@@ -38,6 +39,9 @@ This example demonstrates how to use `langchain-cloudflare` with Cloudflare Pyth
 
 4. Update `wrangler.jsonc` with your database ID
 
+5. Create an AI Search instance named `langchain-cloudflare-test` or update the
+   `ai_search` binding in `wrangler.jsonc` to point at your instance
+
 ## Running Locally
 
 ```bash
@@ -59,6 +63,7 @@ uv run pywrangler dev
 | `/vectorize-search` | POST | Search Vectorize |
 | `/vectorize-delete` | POST | Delete from Vectorize |
 | `/vectorize-info` | GET | Vectorize index info |
+| `/ai-search` | POST | Search AI Search |
 | `/d1-health` | GET | D1 health check |
 | `/d1-create-table` | POST | Create D1 table |
 | `/d1-insert` | POST | Insert into D1 |
@@ -82,4 +87,9 @@ curl -X POST http://localhost:8787/structured \
 curl -X POST http://localhost:8787/tools \
   -H "Content-Type: application/json" \
   -d '{"message": "What is the weather in San Francisco?"}'
+
+# AI Search
+curl -X POST http://localhost:8787/ai-search \
+  -H "Content-Type: application/json" \
+  -d '{"query": "cloudflare", "k": 3}'
 ```

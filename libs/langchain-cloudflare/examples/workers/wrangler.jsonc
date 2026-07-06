@@ -14,6 +14,13 @@
       "remote": true
     }
   ],
+  "ai_search": [
+    {
+      "binding": "AI_SEARCH",
+      "instance_name": "langchain-cloudflare-test",
+      "remote": true
+    }
+  ],
   "d1_databases": [
     {
       "binding": "D1",

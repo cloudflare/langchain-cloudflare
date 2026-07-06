@@ -10,6 +10,7 @@ Features demonstrated:
 - Multi-turn conversations
 - create_agent pattern with structured output and tools
 - Vectorize operations (insert, search, delete)
+- AI Search retrieval
 - D1 database operations
 
 All endpoints accept an optional "model" parameter in the request body to specify
@@ -21,7 +22,11 @@ from models import Data
 from tools import ALL_TOOLS, get_stock_price, get_weather
 from workers import Response, WorkerEntrypoint
 
-from langchain_cloudflare import ChatCloudflareWorkersAI, CloudflareVectorize
+from langchain_cloudflare import (
+    ChatCloudflareWorkersAI,
+    CloudflareAISearchRetriever,
+    CloudflareVectorize,
+)
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
@@ -117,6 +122,9 @@ class Default(WorkerEntrypoint):
                 return await self.handle_vectorize_delete(request)
             elif path == "vectorize-info":
                 return await self.handle_vectorize_info(request)
+            # AI Search endpoint
+            elif path == "ai-search":
+                return await self.handle_ai_search(request)
             # Reranker endpoint
             elif path == "rerank":
                 return await self.handle_rerank(request)
@@ -155,6 +163,7 @@ class Default(WorkerEntrypoint):
         """Return API documentation."""
         # Check binding availability
         vectorize_available = hasattr(self.env, "VECTORIZE")
+        ai_search_available = hasattr(self.env, "AI_SEARCH")
         d1_available = hasattr(self.env, "D1")
 
         return Response.json(
@@ -162,6 +171,7 @@ class Default(WorkerEntrypoint):
                 "name": "LangChain + Cloudflare Python Workers Example",
                 "create_agent_available": CREATE_AGENT_AVAILABLE,
                 "vectorize_available": vectorize_available,
+                "ai_search_available": ai_search_available,
                 "d1_available": d1_available,
                 "supported_models": SUPPORTED_MODELS,
                 "default_model": DEFAULT_MODEL,
@@ -182,6 +192,7 @@ class Default(WorkerEntrypoint):
                     "/vectorize-search": "Similarity search (rerank=true)",
                     "/vectorize-delete": "Delete documents from Vectorize",
                     "/vectorize-info": "Get Vectorize index info",
+                    "/ai-search": "Search AI Search via binding",
                     "/rerank": "Rerank documents by query relevance",
                     "/ai-gateway-test": "Test AI Gateway with bindings",
                     "/d1-health": "D1 database health check",
@@ -1053,6 +1064,43 @@ Return JSON with an "announcements" array. Each announcement should have:
         return Response.json(
             {
                 "index_info": info,
+            }
+        )
+
+    # MARK: - AI Search Handler
+
+    async def handle_ai_search(self, request):
+        """Handle AI Search retrieval through a Worker binding."""
+        data = await request.json()
+        query = data.get("query", "")
+        k = data.get("k", 3)
+
+        if not query:
+            return Response.json({"error": "query is required"}, status=400)
+
+        if not hasattr(self.env, "AI_SEARCH"):
+            return Response.json(
+                {"error": "AI_SEARCH binding not configured"},
+                status=400,
+            )
+
+        retriever = CloudflareAISearchRetriever(
+            binding=self.env.AI_SEARCH,
+            k=k,
+        )
+        docs = await retriever.ainvoke(query, k=k)
+
+        return Response.json(
+            {
+                "query": query,
+                "count": len(docs),
+                "results": [
+                    {
+                        "page_content": doc.page_content,
+                        "metadata": doc.metadata,
+                    }
+                    for doc in docs
+                ],
             }
         )
 

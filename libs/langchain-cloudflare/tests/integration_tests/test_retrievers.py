@@ -1,17 +1,14 @@
 # ruff: noqa: T201
 """Integration tests for CloudflareAISearchRetriever.
 
-Prerequisite: a real, pre-populated AI Search instance. The standard
-``RetrieversIntegrationTests`` suite asserts exact result counts (3 and 1), so the
-instance must return at least 3 chunks for ``retriever_query_example`` and the
-retriever must not be configured with a pruning ``match_threshold`` or with
-reranking/query rewriting enabled.
+The standard ``RetrieversIntegrationTests`` suite asserts exact result counts
+(3 and 1), so these tests seed deterministic fixture documents into the
+configured AI Search instance before querying it.
 
 Required environment variables:
     - CF_ACCOUNT_ID
-    - CF_AI_SEARCH_API_TOKEN (or CF_API_TOKEN)
+    - CF_AI_SEARCH_API_TOKEN (or TEST_CF_API_TOKEN or CF_API_TOKEN)
     - CF_AI_SEARCH_INSTANCE_NAME
-    - CF_AI_SEARCH_QUERY (optional; a broad query with many matches)
 """
 
 import os
@@ -23,16 +20,24 @@ from langchain_tests.integration_tests import RetrieversIntegrationTests
 
 from langchain_cloudflare.retrievers import CloudflareAISearchRetriever
 
+_ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID") or os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+_API_TOKEN = (
+    os.environ.get("CF_AI_SEARCH_API_TOKEN")
+    or os.environ.get("TEST_CF_API_TOKEN")
+    or os.environ.get("CF_API_TOKEN")
+    or os.environ.get("CLOUDFLARE_API_TOKEN")
+)
 _HAS_CREDS = bool(
-    os.environ.get("CF_ACCOUNT_ID")
-    and os.environ.get("CF_AI_SEARCH_INSTANCE_NAME")
-    and (os.environ.get("CF_AI_SEARCH_API_TOKEN") or os.environ.get("CF_API_TOKEN"))
+    _ACCOUNT_ID and _API_TOKEN and os.environ.get("CF_AI_SEARCH_INSTANCE_NAME")
 )
 
-pytestmark = pytest.mark.skipif(
-    not _HAS_CREDS,
-    reason="AI Search credentials / instance not configured",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not _HAS_CREDS,
+        reason="AI Search credentials / instance not configured",
+    ),
+    pytest.mark.usefixtures("ai_search_test_data"),
+]
 
 
 class TestCloudflareAISearchRetriever(RetrieversIntegrationTests):
@@ -50,4 +55,4 @@ class TestCloudflareAISearchRetriever(RetrieversIntegrationTests):
 
     @property
     def retriever_query_example(self) -> str:
-        return os.environ.get("CF_AI_SEARCH_QUERY", "cloudflare")
+        return os.environ.get("CF_AI_SEARCH_QUERY", "langchaincloudflarefixture")
