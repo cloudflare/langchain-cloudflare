@@ -9,6 +9,7 @@ Tests are organized by functionality:
 - Tool calling tests
 - Agent tests (create_agent pattern)
 - Vectorize binding tests
+- AI Search binding tests
 - D1 binding tests
 - Multi-modal input tests
 
@@ -77,6 +78,7 @@ class TestWorkerIndex:
         # D1 endpoints
         assert "/d1-health" in data["endpoints"]
         assert "/d1-create-table" in data["endpoints"]
+        assert "/ai-search" in data["endpoints"]
 
 
 # MARK: - Chat Tests
@@ -583,6 +585,48 @@ class TestWorkerVectorize:
         port, _ = dev_server_with_vectorize
         response = requests.post(
             f"http://localhost:{port}/vectorize-search",
+            json={},
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 400
+        data = response.json()
+        assert "error" in data
+
+
+# MARK: - AI Search Binding Tests
+
+
+class TestWorkerAISearch:
+    """Test AI Search retrieval via Worker binding."""
+
+    def test_ai_search_retriever(self, ai_search_test_data, dev_server):
+        """POST /ai-search should return seeded AI Search fixture documents."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/ai-search",
+            json={"query": ai_search_test_data["query"], "k": 3},
+            headers={"Content-Type": "application/json"},
+        )
+
+        if response.status_code in (400, 500):
+            data = response.json()
+            if "AI_SEARCH binding not configured" in data.get("error", ""):
+                pytest.skip("AI Search binding not configured")
+
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["query"] == ai_search_test_data["query"]
+        assert data["count"] == 3
+        assert len(data["results"]) == 3
+        assert all(result["page_content"] for result in data["results"])
+
+    def test_ai_search_missing_query(self, dev_server):
+        """POST /ai-search without query should return error."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/ai-search",
             json={},
             headers={"Content-Type": "application/json"},
         )

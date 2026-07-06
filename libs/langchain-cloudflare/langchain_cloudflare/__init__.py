@@ -2,6 +2,8 @@
 from importlib import metadata
 
 from langchain_cloudflare.bindings import (
+    # AI Search binding utilities
+    convert_aisearch_response,
     # Workers AI binding utilities
     convert_binding_response_to_rest_format,
     convert_payload_for_binding,
@@ -18,6 +20,7 @@ from langchain_cloudflare.bindings import (
 from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker, RerankResult
+from langchain_cloudflare.retrievers import CloudflareAISearchRetriever
 from langchain_cloudflare.vectorstores import CloudflareVectorize
 
 try:
@@ -30,6 +33,7 @@ del metadata  # optional, avoids polluting the results of dir(__package__)
 # MARK: - Public API
 __all__ = [
     "ChatCloudflareWorkersAI",
+    "CloudflareAISearchRetriever",
     "CloudflareVectorize",
     "CloudflareWorkersAIEmbeddings",
     "CloudflareWorkersAIReranker",
@@ -46,5 +50,7 @@ __all__ = [
     "convert_vectors_for_binding",
     # Reranker binding utilities
     "convert_reranker_response",
+    # AI Search binding utilities
+    "convert_aisearch_response",
     "__version__",
 ]

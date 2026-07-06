@@ -19,6 +19,7 @@ AND
 OR (if using separately scoped tokens)
 
 - `CF_AI_API_TOKEN` (CloudflareWorkersAI and CloudflareWorkersAIEmbeddings)
+- `CF_AI_SEARCH_API_TOKEN` (CloudflareAISearchRetriever)
 - `CF_VECTORIZE_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_DATABASE_ID` (CloudflareVectorize)
@@ -83,6 +84,45 @@ vst = CloudflareVectorize(
 )
 vst.create_index(index_name="my-cool-vectorstore")
 ```
+
+## Retrievers
+`CloudflareAISearchRetriever` exposes Cloudflare [AI Search](https://developers.cloudflare.com/ai-search/) (the managed retrieval / RAG service, fka AutoRAG) as a LangChain retriever.
+
+### Prerequisites
+
+- **An AI Search instance with content.** The retriever searches an *existing* instance,
+  so create one and add your data first — via the
+  [dashboard](https://developers.cloudflare.com/ai-search/),
+  [Wrangler](https://developers.cloudflare.com/ai-search/wrangler-commands/), or the
+  [Python SDK](https://developers.cloudflare.com/ai-search/get-started/python/).
+- **Credentials**, read from the environment:
+  - `CF_ACCOUNT_ID`
+  - `CF_AI_SEARCH_API_TOKEN` — an `AI Search:Run` token (falls back to `CF_API_TOKEN`)
+  - `CF_AI_SEARCH_INSTANCE_NAME` — or pass `instance_name=`
+
+### Usage
+
+```python
+from langchain_cloudflare import CloudflareAISearchRetriever
+
+retriever = CloudflareAISearchRetriever(instance_name="my-instance")
+docs = retriever.invoke("How do I configure Workers AI?")
+```
+
+Inside a Python Worker, pass the dedicated `ai_search` binding instead of REST
+credentials (async only):
+
+```python
+retriever = CloudflareAISearchRetriever(binding=env.MY_SEARCH)
+docs = await retriever.ainvoke("How do I configure Workers AI?")
+```
+
+The constructor exposes AI Search's [retrieval options](https://developers.cloudflare.com/ai-search/configuration/retrieval/)
+(hybrid search, metadata filters, reranking, query rewriting, …) as parameters, plus an
+`ai_search_options` parameter for passing any AI Search option that doesn't have its own
+parameter. As a standard `BaseRetriever` it plugs into RAG chains
+and becomes an agent tool via `create_retriever_tool`. For multi-tenant
+setups, give each tenant its own instance and point a retriever at that instance.
 
 ## Release Notes
 v0.1.1 (2025-04-08)

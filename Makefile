@@ -25,14 +25,16 @@ integration_test integration_tests:
 	unset VIRTUAL_ENV && \
 	uv run pytest $(TEST_FILE) -v
 
-# Worker integration tests (requires wrangler OAuth login)
+# Worker integration tests live outside tests/integration_tests so CI's default
+# integration target does not collect Wrangler-dependent tests.
+# Requires wrangler OAuth login.
 # These test the Python Workers bindings with pywrangler dev server
 worker_tests:
 	@echo "Running Worker integration tests..."
 	@echo "Note: Requires 'npx wrangler login' first"
 	@if [ -f ../../.env ]; then set -a && . ../../.env && set +a; fi && \
 	unset VIRTUAL_ENV && \
-	uv run pytest tests/integration_tests/test_worker_integration.py -v
+	uv run pytest tests/worker_tests/ -v
 
 # Sync Worker dependencies (run before worker_tests or dev_server)
 worker_sync:
@@ -87,7 +89,7 @@ help:
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
-	@echo 'integration_tests            - run all integration tests (loads .env automatically)'
+	@echo 'integration_tests            - run non-Worker integration tests (loads .env automatically)'
 	@echo 'worker_sync                  - sync Worker dependencies (pywrangler sync)'
 	@echo 'worker_tests                 - run Worker integration tests (requires wrangler login)'
 	@echo 'dev_server                   - start pywrangler dev server for debugging'

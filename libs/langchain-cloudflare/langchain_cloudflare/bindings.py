@@ -335,6 +335,34 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
     return []
 
 
+# MARK: - AI Search Binding Utilities
+
+
+def convert_aisearch_response(response: Any) -> Dict[str, Any]:
+    """Convert an AI Search binding response to Python format.
+
+    Used for ``env.<ai_search>.search()`` responses, which return an object with
+    a ``chunks`` list. Converts JS proxies to Python and normalizes the shape.
+
+    Args:
+        response: The raw response from the AI Search binding ``search()`` call.
+
+    Returns:
+        Dict containing the search result (with a ``chunks`` list).
+    """
+    # Convert JS proxy to Python
+    if hasattr(response, "to_py"):
+        response = response.to_py()
+
+    if isinstance(response, dict):
+        return response
+
+    if isinstance(response, list):
+        return {"result": {"chunks": response}}
+
+    return {"result": {"chunks": []}}
+
+
 __all__ = [
     # Workers AI binding utilities
     "create_gateway_options",
@@ -350,4 +378,6 @@ __all__ = [
     "convert_vectorize_describe_response",
     # Reranker binding utilities
     "convert_reranker_response",
+    # AI Search binding utilities
+    "convert_aisearch_response",
 ]

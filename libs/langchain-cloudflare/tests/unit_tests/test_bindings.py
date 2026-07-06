@@ -2,6 +2,7 @@
 """Unit tests for bindings.py utilities."""
 
 from langchain_cloudflare.bindings import (
+    convert_aisearch_response,
     convert_reranker_response,
     create_binding_run_options,
 )
@@ -102,3 +103,26 @@ class TestCreateBindingRunOptions:
             "gateway": {"id": "my-gateway"},
             "headers": {"x-session-affinity": "sess-123"},
         }
+
+
+# MARK: - convert_aisearch_response Tests
+class TestConvertAISearchResponse:
+    """Test convert_aisearch_response normalizes all known response shapes."""
+
+    def test_dict_passthrough(self):
+        """A dict response (already Python) should be returned as-is."""
+        data = {"result": {"chunks": [{"id": "1", "text": "x"}]}}
+        assert convert_aisearch_response(data) == data
+
+    def test_list_wrapped(self):
+        """A bare list should be wrapped as a chunks result."""
+        chunks = [{"id": "1"}, {"id": "2"}]
+        assert convert_aisearch_response(chunks) == {"result": {"chunks": chunks}}
+
+    def test_none_returns_empty_chunks(self):
+        """None should return an empty chunks result."""
+        assert convert_aisearch_response(None) == {"result": {"chunks": []}}
+
+    def test_unknown_returns_empty_chunks(self):
+        """An unexpected scalar should return an empty chunks result."""
+        assert convert_aisearch_response("nope") == {"result": {"chunks": []}}
