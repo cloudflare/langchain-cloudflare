@@ -1,7 +1,7 @@
 # 🦜️🔗 LangChain Cloudflare
 
 This is a Monorepo containing LangChain packages for Cloudflare.
-It includes integrations between WorkersAI, Vectorize, D1, LangChain, and LangGraph.
+It includes integrations between WorkersAI, AI Search, Vectorize, D1, LangChain, and LangGraph.
 
 It contains the following packages.
 
@@ -17,7 +17,9 @@ It contains the following packages.
 
 - [ChatCloudflareWorkersAI](https://python.langchain.com/docs/integrations/chat/cloudflare_workersai/)
 - [CloudflareWorkersAIEmbeddings](https://python.langchain.com/docs/integrations/text_embedding/cloudflare_workersai/)
+- [CloudflareWorkersAIReranker](https://developers.cloudflare.com/workers-ai/) — document reranking on Workers AI
 - [CloudflareVectorize](https://python.langchain.com/docs/integrations/vectorstores/cloudflare_vectorize/)
+- [CloudflareAISearchRetriever](libs/langchain-cloudflare/README.md#retrievers) — Cloudflare [AI Search](https://developers.cloudflare.com/ai-search/) (fka AutoRAG)
 
 ### LangGraph
 
