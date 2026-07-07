@@ -19,7 +19,7 @@ AND
 OR (if using separately scoped tokens)
 
 - `CF_AI_API_TOKEN` (CloudflareWorkersAI and CloudflareWorkersAIEmbeddings)
-- `CF_AI_SEARCH_API_TOKEN` (CloudflareAISearchRetriever)
+- `CF_AI_SEARCH_API_TOKEN` (CloudflareAISearchClient and CloudflareAISearchRetriever)
 - `CF_VECTORIZE_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_API_TOKEN` (CloudflareVectorize)
 - `CF_D1_DATABASE_ID` (CloudflareVectorize)
@@ -84,6 +84,49 @@ vst = CloudflareVectorize(
 )
 vst.create_index(index_name="my-cool-vectorstore")
 ```
+
+## AI Search Administration
+
+`CloudflareAISearchClient` manages Cloudflare [AI Search](https://developers.cloudflare.com/ai-search/) instances and uploaded items. Use it for provisioning and lifecycle work; use `CloudflareAISearchRetriever` when you want a LangChain retriever for an existing instance.
+
+```python
+from langchain_cloudflare import CloudflareAISearchClient
+
+client = CloudflareAISearchClient()
+
+instance = client.create_instance("my-instance")
+item = client.upload_item(
+    "guide.md",
+    "AI Search indexes uploaded content for retrieval.",
+    instance_name=instance["id"],
+    content_type="text/markdown",
+    wait_for_completion=True,
+)
+
+results = client.search(
+    "How does AI Search handle uploaded content?",
+    instance_name=instance["id"],
+)
+
+client.delete_item(item["id"], instance_name=instance["id"], missing_ok=True)
+client.delete_instance(instance["id"], missing_ok=True)
+```
+
+For REST usage, set:
+
+- `CF_ACCOUNT_ID`
+- `CF_AI_SEARCH_API_TOKEN` — an `AI Search:Edit` and `AI Search:Run` token (falls back to `CF_API_TOKEN`)
+- `CF_AI_SEARCH_NAMESPACE` — optional, defaults to `default`
+
+Inside a Python Worker, pass an `ai_search_namespaces` binding for instance lifecycle operations:
+
+```python
+client = CloudflareAISearchClient(binding=env.AI_SEARCH)
+instance = await client.acreate_instance("tenant-a")
+await client.adelete_instance(instance["id"])
+```
+
+An instance-specific `ai_search` binding can still call instance methods such as `asearch()`, `astats()`, and item operations, but it cannot create, list, or delete instances.
 
 ## Retrievers
 `CloudflareAISearchRetriever` exposes Cloudflare [AI Search](https://developers.cloudflare.com/ai-search/) (the managed retrieval / RAG service, fka AutoRAG) as a LangChain retriever.

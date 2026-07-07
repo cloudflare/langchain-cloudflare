@@ -49,6 +49,14 @@ class TokenErrors(StrEnum):
         "'binding' parameter (a dedicated ai_search binding) instead."
     )
 
+    INSUFFICIENT_AI_SEARCH_ADMIN_TOKENS = (
+        "A Cloudflare AI Search API token (with AI Search:Edit and "
+        "AI Search:Run permissions) must be provided either through the "
+        "api_token parameter or the CF_AI_SEARCH_API_TOKEN (or CF_API_TOKEN) "
+        "environment variable. Alternatively, when running in a Python Worker, "
+        "you can pass an ai_search_namespaces binding."
+    )
+
     NO_AI_SEARCH_INSTANCE = (
         "An AI Search instance_name must be provided through the instance_name "
         "parameter or the CF_AI_SEARCH_INSTANCE_NAME environment variable when "

@@ -19,6 +19,7 @@ It contains the following packages.
 - [CloudflareWorkersAIEmbeddings](https://python.langchain.com/docs/integrations/text_embedding/cloudflare_workersai/)
 - [CloudflareWorkersAIReranker](https://developers.cloudflare.com/workers-ai/) — document reranking on Workers AI
 - [CloudflareVectorize](https://python.langchain.com/docs/integrations/vectorstores/cloudflare_vectorize/)
+- [CloudflareAISearchClient](libs/langchain-cloudflare/README.md#ai-search-administration) — AI Search instance and item lifecycle
 - [CloudflareAISearchRetriever](libs/langchain-cloudflare/README.md#retrievers) — Cloudflare [AI Search](https://developers.cloudflare.com/ai-search/) (fka AutoRAG)
 
 ### LangGraph

@@ -21,6 +21,13 @@
       "remote": true
     }
   ],
+  "ai_search_namespaces": [
+    {
+      "binding": "AI_SEARCH_ADMIN",
+      "namespace": "default",
+      "remote": true
+    }
+  ],
   "d1_databases": [
     {
       "binding": "D1",

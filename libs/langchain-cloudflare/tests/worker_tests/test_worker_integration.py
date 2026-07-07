@@ -635,6 +635,64 @@ class TestWorkerAISearch:
         data = response.json()
         assert "error" in data
 
+    def test_ai_search_admin_create_delete(self, dev_server):
+        """POST /ai-search-admin should manage a temporary instance."""
+        port = dev_server
+        instance_name = f"langchain-cloudflare-worker-{uuid.uuid4().hex[:8]}"
+        response = requests.post(
+            f"http://localhost:{port}/ai-search-admin",
+            json={
+                "action": "create-delete",
+                "instance_name": instance_name,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        if response.status_code in (400, 500):
+            data = response.json()
+            if "AI_SEARCH_ADMIN binding not configured" in data.get("error", ""):
+                pytest.skip("AI Search namespace binding not configured")
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["created_id"] == instance_name
+        assert data["listed"] is True
+        assert data["info_id"] == instance_name
+        assert isinstance(data["stats_keys"], list)
+
+    def test_ai_search_admin_namespace_search(self, ai_search_test_data, dev_server):
+        """POST /ai-search-admin should search via namespace binding."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/ai-search-admin",
+            json={
+                "action": "search",
+                "instance_name": ai_search_test_data["instance_name"],
+                "query": ai_search_test_data["query"],
+                "ai_search_options": {
+                    "retrieval": {
+                        "max_num_results": 3,
+                        "retrieval_type": "hybrid",
+                    },
+                    "query_rewrite": {"enabled": False},
+                    "reranking": {"enabled": False},
+                },
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        if response.status_code in (400, 500):
+            data = response.json()
+            if "AI_SEARCH_ADMIN binding not configured" in data.get("error", ""):
+                pytest.skip("AI Search namespace binding not configured")
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["instance_name"] == ai_search_test_data["instance_name"]
+        assert data["query"] == ai_search_test_data["query"]
+        assert data["count"] == 3
+        assert len(data["chunks"]) == 3
+
 
 # MARK: - Error Handling Tests
 

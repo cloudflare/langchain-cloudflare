@@ -24,6 +24,7 @@ from workers import Response, WorkerEntrypoint
 
 from langchain_cloudflare import (
     ChatCloudflareWorkersAI,
+    CloudflareAISearchClient,
     CloudflareAISearchRetriever,
     CloudflareVectorize,
 )
@@ -125,6 +126,8 @@ class Default(WorkerEntrypoint):
             # AI Search endpoint
             elif path == "ai-search":
                 return await self.handle_ai_search(request)
+            elif path == "ai-search-admin":
+                return await self.handle_ai_search_admin(request)
             # Reranker endpoint
             elif path == "rerank":
                 return await self.handle_rerank(request)
@@ -164,6 +167,7 @@ class Default(WorkerEntrypoint):
         # Check binding availability
         vectorize_available = hasattr(self.env, "VECTORIZE")
         ai_search_available = hasattr(self.env, "AI_SEARCH")
+        ai_search_admin_available = hasattr(self.env, "AI_SEARCH_ADMIN")
         d1_available = hasattr(self.env, "D1")
 
         return Response.json(
@@ -172,6 +176,7 @@ class Default(WorkerEntrypoint):
                 "create_agent_available": CREATE_AGENT_AVAILABLE,
                 "vectorize_available": vectorize_available,
                 "ai_search_available": ai_search_available,
+                "ai_search_admin_available": ai_search_admin_available,
                 "d1_available": d1_available,
                 "supported_models": SUPPORTED_MODELS,
                 "default_model": DEFAULT_MODEL,
@@ -193,6 +198,7 @@ class Default(WorkerEntrypoint):
                     "/vectorize-delete": "Delete documents from Vectorize",
                     "/vectorize-info": "Get Vectorize index info",
                     "/ai-search": "Search AI Search via binding",
+                    "/ai-search-admin": "Manage AI Search via namespace binding",
                     "/rerank": "Rerank documents by query relevance",
                     "/ai-gateway-test": "Test AI Gateway with bindings",
                     "/d1-health": "D1 database health check",
@@ -1103,6 +1109,67 @@ Return JSON with an "announcements" array. Each announcement should have:
                 ],
             }
         )
+
+    async def handle_ai_search_admin(self, request):
+        """Handle AI Search administration through a namespace binding."""
+        data = await request.json()
+        action = data.get("action", "create-delete")
+
+        if not hasattr(self.env, "AI_SEARCH_ADMIN"):
+            return Response.json(
+                {"error": "AI_SEARCH_ADMIN binding not configured"},
+                status=400,
+            )
+
+        client = CloudflareAISearchClient(binding=self.env.AI_SEARCH_ADMIN)
+
+        if action == "create-delete":
+            instance_name = data.get("instance_name", "")
+            if not instance_name:
+                return Response.json({"error": "instance_name is required"}, status=400)
+
+            try:
+                created = await client.acreate_instance(instance_name)
+                listed = await client.alist_instances(search=instance_name)
+                info = await client.aget_instance(instance_name)
+                stats = await client.astats(instance_name)
+                return Response.json(
+                    {
+                        "created_id": created.get("id"),
+                        "listed": any(
+                            item.get("id") == instance_name for item in listed
+                        ),
+                        "info_id": info.get("id"),
+                        "stats_keys": list(stats.keys()),
+                    }
+                )
+            finally:
+                await client.adelete_instance(instance_name, missing_ok=True)
+
+        if action == "search":
+            instance_name = data.get("instance_name", "")
+            query = data.get("query", "")
+            if not instance_name:
+                return Response.json({"error": "instance_name is required"}, status=400)
+            if not query:
+                return Response.json({"error": "query is required"}, status=400)
+
+            result = await client.asearch(
+                query,
+                instance_name=instance_name,
+                ai_search_options=data.get("ai_search_options"),
+            )
+            chunks = result.get("chunks") or []
+            return Response.json(
+                {
+                    "instance_name": instance_name,
+                    "query": query,
+                    "count": len(chunks),
+                    "chunks": chunks,
+                }
+            )
+
+        return Response.json({"error": f"Unknown action: {action}"}, status=400)
 
     # MARK: - Reranker Handler
 

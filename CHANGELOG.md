@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.7]
+
+#### Added
+
+- **`CloudflareAISearchClient`**: Adds an AI Search administration client for creating, listing, reading, updating, and deleting AI Search instances; reading instance stats; uploading, listing, reading, and deleting built-in-storage items; and running raw search and chat-completions requests. Supports REST API usage and async Python Worker `ai_search_namespaces` bindings for namespace-level instance management.
+- **AI Search admin integration coverage**: Adds live REST lifecycle coverage that creates a temporary AI Search instance, uploads and searches a markdown item, and deletes the instance; adds Worker namespace-binding coverage for create/delete and namespace search.
+- **AI Search notebook example**: Adds `docs/ai_search.ipynb` with a walkthrough for credentials, instance creation, item upload, raw search, retriever usage, and cleanup.
+
+---
+
 ### [0.3.6]
 
 #### Added

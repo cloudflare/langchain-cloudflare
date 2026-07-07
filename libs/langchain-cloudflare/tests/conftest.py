@@ -476,6 +476,7 @@ def _upload_ai_search_fixture_documents(
             "POST",
             f"{instance_url}/items",
             files=files,
+            data={"wait_for_completion": "true"},
         )
         result = data.get("result") or {}
         item_id = result.get("id")
@@ -513,7 +514,7 @@ def _search_ai_search_fixture(
 def _wait_for_ai_search_fixture(
     session: requests.Session,
     instance_url: str,
-    timeout_seconds: int = 120,
+    timeout_seconds: int = 240,
 ) -> None:
     """Wait until the fixture documents are indexed and searchable."""
     deadline = time.time() + timeout_seconds

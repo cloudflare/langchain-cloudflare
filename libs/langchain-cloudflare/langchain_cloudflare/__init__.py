@@ -1,6 +1,7 @@
 # MARK: - Imports
 from importlib import metadata
 
+from langchain_cloudflare.ai_search import CloudflareAISearchClient
 from langchain_cloudflare.bindings import (
     # AI Search binding utilities
     convert_aisearch_response,
@@ -33,6 +34,7 @@ del metadata  # optional, avoids polluting the results of dir(__package__)
 # MARK: - Public API
 __all__ = [
     "ChatCloudflareWorkersAI",
+    "CloudflareAISearchClient",
     "CloudflareAISearchRetriever",
     "CloudflareVectorize",
     "CloudflareWorkersAIEmbeddings",
