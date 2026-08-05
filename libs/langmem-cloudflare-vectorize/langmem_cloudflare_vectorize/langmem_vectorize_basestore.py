@@ -433,14 +433,17 @@ class CloudflareVectorizeBaseStore(BaseStore):
                 )
                 docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
             else:
-                # Generate search data for vectorize
-                if namespace_prefix_str:
-                    docs_with_scores = self.vectorstore.similarity_search_with_score(
-                        query=" ",  # Dummy query to get all results
-                        k=limit + offset,
-                        md_filter=search_filter,
-                    )
-                    docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
+                # No query: fetch candidates with a dummy query and rely on the
+                # namespace-prefix filtering below. An empty namespace_prefix_str
+                # is a valid "search everything" request (every namespace starts
+                # with ""), so this must run regardless of whether a prefix was
+                # given -- not just when namespace_prefix_str is truthy.
+                docs_with_scores = self.vectorstore.similarity_search_with_score(
+                    query=" ",  # Dummy query to get all results
+                    k=limit + offset,
+                    md_filter=search_filter,
+                )
+                docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
 
             # Filter by namespace prefix and apply pagination
             results = []
