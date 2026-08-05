@@ -460,44 +460,13 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         Returns:
             Iterator[CheckpointTuple]: Iterator over checkpoint tuples.
         """
-        filter = filter or {}
-        thread_id = None
-
-        # Extract thread ID from config or filter
-        if (
-            config
-            and "configurable" in config
-            and "thread_id" in config["configurable"]
-        ):
-            thread_id = config["configurable"]["thread_id"]
-        elif filter and "thread_id" in filter:
-            thread_id = filter["thread_id"]
-
-        # Do not filter results - simply iterate and yield checkpoints
         with self.lock:
-            if not thread_id:
-                return
-
             self.setup()
 
-            # Determine what to filter by
-            filter_by = []
-            params = []
-
-            if filter:
-                # Support exact match filtering on thread_id and checkpoint_id
-                for key, value in filter.items():
-                    if key in ["thread_id", "checkpoint_id"]:
-                        filter_by.append(f"{key} = ?")
-                        params.append(value)
-                    else:
-                        # For complex filtering, would need metadata query support
-                        continue
-
-            filter_clause = f"WHERE {' AND '.join(filter_by)}" if filter_by else ""
+            where, params = search_where(config, filter, before)
             limit_clause = f"LIMIT {limit}" if limit else ""
 
-            query = f"SELECT * FROM checkpoints {filter_clause} ORDER BY checkpoint_id DESC {limit_clause}"
+            query = f"SELECT * FROM checkpoints {where} ORDER BY checkpoint_id DESC {limit_clause}"
 
             response = self._execute_query(query, params)
 

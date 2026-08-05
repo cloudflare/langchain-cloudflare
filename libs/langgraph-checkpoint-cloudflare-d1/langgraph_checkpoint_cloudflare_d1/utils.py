@@ -51,14 +51,16 @@ def _metadata_predicate(
         """Return tuple of operator and value for WHERE clause predicate."""
         if query_value is None:
             return ("IS ?", None)
+        elif isinstance(query_value, bool):
+            # Must be checked before the int branch: bool is a subclass of int
+            # in Python, so `isinstance(True, int)` is also True.
+            return ("= ?", 1 if query_value else 0)
         elif (
             isinstance(query_value, str)
             or isinstance(query_value, int)
             or isinstance(query_value, float)
         ):
             return ("= ?", query_value)
-        elif isinstance(query_value, bool):
-            return ("= ?", 1 if query_value else 0)
         elif isinstance(query_value, dict) or isinstance(query_value, list):
             # query value for JSON object cannot have trailing space after separators (, :)
             # SQLite json_extract() returns JSON string without whitespace
