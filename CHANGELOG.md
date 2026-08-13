@@ -226,6 +226,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langgraph-checkpoint-cloudflare-d1
 
+### [0.1.6]
+
+#### Added
+- **`WorkerCloudflareD1Saver`**: A checkpoint saver for use inside Cloudflare Python Workers, talking to D1 through the native Worker binding (`env.DB`) via `sqlalchemy-cloudflare-d1`'s `WorkerConnection` instead of the REST API -- no network round-trip to the Cloudflare API, no API token. Installable via the new optional `worker` extra: `pip install 'langgraph-checkpoint-cloudflare-d1[worker]'`. Both the native async methods (for `graph.ainvoke`/`astream`) and, mirroring `sqlalchemy-cloudflare-d1`'s `SyncWorkerConnection`, synchronous methods bridged via `pyodide.ffi.run_sync()` are implemented, for calling the saver directly outside of a compiled graph. `graph.invoke()` (sync) itself still can't run inside a Worker with any checkpointer attached -- LangGraph's sync `Pregel` loop always submits checkpoint writes to a real `ThreadPoolExecutor`, which Workers/Pyodide can't create.
+- `examples/workers/`: a Python Worker example exercising `WorkerCloudflareD1Saver` end to end, including a full `StateGraph` compiled with the saver as its checkpointer.
+- Integration test coverage: `tests/integration_tests/` (REST API savers, previously untested) and `tests/worker_tests/` (Worker binding saver, via a `pywrangler dev` server), mirroring the REST/Worker split already used in `sqlalchemy-cloudflare-d1` and `langchain-cloudflare`.
+
+#### Fixed
+- **Metadata decoding**: `get_tuple`/`aget_tuple`/`list`/`alist` read the `metadata` column without base64-decoding it first, so on both the REST and Worker savers every returned `CheckpointMetadata` silently fell back to `{"step": -2}` (or an empty dict in `list`/`alist`) instead of the real stored metadata. Fixed via a shared `decode_metadata_blob` helper, since this had no integration test coverage before this change.
+- **Sync `list()` ignored `before` and metadata filters**: `CloudflareD1Saver.list()` built its own ad-hoc WHERE clause supporting only exact-match filtering on `thread_id`/`checkpoint_id`, silently dropping every other filter key and the `before` argument entirely, unlike `alist()` (which correctly delegates to `search_where()`). Also fixed a related bug in `search_where()`'s metadata predicate builder, where the `bool` branch was checked after the `int` branch and was therefore unreachable (`bool` is a subclass of `int` in Python), so boolean filter values were passed through as raw `True`/`False` instead of the `1`/`0` SQLite's `json_extract()` actually returns. Contributed by [@mittalpk](https://github.com/mittalpk).
+
 ### [0.1.5]
 
 #### Security

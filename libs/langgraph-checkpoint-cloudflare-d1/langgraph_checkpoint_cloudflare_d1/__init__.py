@@ -40,6 +40,7 @@ from tenacity import (
 from .aio import AsyncCloudflareD1Saver
 from .models import D1Response
 from .utils import _metadata_predicate, decode_metadata_blob, search_where
+from .worker import WorkerCloudflareD1Saver
 
 logger = logging.getLogger(__name__)
 
@@ -870,6 +871,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
 __all__ = [
     "CloudflareD1Saver",
     "AsyncCloudflareD1Saver",
+    "WorkerCloudflareD1Saver",
     "search_where",
     "_metadata_predicate",
 ]

@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ormsgpack"
+version = "1.10.0"
+description = "Stub ormsgpack for Pyodide - provides ormsgpack API using msgpack or JSON fallback"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ormsgpack"]
