@@ -1,0 +1,20 @@
+{
+  "name": "langmem-cloudflare-vectorize-example",
+  "main": "src/entry.py",
+  "compatibility_date": "2025-11-02",
+  "compatibility_flags": ["python_workers"],
+  "ai": {
+    "binding": "AI",
+    "remote": true
+  },
+  "vectorize": [
+    {
+      "binding": "VECTORIZE",
+      "index_name": "langchain-test-persistent",
+      "remote": true
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+}

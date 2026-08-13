@@ -6,7 +6,19 @@ import hashlib
 import json
 import traceback
 from datetime import datetime
-from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple, Union
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from langchain_cloudflare.vectorstores import CloudflareVectorize
 from langchain_core.embeddings import Embeddings
@@ -24,17 +36,42 @@ from langgraph.store.base import (
 
 DEFAULT_TOP_K = 20
 
+T = TypeVar("T")
+
 
 class CloudflareVectorizeBaseStore(BaseStore):
-    """Cloudflare Vectorize implementation for LangGraph's BaseStore interface using langchain-cloudflare."""
+    """Cloudflare Vectorize implementation for LangGraph's BaseStore interface using langchain-cloudflare.
+
+    Supports both the Cloudflare REST API (the default) and, inside a
+    Cloudflare Python Worker, the native Vectorize/D1 bindings -- pass
+    `binding` (e.g. `self.env.VECTORIZE`) and optionally `d1_binding`
+    (e.g. `self.env.D1`) instead of `account_id`/`api_token`. The
+    `embedding_function` you pass should itself be binding-aware too (e.g.
+    `CloudflareWorkersAIEmbeddings(binding=self.env.AI)`) for a fully
+    binding-based Worker setup with no REST calls at all.
+
+    `langchain_cloudflare.vectorstores.CloudflareVectorize`'s binding support
+    is async-only -- its sync methods (`similarity_search_with_score`,
+    `get_by_ids`, `add_documents`, `delete`) always use REST regardless of
+    `binding`. So when `binding` is set, this class's sync methods (`get`,
+    `put`, `delete`, `search`, `batch`) bridge to their async counterparts via
+    `pyodide.ffi.run_sync()` -- the same mechanism
+    `sqlalchemy_cloudflare_d1.SyncWorkerConnection` uses for SQLAlchemy's sync
+    engine, and `WorkerCloudflareD1Saver` uses in `langgraph-checkpoint-cloudflare-d1`
+    -- which only works from inside a live Worker request. Without a binding,
+    the sync methods are REST calls made directly on the calling thread, same
+    as before.
+    """
 
     def __init__(
         self,
-        account_id: str,
-        index_name: str,
-        api_token: str,
-        embedding_function: Embeddings,
-        cf_vectorize: CloudflareVectorize,
+        account_id: Optional[str] = None,
+        index_name: Optional[str] = None,
+        api_token: Optional[str] = None,
+        embedding_function: Optional[Embeddings] = None,
+        cf_vectorize: Optional[CloudflareVectorize] = None,
+        binding: Any = None,
+        d1_binding: Any = None,
         dimensions: int = 768,
         base_url: str = "https://api.cloudflare.com/client/v4",
         timeout: float = 60.0,
@@ -42,15 +79,34 @@ class CloudflareVectorizeBaseStore(BaseStore):
         """Initialize CloudflareVectorizeBaseStore.
 
         Args:
-            account_id: Cloudflare account ID
-            index_name: Name of the Vectorize index
-            api_token: Cloudflare API token
-            embedding_function: Embeddings instance to generate embeddings
-            cf_vectorize: CloudflareVectorize instance
+            account_id: Cloudflare account ID. Required for REST API usage;
+                not needed when `binding` is provided.
+            index_name: Name of the Vectorize index. Optional when `binding`
+                is provided (the index is already configured in wrangler.jsonc).
+            api_token: Cloudflare API token. Required for REST API usage; not
+                needed when `binding` is provided.
+            embedding_function: Embeddings instance to generate embeddings.
+            cf_vectorize: An already-configured CloudflareVectorize instance
+                to use directly -- e.g. one `with_cloudflare_embeddings()`
+                already called `create_index()` on. If not provided, one is
+                constructed from account_id/index_name/api_token/binding/d1_binding.
+            binding: Optional Vectorize binding (e.g. `self.env.VECTORIZE`)
+                for use in Python Workers. When provided, the async methods
+                (`aget`/`aput`/`adelete`/`asearch`/`abatch`) use the binding
+                instead of REST API calls, and the sync methods bridge to
+                them via `pyodide.ffi.run_sync()`.
+            d1_binding: Optional D1 database binding (e.g. `self.env.D1`) for
+                use in Python Workers.
             dimensions: Number of dimensions for vectors (default: 768)
             base_url: Base URL for Cloudflare API
             timeout: Request timeout in seconds (default: 60.0)
+
+        Raises:
+            ValueError: If embedding_function is not provided.
         """
+        if embedding_function is None:
+            raise ValueError("embedding_function is required")
+
         self.account_id = account_id
         self.index_name = index_name
         self.api_token = api_token
@@ -58,14 +114,22 @@ class CloudflareVectorizeBaseStore(BaseStore):
         self.dimensions = dimensions
         self.base_url = base_url
         self.timeout = timeout
-        self.cf_vectorize = cf_vectorize
+        self.binding = binding
+        self.d1_binding = d1_binding
 
-        self.vectorstore = CloudflareVectorize(
+        # Use an already-configured instance if given (e.g. from
+        # with_cloudflare_embeddings(), which may have already called
+        # create_index() on it) rather than silently building a second,
+        # separate one from the raw params below.
+        self.vectorstore = cf_vectorize or CloudflareVectorize(
             account_id=account_id,
             index_name=index_name,
             api_token=api_token,
             embedding=embedding_function,
+            binding=binding,
+            d1_binding=d1_binding,
         )
+        self.cf_vectorize = self.vectorstore
 
     @staticmethod
     def check_index_exists(
@@ -99,6 +163,11 @@ class CloudflareVectorizeBaseStore(BaseStore):
         timeout: float = 60.0,
     ) -> CloudflareVectorizeBaseStore:
         """Convenience constructor that uses Cloudflare Workers AI embeddings and CloudflareVectorize.
+
+        REST API only -- index creation is a management operation, not
+        something to do from inside a live Worker request. For Worker usage,
+        construct `CloudflareVectorizeBaseStore` directly with `binding`
+        (and a binding-aware `embedding_function`) instead.
 
         Args:
             account_id: Cloudflare account ID
@@ -144,10 +213,16 @@ class CloudflareVectorizeBaseStore(BaseStore):
         )
 
         # Initialize CloudflareVectorize
+        # index_name must be set here, not just passed to create_index()/cls()
+        # below -- CloudflareVectorize's own instance methods (aget_by_ids,
+        # similarity_search, etc.) fall back to self.index_name when no
+        # index_name is given per call, and cls() below reuses this same
+        # cf_vectorize instance rather than constructing a fresh one.
         cf_vectorize = CloudflareVectorize(
             embedding=embedder,
             account_id=account_id,
             vectorize_api_token=vectorize_api_token,  # Optional if using global token
+            index_name=index_name,
         )
 
         indexes = cf_vectorize.list_indexes()
@@ -292,6 +367,30 @@ class CloudflareVectorizeBaseStore(BaseStore):
 
         return namespace_tuple, key, value, created_at, updated_at
 
+    # MARK: - Sync Bridge
+
+    def _run_sync(self, make_coro: Callable[[], Coroutine[Any, Any, T]]) -> T:
+        """Bridge an async method to a synchronous call via pyodide.ffi.run_sync().
+
+        Only used when `self.binding` is set -- REST-mode sync calls never
+        reach this. Only importable, and only works, from inside a live
+        Cloudflare Python Worker request, not a plain CPython process. Takes
+        a zero-arg thunk rather than an already-built coroutine so we never
+        construct (and leave dangling/unawaited) a coroutine object when
+        run_sync() turns out not to be available.
+        """
+        try:
+            from pyodide.ffi import run_sync  # type: ignore[import-not-found]
+        except ImportError as e:
+            raise NotImplementedError(
+                "Synchronous CloudflareVectorizeBaseStore methods require "
+                "Pyodide's run_sync() when using a Vectorize binding, which "
+                "is only available inside a Cloudflare Python Worker. Use "
+                "the async methods (aget, aput, adelete, asearch, abatch) "
+                "instead."
+            ) from e
+        return run_sync(make_coro())  # type: ignore[no-any-return]
+
     # LangGraph BaseStore interface methods
     def get(
         self, namespace: tuple[str, ...], key: str, *, refresh_ttl: bool | None = None
@@ -306,6 +405,10 @@ class CloudflareVectorizeBaseStore(BaseStore):
         Returns:
             Item if found, None otherwise
         """
+        if self.binding is not None:
+            return self._run_sync(
+                lambda: self.aget(namespace, key, refresh_ttl=refresh_ttl)
+            )
         try:
             vector_id = self._generate_vector_id(namespace, key)
 
@@ -352,6 +455,9 @@ class CloudflareVectorizeBaseStore(BaseStore):
         Raises:
             RuntimeError: If storage operation fails
         """
+        if self.binding is not None:
+            self._run_sync(lambda: self.aput(namespace, key, value, index, ttl=ttl))
+            return
         try:
             # Check if item already exists
             existing_item = self.get(namespace, key)
@@ -386,6 +492,9 @@ class CloudflareVectorizeBaseStore(BaseStore):
             namespace: Namespace tuple
             key: Item key
         """
+        if self.binding is not None:
+            self._run_sync(lambda: self.adelete(namespace, key))
+            return
         try:
             vector_id = self._generate_vector_id(namespace, key)
             self.vectorstore.delete([vector_id])
@@ -418,6 +527,17 @@ class CloudflareVectorizeBaseStore(BaseStore):
         Raises:
             RuntimeError: If search operation fails
         """
+        if self.binding is not None:
+            return self._run_sync(
+                lambda: self.asearch(
+                    namespace_prefix,
+                    query=query,
+                    filter=filter,
+                    limit=limit,
+                    offset=offset,
+                    refresh_ttl=refresh_ttl,
+                )
+            )
         try:
             namespace_prefix_str = "/".join(namespace_prefix)
 
@@ -431,7 +551,6 @@ class CloudflareVectorizeBaseStore(BaseStore):
                     k=limit + offset,  # Get more to handle offset
                     md_filter=search_filter,
                 )
-                docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
             else:
                 # No query: fetch candidates with a dummy query and rely on the
                 # namespace-prefix filtering below. An empty namespace_prefix_str
@@ -443,41 +562,56 @@ class CloudflareVectorizeBaseStore(BaseStore):
                     k=limit + offset,
                     md_filter=search_filter,
                 )
-                docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
+            docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
 
-            # Filter by namespace prefix and apply pagination
-            results = []
-            processed_count = 0
-
-            for doc, score in docs_and_scores:
-                namespace_tuple, key, value, created_at, updated_at = (
-                    self._extract_item_from_document(doc)
-                )
-
-                # Check if namespace matches prefix
-                namespace_str = "/".join(namespace_tuple)
-                if namespace_str.startswith(namespace_prefix_str):
-                    if processed_count >= offset:
-                        results.append(
-                            SearchItem(
-                                namespace=namespace_tuple,
-                                key=key,
-                                value=value,
-                                created_at=created_at,
-                                updated_at=updated_at,
-                                score=score,
-                            )
-                        )
-
-                        if len(results) >= limit:
-                            break
-
-                    processed_count += 1
-            return results
+            return self._to_search_items(
+                docs_and_scores, namespace_prefix_str, limit, offset
+            )
 
         except Exception as e:
             traceback.print_exc()
             raise RuntimeError(f"Search failed: {str(e)}")
+
+    def _to_search_items(
+        self,
+        docs_and_scores: list[tuple[Any, float]],
+        namespace_prefix_str: str,
+        limit: int,
+        offset: int,
+    ) -> list[SearchItem]:
+        """Filter (doc, score) pairs by namespace prefix and apply pagination.
+
+        Shared by search() and asearch() so the filtering logic only lives
+        in one place.
+        """
+        results = []
+        processed_count = 0
+
+        for doc, score in docs_and_scores:
+            namespace_tuple, key, value, created_at, updated_at = (
+                self._extract_item_from_document(doc)
+            )
+
+            # Check if namespace matches prefix
+            namespace_str = "/".join(namespace_tuple)
+            if namespace_str.startswith(namespace_prefix_str):
+                if processed_count >= offset:
+                    results.append(
+                        SearchItem(
+                            namespace=namespace_tuple,
+                            key=key,
+                            value=value,
+                            created_at=created_at,
+                            updated_at=updated_at,
+                            score=score,
+                        )
+                    )
+
+                    if len(results) >= limit:
+                        break
+
+                processed_count += 1
+        return results
 
     def batch(
         self, operations: Iterable[GetOp | SearchOp | PutOp | ListNamespacesOp]
@@ -490,6 +624,9 @@ class CloudflareVectorizeBaseStore(BaseStore):
         Returns:
             List of results corresponding to each operation
         """
+        if self.binding is not None:
+            return self._run_sync(lambda: self.abatch(operations))
+
         results: list[
             Item | None | list[Item] | list[SearchItem] | list[tuple[str, ...]]
         ] = []
@@ -538,11 +675,16 @@ class CloudflareVectorizeBaseStore(BaseStore):
 
         return results
 
-    # Async versions of the methods for compatibility
+    # MARK: - Async Methods
+
     async def aget(
         self, namespace: tuple[str, ...], key: str, *, refresh_ttl: bool | None = None
     ) -> Item | None:
-        """Async version of get method.
+        """Get a single item by namespace and key, asynchronously.
+
+        Uses the Vectorize binding when `self.binding` is set, otherwise the
+        REST API -- either way, this is a real async call, not a wrapper
+        around the sync method.
 
         Args:
             namespace: Namespace tuple
@@ -552,7 +694,29 @@ class CloudflareVectorizeBaseStore(BaseStore):
         Returns:
             Item if found, None otherwise
         """
-        return self.get(namespace, key, refresh_ttl=refresh_ttl)
+        try:
+            vector_id = self._generate_vector_id(namespace, key)
+
+            docs = await self.vectorstore.aget_by_ids([vector_id])
+
+            if docs:
+                doc = docs[0]
+                namespace_tuple, key_extracted, value, created_at, updated_at = (
+                    self._extract_item_from_document(doc)
+                )
+
+                return Item(
+                    namespace=namespace,
+                    key=key,
+                    value=value,
+                    created_at=created_at,
+                    updated_at=updated_at,
+                )
+
+            return None
+
+        except Exception as e:
+            raise Exception("Error in retrieval:", str(e))
 
     async def aput(
         self,
@@ -563,7 +727,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
         *,
         ttl: float | NotProvided | None = NOT_PROVIDED,
     ) -> None:
-        """Async version of put method.
+        """Store or update a single item, asynchronously.
 
         Args:
             namespace: Namespace tuple
@@ -571,17 +735,43 @@ class CloudflareVectorizeBaseStore(BaseStore):
             value: Item value
             index: Indexing configuration
             ttl: Time to live (not implemented in this version)
+
+        Raises:
+            RuntimeError: If storage operation fails
         """
-        self.put(namespace, key, value, index=index, ttl=ttl)
+        try:
+            existing_item = await self.aget(namespace, key)
+
+            text, metadata = self._create_document(namespace, key, value, index)
+
+            if existing_item:
+                metadata["created_at"] = existing_item.created_at.isoformat()
+                await self.adelete(namespace, key)
+
+            vector_id = self._generate_vector_id(namespace, key)
+
+            from langchain_core.documents import Document
+
+            doc = Document(page_content=text, metadata=metadata)
+
+            await self.vectorstore.aadd_documents([doc], ids=[vector_id])
+
+        except Exception as e:
+            traceback.print_exc()
+            raise RuntimeError(f"Failed to store item: {str(e)}")
 
     async def adelete(self, namespace: tuple[str, ...], key: str) -> None:
-        """Async version of delete method.
+        """Delete a single item, asynchronously.
 
         Args:
             namespace: Namespace tuple
             key: Item key
         """
-        self.delete(namespace, key)
+        try:
+            vector_id = self._generate_vector_id(namespace, key)
+            await self.vectorstore.adelete([vector_id])
+        except Exception as e:
+            raise Exception("Error in deletion:", str(e))
 
     async def asearch(
         self,
@@ -593,7 +783,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
         offset: int = 0,
         refresh_ttl: bool | None = None,
     ) -> list[SearchItem]:
-        """Async version of search method.
+        """Search for items within a namespace prefix, asynchronously.
 
         Args:
             namespace_prefix: Namespace prefix tuple
@@ -605,20 +795,39 @@ class CloudflareVectorizeBaseStore(BaseStore):
 
         Returns:
             List of SearchItem objects
+
+        Raises:
+            RuntimeError: If search operation fails
         """
-        return self.search(
-            namespace_prefix,
-            query=query,
-            filter=filter,
-            limit=limit,
-            offset=offset,
-            refresh_ttl=refresh_ttl,
-        )
+        try:
+            namespace_prefix_str = "/".join(namespace_prefix)
+            search_filter = filter.copy() if filter else {}
+
+            docs_with_scores = await self.vectorstore.asimilarity_search_with_score(
+                query=query if query else " ",
+                k=limit + offset,
+                md_filter=search_filter,
+                # asimilarity_search_with_score defaults to return_metadata="none"
+                # (unlike the sync method, which defaults to "all"), but
+                # _extract_item_from_document reads namespace/key/data out of
+                # metadata -- so this must be explicit or every result comes
+                # back with an empty namespace and key.
+                return_metadata="all",
+            )
+            docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
+
+            return self._to_search_items(
+                docs_and_scores, namespace_prefix_str, limit, offset
+            )
+
+        except Exception as e:
+            traceback.print_exc()
+            raise RuntimeError(f"Search failed: {str(e)}")
 
     async def abatch(
         self, operations: Iterable[GetOp | SearchOp | PutOp | ListNamespacesOp]
     ) -> list[Item | None | list[Item] | list[SearchItem] | list[tuple[str, ...]]]:
-        """Async version of batch method.
+        """Execute multiple operations in a batch, asynchronously.
 
         Args:
             operations: Iterable of operation objects
@@ -626,4 +835,42 @@ class CloudflareVectorizeBaseStore(BaseStore):
         Returns:
             List of results corresponding to each operation
         """
-        return self.batch(operations)
+        results: list[
+            Item | None | list[Item] | list[SearchItem] | list[tuple[str, ...]]
+        ] = []
+
+        for op in operations:
+            try:
+                if isinstance(op, GetOp):
+                    result = await self.aget(op.namespace, op.key)
+                    results.append(result)
+                elif isinstance(op, PutOp):
+                    if op.value is not None:
+                        await self.aput(
+                            op.namespace,
+                            op.key,
+                            op.value,
+                            index=op.index,
+                            ttl=getattr(op, "ttl", NOT_PROVIDED),
+                        )
+                    else:
+                        await self.adelete(op.namespace, op.key)
+                    results.append(None)
+                elif isinstance(op, SearchOp):
+                    search_result = await self.asearch(
+                        op.namespace_prefix,
+                        query=getattr(op, "query", None),
+                        filter=getattr(op, "filter", None),
+                        limit=getattr(op, "limit", DEFAULT_TOP_K),
+                        offset=getattr(op, "offset", 0),
+                    )
+                    results.append(search_result)
+                elif isinstance(op, ListNamespacesOp):
+                    empty_namespaces: list[tuple[str, ...]] = []
+                    results.append(empty_namespaces)
+                else:
+                    results.append(None)
+            except Exception:
+                results.append(None)
+
+        return results

@@ -1,0 +1,48 @@
+[project]
+name = "langmem-cloudflare-vectorize-example"
+version = "0.1.0"
+description = "Example of using the Cloudflare Vectorize LangGraph BaseStore inside a Cloudflare Python Worker"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "webtypy>=0.1.7",
+    # langmem-cloudflare-vectorize is deliberately NOT listed here: it's
+    # pure Python (vendored directly by scripts/setup_pyodide_deps.sh, same
+    # as langgraph itself), and pywrangler ignores [tool.uv.sources] local
+    # overrides anyway, resolving from PyPI instead -- where the only
+    # published release (0.1.0) declares an unbounded langgraph>=0.5.0.
+    # Every langgraph version compatible with that floor needs
+    # langgraph-checkpoint>=2.1.0, and no langgraph-checkpoint>=2.1.0 has a
+    # Pyodide wheel for ormsgpack at all, so pulling it in here makes
+    # pywrangler's bootstrap resolution fail outright with no way to pin
+    # around it (unlike langchain-core, there's no upper bound that helps).
+    #
+    # Keep pywrangler sync on the latest Pyodide-compatible 0.3.x core.
+    # scripts/setup_pyodide_deps.sh replaces this with LangChain/LangGraph 1.x wheels.
+    "langchain-core>=0.3.81,<1.0.0",
+    # pywrangler ignores the [tool.uv.sources] local-path override below and
+    # resolves from PyPI, where the published langchain-cloudflare predates
+    # the binding fix this example needs -- listed directly so pywrangler
+    # actually installs a real (if stale) copy to overwrite after sync.
+    "langchain-cloudflare>=0.3.0",
+    "sqlalchemy-cloudflare-d1>=0.3.1",
+    # NOTE: Do NOT include pydantic - use Pyodide's built-in version
+    # pydantic_core requires compiled Rust binaries that aren't available for WebAssembly
+]
+
+[tool.uv.sources]
+# Use the local checkout for testing - comment out for a standalone example.
+langchain-cloudflare = { path = "../../../langchain-cloudflare", editable = true }
+
+[dependency-groups]
+dev = [
+    "workers-py",
+    "workers-runtime-sdk",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "requests>=2.31.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

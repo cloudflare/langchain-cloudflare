@@ -30,6 +30,7 @@ class FakeVectorstore:
 def _make_store(vectorstore: FakeVectorstore) -> CloudflareVectorizeBaseStore:
     store = CloudflareVectorizeBaseStore.__new__(CloudflareVectorizeBaseStore)
     store.vectorstore = vectorstore
+    store.binding = None
     return store
 
 

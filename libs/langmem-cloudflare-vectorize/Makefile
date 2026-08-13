@@ -1,4 +1,4 @@
-.PHONY: all format lint test tests integration_tests docker_tests help extended_tests
+.PHONY: all format lint test tests integration_tests docker_tests help extended_tests worker_tests worker_sync dev_server
 
 # Default target executed when no arguments are given to make.
 all: help
@@ -18,8 +18,33 @@ test_watch:
 	uv run ptw --snapshot-update --now . -- -vv $(TEST_FILE)
 
 # integration tests are run without the --disable-socket flag to allow network calls
+# Loads .env from repo root automatically
 integration_test integration_tests:
-	uv run pytest $(TEST_FILE)
+	@if [ -f ../../.env ]; then set -a && . ../../.env && set +a; fi && \
+	export TEST_CF_API_TOKEN="$${TEST_CF_API_TOKEN:-$$CF_API_TOKEN}" && \
+	unset VIRTUAL_ENV && \
+	uv run pytest $(TEST_FILE) -v
+
+# Worker integration tests live outside tests/integration_tests so CI's default
+# integration target does not collect Wrangler-dependent tests.
+# Requires wrangler OAuth login.
+# These test the Python Workers bindings with pywrangler dev server
+worker_tests:
+	@echo "Running Worker integration tests..."
+	@echo "Note: Requires 'npx wrangler login' first"
+	@if [ -f ../../.env ]; then set -a && . ../../.env && set +a; fi && \
+	unset VIRTUAL_ENV && \
+	uv run pytest tests/worker_tests/ -v
+
+# Sync Worker dependencies (run before worker_tests or dev_server)
+worker_sync:
+	cd examples/workers && uv run pywrangler sync
+
+# Start the dev server manually for debugging
+dev_server:
+	@echo "Starting pywrangler dev server on port 8799..."
+	@echo "Press Ctrl+C to stop"
+	cd examples/workers && uv run pywrangler dev --port 8799
 
 ######################
 # LINTING AND FORMATTING
@@ -64,3 +89,7 @@ help:
 	@echo 'test                         - run unit tests'
 	@echo 'tests                        - run unit tests'
 	@echo 'test TEST_FILE=<test_file>   - run all tests in file'
+	@echo 'integration_tests            - run non-Worker integration tests (loads .env automatically)'
+	@echo 'worker_sync                  - sync Worker dependencies (pywrangler sync)'
+	@echo 'worker_tests                 - run Worker integration tests (requires wrangler login)'
+	@echo 'dev_server                   - start pywrangler dev server for debugging'
