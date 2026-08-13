@@ -71,7 +71,10 @@ class Default(WorkerEntrypoint):
                     "/store-get": "POST - get an item",
                     "/store-delete": "POST - delete an item",
                     "/store-search": "POST - search items within a namespace prefix",
-                    "/store-graph": "POST - compile and run a StateGraph with the store attached (store.aput/aget inside a node)",
+                    "/store-graph": (
+                        "POST - compile and run a StateGraph with the store "
+                        "attached (store.aput/aget inside a node)"
+                    ),
                 },
                 "sync_bridge": (
                     "Every /store-* CRUD endpoint above accepts an optional "
@@ -86,7 +89,8 @@ class Default(WorkerEntrypoint):
         """Build a CloudflareVectorizeBaseStore bound to this Worker's bindings."""
         if not hasattr(self.env, "VECTORIZE"):
             raise RuntimeError(
-                "VECTORIZE binding not configured. Add a vectorize section to wrangler.jsonc"
+                "VECTORIZE binding not configured. Add a vectorize section "
+                "to wrangler.jsonc"
             )
         if not hasattr(self.env, "AI"):
             raise RuntimeError(

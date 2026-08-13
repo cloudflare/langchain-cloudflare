@@ -1,4 +1,5 @@
-"""Cloudflare Vectorize BaseStore implementation using langchain-cloudflare vector stores library."""
+"""Cloudflare Vectorize BaseStore implementation using langchain-cloudflare
+vector stores library."""
 
 from __future__ import annotations
 
@@ -40,7 +41,8 @@ T = TypeVar("T")
 
 
 class CloudflareVectorizeBaseStore(BaseStore):
-    """Cloudflare Vectorize implementation for LangGraph's BaseStore interface using langchain-cloudflare.
+    """Cloudflare Vectorize implementation for LangGraph's BaseStore
+    interface using langchain-cloudflare.
 
     Supports both the Cloudflare REST API (the default) and, inside a
     Cloudflare Python Worker, the native Vectorize/D1 bindings -- pass
@@ -162,7 +164,8 @@ class CloudflareVectorizeBaseStore(BaseStore):
         base_url: str = "https://api.cloudflare.com/client/v4",
         timeout: float = 60.0,
     ) -> CloudflareVectorizeBaseStore:
-        """Convenience constructor that uses Cloudflare Workers AI embeddings and CloudflareVectorize.
+        """Convenience constructor that uses Cloudflare Workers AI
+        embeddings and CloudflareVectorize.
 
         REST API only -- index creation is a management operation, not
         something to do from inside a live Worker request. For Worker usage,
@@ -174,7 +177,8 @@ class CloudflareVectorizeBaseStore(BaseStore):
             index_name: Name of the Vectorize index
             workers_ai_token: Token for Cloudflare Workers AI
             vectorize_api_token: Token for Vectorize service
-            embedding_model: Model name for embeddings (default: "@cf/baai/bge-base-en-v1.5")
+            embedding_model: Model name for embeddings
+                (default: "@cf/baai/bge-base-en-v1.5")
             dimensions: Number of dimensions (auto-detected if None)
             description: Index description
             base_url: Base URL for Cloudflare API
@@ -665,7 +669,8 @@ class CloudflareVectorizeBaseStore(BaseStore):
                 # Handle ListNamespacesOp
                 elif isinstance(op, ListNamespacesOp):
                     # This is a placeholder implementation
-                    # You would need to implement namespace listing based on your storage
+                    # You would need to implement namespace listing based on
+                    # your storage
                     empty_namespaces: list[tuple[str, ...]] = []
                     results.append(empty_namespaces)
                 else:

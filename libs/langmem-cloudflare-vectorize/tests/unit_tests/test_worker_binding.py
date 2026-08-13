@@ -44,7 +44,8 @@ class FakeEmbeddings(Embeddings):
 
 
 class FakeVectorizeBinding:
-    """In-memory stand-in for a Cloudflare Vectorize Worker binding (`env.VECTORIZE`)."""
+    """In-memory stand-in for a Cloudflare Vectorize Worker binding
+    (`env.VECTORIZE`)."""
 
     def __init__(self) -> None:
         self._vectors: Dict[str, Dict[str, Any]] = {}

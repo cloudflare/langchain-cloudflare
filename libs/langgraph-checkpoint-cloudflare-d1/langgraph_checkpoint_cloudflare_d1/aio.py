@@ -43,20 +43,23 @@ async def _anext(aiterator: AsyncIterator[T]) -> T:
 
 
 class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
-    """An asynchronous checkpoint saver that stores checkpoints in a Cloudflare D1 database.
+    """An asynchronous checkpoint saver that stores checkpoints in a Cloudflare D1
+    database.
 
-    This class provides an asynchronous interface for saving and retrieving checkpoints
-    using Cloudflare's D1 database. It's designed for use in asynchronous environments and
-    offers better performance for I/O-bound operations compared to synchronous alternatives.
+    This class provides an asynchronous interface for saving and retrieving
+    checkpoints using Cloudflare's D1 database. It's designed for use in
+    asynchronous environments and offers better performance for I/O-bound
+    operations compared to synchronous alternatives.
 
     Attributes:
-        account_id (str): Your Cloudflare account ID. If not provided, will be read from
-            the CF_ACCOUNT_ID environment variable.
-        database_id (str): The ID of your D1 database. If not provided, will be read from
-            the CF_D1_DATABASE_ID environment variable.
-        api_token (str): Your Cloudflare API token with D1 permissions. If not provided, will be read from
-            the CF_D1_API_TOKEN environment variable.
-        serde (SerializerProtocol): The serializer used for encoding/decoding checkpoints.
+        account_id (str): Your Cloudflare account ID. If not provided, will be
+            read from the CF_ACCOUNT_ID environment variable.
+        database_id (str): The ID of your D1 database. If not provided, will be
+            read from the CF_D1_DATABASE_ID environment variable.
+        api_token (str): Your Cloudflare API token with D1 permissions. If not
+            provided, will be read from the CF_D1_API_TOKEN environment variable.
+        serde (SerializerProtocol): The serializer used for encoding/decoding
+            checkpoints.
         enable_logging (bool): Whether to enable logging. Defaults to False.
 
     Note:
@@ -174,12 +177,13 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
         """Create a new AsyncCloudflareD1Saver instance from connection parameters.
 
         Args:
-            account_id: Your Cloudflare account ID. If not provided, will be read from
-                the CF_ACCOUNT_ID environment variable.
-            database_id: The ID of your D1 database. If not provided, will be read from
-                the CF_D1_DATABASE_ID environment variable.
-            api_token: Your Cloudflare API token with D1 permissions. If not provided, will be read from
-                the CF_D1_API_TOKEN environment variable.
+            account_id: Your Cloudflare account ID. If not provided, will be
+                read from the CF_ACCOUNT_ID environment variable.
+            database_id: The ID of your D1 database. If not provided, will be
+                read from the CF_D1_DATABASE_ID environment variable.
+            api_token: Your Cloudflare API token with D1 permissions. If not
+                provided, will be read from the CF_D1_API_TOKEN environment
+                variable.
             serde: Optional serializer for encoding/decoding checkpoints.
             enable_logging: Whether to enable logging. Defaults to False.
 
@@ -208,7 +212,8 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             config: The config to use for retrieving the checkpoint.
 
         Returns:
-            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None
+                if no matching checkpoint was found.
 
         Raises:
             asyncio.InvalidStateError: If called from the main thread.
@@ -217,9 +222,10 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             # check if we are in the main thread, only bg threads can block
             if asyncio.get_running_loop() is self.loop:
                 raise asyncio.InvalidStateError(
-                    "Synchronous calls to AsyncCloudflareD1Saver are only allowed from a "
-                    "different thread. From the main thread, use the async interface. "
-                    "For example, use `await checkpointer.aget_tuple(...)` or `await "
+                    "Synchronous calls to AsyncCloudflareD1Saver are only "
+                    "allowed from a different thread. From the main thread, "
+                    "use the async interface. For example, use `await "
+                    "checkpointer.aget_tuple(...)` or `await "
                     "graph.ainvoke(...)`."
                 )
         except RuntimeError:
@@ -254,9 +260,10 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             # check if we are in the main thread, only bg threads can block
             if asyncio.get_running_loop() is self.loop:
                 raise asyncio.InvalidStateError(
-                    "Synchronous calls to AsyncCloudflareD1Saver are only allowed from a "
-                    "different thread. From the main thread, use the async interface. "
-                    "For example, use `checkpointer.alist(...)` or `await "
+                    "Synchronous calls to AsyncCloudflareD1Saver are only "
+                    "allowed from a different thread. From the main thread, "
+                    "use the async interface. For example, use "
+                    "`checkpointer.alist(...)` or `await "
                     "graph.ainvoke(...)`."
                 )
         except RuntimeError:
@@ -315,9 +322,10 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             # check if we are in the main thread, only bg threads can block
             if asyncio.get_running_loop() is self.loop:
                 raise asyncio.InvalidStateError(
-                    "Synchronous calls to AsyncCloudflareD1Saver are only allowed from a "
-                    "different thread. From the main thread, use the async interface. "
-                    "For example, use `checkpointer.alist(...)` or `await "
+                    "Synchronous calls to AsyncCloudflareD1Saver are only "
+                    "allowed from a different thread. From the main thread, "
+                    "use the async interface. For example, use "
+                    "`checkpointer.alist(...)` or `await "
                     "graph.ainvoke(...)`."
                 )
         except RuntimeError:
@@ -373,7 +381,8 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
     async def _execute_query(
         self, query: str, params: Optional[Sequence[Any]] = None
     ) -> D1Response:
-        """Execute a SQL query against the D1 database asynchronously with retry logic."""
+        """Execute a SQL query against the D1 database asynchronously with
+        retry logic."""
         endpoint = f"{self.base_url}/query"
 
         # Format params for D1 API
@@ -406,7 +415,8 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             except Exception as e:
                 if self.enable_logging:
                     logger.warning(
-                        f"D1 response parsing failed, using fallback: {type(e).__name__}: {e}"
+                        f"D1 response parsing failed, using fallback: "
+                        f"{type(e).__name__}: {e}"
                     )
                 # Direct dictionary to bypass model validation during debugging
                 return D1Response(
@@ -431,23 +441,25 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
         except Exception as e:
             if self.enable_logging:
                 logger.error(
-                    f"D1 API unexpected error: {type(e).__name__}: {e}\nQuery: {query[:200]}..."
+                    f"D1 API unexpected error: {type(e).__name__}: {e}\n"
+                    f"Query: {query[:200]}..."
                 )
             return D1Response(success=False)
 
     async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
         """Get a checkpoint tuple from the database asynchronously.
 
-        This method retrieves a checkpoint tuple from the D1 database based on the
-        provided config. If the config contains a "checkpoint_id" key, the checkpoint with
-        the matching thread ID and checkpoint ID is retrieved. Otherwise, the latest checkpoint
-        for the given thread ID is retrieved.
+        This method retrieves a checkpoint tuple from the D1 database based on
+        the provided config. If the config contains a "checkpoint_id" key, the
+        checkpoint with the matching thread ID and checkpoint ID is retrieved.
+        Otherwise, the latest checkpoint for the given thread ID is retrieved.
 
         Args:
             config: The config to use for retrieving the checkpoint.
 
         Returns:
-            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None
+                if no matching checkpoint was found.
         """
         await self.setup()
         checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
@@ -459,11 +471,17 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
         # If a specific checkpoint ID is requested, get that one
         checkpoint_id = config["configurable"].get("checkpoint_id")
         if checkpoint_id:
-            query = "SELECT * FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?"
+            query = (
+                "SELECT * FROM checkpoints WHERE thread_id = ? "
+                "AND checkpoint_ns = ? AND checkpoint_id = ?"
+            )
             params = [thread_id, checkpoint_ns, checkpoint_id]
         else:
             # Otherwise get the most recent checkpoint for this thread
-            query = "SELECT * FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? ORDER BY checkpoint_id DESC LIMIT 1"
+            query = (
+                "SELECT * FROM checkpoints WHERE thread_id = ? "
+                "AND checkpoint_ns = ? ORDER BY checkpoint_id DESC LIMIT 1"
+            )
             params = [thread_id, checkpoint_ns]
 
         result = await self._execute_query(query, params)
@@ -504,7 +522,11 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             }
 
         # Get all writes associated with this checkpoint
-        writes_query = "SELECT task_id, channel, type, value FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY task_id, idx"
+        writes_query = (
+            "SELECT task_id, channel, type, value FROM writes "
+            "WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? "
+            "ORDER BY task_id, idx"
+        )
         writes_params = [thread_id, checkpoint_ns, checkpoint_id]
 
         writes_result = await self._execute_query(writes_query, writes_params)
@@ -595,22 +617,26 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
     ) -> AsyncIterator[CheckpointTuple]:
         """List checkpoints from the database asynchronously.
 
-        This method retrieves a list of checkpoint tuples from the D1 database based
-        on the provided config. The checkpoints are ordered by checkpoint ID in descending order (newest first).
+        This method retrieves a list of checkpoint tuples from the D1 database
+        based on the provided config. The checkpoints are ordered by
+        checkpoint ID in descending order (newest first).
 
         Args:
             config: Base configuration for filtering checkpoints.
             filter: Additional filtering criteria for metadata.
-            before: If provided, only checkpoints before the specified checkpoint ID are returned.
+            before: If provided, only checkpoints before the specified
+                checkpoint ID are returned.
             limit: Maximum number of checkpoints to return.
 
         Yields:
-            AsyncIterator[CheckpointTuple]: An asynchronous iterator of matching checkpoint tuples.
+            AsyncIterator[CheckpointTuple]: An asynchronous iterator of
+                matching checkpoint tuples.
         """
         await self.setup()
         where, params = search_where(config, filter, before)
 
-        query = f"""SELECT thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
+        query = f"""SELECT thread_id, checkpoint_ns, checkpoint_id,
+        parent_checkpoint_id, type, checkpoint, metadata
         FROM checkpoints
         {where}
         ORDER BY checkpoint_id DESC"""
@@ -637,7 +663,11 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             metadata = row.get("metadata")
 
             # Get writes for this checkpoint
-            writes_query = "SELECT task_id, channel, type, value FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY task_id, idx"
+            writes_query = (
+                "SELECT task_id, channel, type, value FROM writes "
+                "WHERE thread_id = ? AND checkpoint_ns = ? "
+                "AND checkpoint_id = ? ORDER BY task_id, idx"
+            )
             writes_params = [thread_id, checkpoint_ns, checkpoint_id]
 
             writes_result = await self._execute_query(writes_query, writes_params)
@@ -783,7 +813,11 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
                 except Exception:
                     pass
 
-        query = "INSERT OR REPLACE INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        query = (
+            "INSERT OR REPLACE INTO checkpoints (thread_id, checkpoint_ns, "
+            "checkpoint_id, parent_checkpoint_id, type, checkpoint, "
+            "metadata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
         params = [
             str(config["configurable"]["thread_id"]),
             checkpoint_ns,
@@ -800,7 +834,8 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
                 if self.enable_logging:
                     logger.error(
                         f"Failed to save checkpoint for thread_id={thread_id}, "
-                        f"checkpoint_id={checkpoint['id']}: D1 query returned success=False"
+                        f"checkpoint_id={checkpoint['id']}: D1 query returned "
+                        f"success=False"
                     )
         except Exception as e:
             if self.enable_logging:
@@ -828,7 +863,8 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
     ) -> None:
         """Store intermediate writes linked to a checkpoint asynchronously.
 
-        This method saves intermediate writes associated with a checkpoint to the database.
+        This method saves intermediate writes associated with a checkpoint to
+        the database.
 
         Args:
             config: Configuration of the related checkpoint.
@@ -839,9 +875,17 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
         await self.setup()
 
         query = (
-            "INSERT OR REPLACE INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            (
+                "INSERT OR REPLACE INTO writes (thread_id, checkpoint_ns, "
+                "checkpoint_id, task_id, idx, channel, type, value) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
             if all(w[0] in WRITES_IDX_MAP for w in writes)
-            else "INSERT OR IGNORE INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            else (
+                "INSERT OR IGNORE INTO writes (thread_id, checkpoint_ns, "
+                "checkpoint_id, task_id, idx, channel, type, value) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
         )
 
         # Execute with separate queries for each write
@@ -873,15 +917,20 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
                 if not result.success:
                     if self.enable_logging:
                         logger.warning(
-                            f"Failed to save write for thread_id={config['configurable']['thread_id']}, "
-                            f"checkpoint_id={config['configurable']['checkpoint_id']}, "
-                            f"channel={channel}: D1 query returned success=False"
+                            f"Failed to save write for "
+                            f"thread_id={config['configurable']['thread_id']}, "
+                            f"checkpoint_id="
+                            f"{config['configurable']['checkpoint_id']}, "
+                            f"channel={channel}: D1 query returned "
+                            f"success=False"
                         )
             except Exception as e:
                 if self.enable_logging:
                     logger.error(
-                        f"Exception saving write for thread_id={config['configurable']['thread_id']}, "
-                        f"checkpoint_id={config['configurable']['checkpoint_id']}, "
+                        f"Exception saving write for "
+                        f"thread_id={config['configurable']['thread_id']}, "
+                        f"checkpoint_id="
+                        f"{config['configurable']['checkpoint_id']}, "
                         f"channel={channel}: {type(e).__name__}: {e}"
                     )
                 # Continue to next write even if this one fails
@@ -905,14 +954,17 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
     def get_next_version(self, current: Optional[str], channel: None) -> str:
         """Generate the next version ID for a channel.
 
-        This method creates a new version identifier for a channel based on its current version.
+        This method creates a new version identifier for a channel based on
+        its current version.
 
         Args:
-            current (Optional[str]): The current version identifier of the channel.
+            current (Optional[str]): The current version identifier of the
+                channel.
             channel: Deprecated argument, kept for backwards compatibility.
 
         Returns:
-            str: The next version identifier, which is guaranteed to be monotonically increasing.
+            str: The next version identifier, which is guaranteed to be
+                monotonically increasing.
         """
         if current is None:
             current_v = 0

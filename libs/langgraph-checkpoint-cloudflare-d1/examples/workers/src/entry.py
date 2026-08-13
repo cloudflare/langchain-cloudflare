@@ -69,14 +69,22 @@ class Default(WorkerEntrypoint):
                     "/checkpointer-put-writes": "POST - save writes for a checkpoint",
                     "/checkpointer-get-tuple": "POST - get a checkpoint for a thread",
                     "/checkpointer-list": "POST - list checkpoints for a thread",
-                    "/checkpointer-delete-thread": "POST - delete a thread's checkpoints",
-                    "/checkpointer-graph": "POST - compile and run a StateGraph using the checkpointer (graph.ainvoke; graph.invoke can't run in a Worker with any checkpointer, see WorkerCloudflareD1Saver's docstring)",
+                    "/checkpointer-delete-thread": (
+                        "POST - delete a thread's checkpoints"
+                    ),
+                    "/checkpointer-graph": (
+                        "POST - compile and run a StateGraph using the "
+                        "checkpointer (graph.ainvoke; graph.invoke can't run "
+                        "in a Worker with any checkpointer, see "
+                        "WorkerCloudflareD1Saver's docstring)"
+                    ),
                 },
                 "sync_bridge": (
-                    "Every /checkpointer-* CRUD endpoint above accepts an optional "
-                    '"sync": true field in its JSON body, routing through the '
-                    "saver's sync methods (put/get_tuple/put_writes/list/delete_thread, "
-                    "bridged via pyodide.ffi.run_sync()) instead of the async ones. "
+                    "Every /checkpointer-* CRUD endpoint above accepts an "
+                    'optional "sync": true field in its JSON body, routing '
+                    "through the saver's sync methods "
+                    "(put/get_tuple/put_writes/list/delete_thread, bridged "
+                    "via pyodide.ffi.run_sync()) instead of the async ones. "
                     "There is no sync equivalent of /checkpointer-graph."
                 ),
             }
@@ -86,7 +94,8 @@ class Default(WorkerEntrypoint):
         """Build a WorkerCloudflareD1Saver bound to this Worker's D1 binding."""
         if not hasattr(self.env, "DB"):
             raise RuntimeError(
-                "DB binding not configured. Add a d1_databases section to wrangler.jsonc"
+                "DB binding not configured. Add a d1_databases section to "
+                "wrangler.jsonc"
             )
         return WorkerCloudflareD1Saver(self.env.DB)
 

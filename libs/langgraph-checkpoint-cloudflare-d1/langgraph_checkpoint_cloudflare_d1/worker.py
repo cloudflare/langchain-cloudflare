@@ -1,11 +1,13 @@
 """Checkpoint saver for Cloudflare D1 using the native Python Worker binding.
 
 This module only works inside a Cloudflare Python Worker, where a D1 binding
-(e.g. ``env.DB``) is available. Unlike :class:`~langgraph_checkpoint_cloudflare_d1.CloudflareD1Saver`
-and :class:`~langgraph_checkpoint_cloudflare_d1.aio.AsyncCloudflareD1Saver`, which talk to
-D1 over the Cloudflare REST API, :class:`WorkerCloudflareD1Saver` talks to D1 directly
-through the binding via ``sqlalchemy_cloudflare_d1.WorkerConnection`` -- no network
-round-trip to the Cloudflare API, no API token required.
+(e.g. ``env.DB``) is available. Unlike
+:class:`~langgraph_checkpoint_cloudflare_d1.CloudflareD1Saver` and
+:class:`~langgraph_checkpoint_cloudflare_d1.aio.AsyncCloudflareD1Saver`, which
+talk to D1 over the Cloudflare REST API, :class:`WorkerCloudflareD1Saver`
+talks to D1 directly through the binding via
+``sqlalchemy_cloudflare_d1.WorkerConnection`` -- no network round-trip to the
+Cloudflare API, no API token required.
 
 Requires the optional ``worker`` extra:
 
@@ -109,7 +111,9 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
 
     Examples:
         >>> from workers import WorkerEntrypoint, Response
-        >>> from langgraph_checkpoint_cloudflare_d1.worker import WorkerCloudflareD1Saver
+        >>> from langgraph_checkpoint_cloudflare_d1.worker import (
+        ...     WorkerCloudflareD1Saver,
+        ... )
         >>>
         >>> class Default(WorkerEntrypoint):
         ...     async def fetch(self, request):
@@ -329,10 +333,16 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
 
         checkpoint_id = config["configurable"].get("checkpoint_id")
         if checkpoint_id:
-            query = "SELECT * FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?"
+            query = (
+                "SELECT * FROM checkpoints WHERE thread_id = ? "
+                "AND checkpoint_ns = ? AND checkpoint_id = ?"
+            )
             params = [thread_id, checkpoint_ns, checkpoint_id]
         else:
-            query = "SELECT * FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? ORDER BY checkpoint_id DESC LIMIT 1"
+            query = (
+                "SELECT * FROM checkpoints WHERE thread_id = ? "
+                "AND checkpoint_ns = ? ORDER BY checkpoint_id DESC LIMIT 1"
+            )
             params = [thread_id, checkpoint_ns]
 
         result = await self._execute_query(query, params)
@@ -361,7 +371,11 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
                 }
             }
 
-        writes_query = "SELECT task_id, channel, type, value FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY task_id, idx"
+        writes_query = (
+            "SELECT task_id, channel, type, value FROM writes "
+            "WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? "
+            "ORDER BY task_id, idx"
+        )
         writes_params = [thread_id, checkpoint_ns, checkpoint_id]
 
         writes_result = await self._execute_query(writes_query, writes_params)
@@ -454,7 +468,8 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
         await self.setup()
         where, params = search_where(config, filter, before)
 
-        query = f"""SELECT thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata
+        query = f"""SELECT thread_id, checkpoint_ns, checkpoint_id,
+        parent_checkpoint_id, type, checkpoint, metadata
         FROM checkpoints
         {where}
         ORDER BY checkpoint_id DESC"""
@@ -480,7 +495,11 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
             checkpoint = row.get("checkpoint")
             metadata = row.get("metadata")
 
-            writes_query = "SELECT task_id, channel, type, value FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY task_id, idx"
+            writes_query = (
+                "SELECT task_id, channel, type, value FROM writes "
+                "WHERE thread_id = ? AND checkpoint_ns = ? "
+                "AND checkpoint_id = ? ORDER BY task_id, idx"
+            )
             writes_params = [thread_id, checkpoint_ns, checkpoint_id]
 
             writes_result = await self._execute_query(writes_query, writes_params)
@@ -598,7 +617,11 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
             except Exception:
                 pass
 
-        query = "INSERT OR REPLACE INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        query = (
+            "INSERT OR REPLACE INTO checkpoints (thread_id, checkpoint_ns, "
+            "checkpoint_id, parent_checkpoint_id, type, checkpoint, "
+            "metadata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        )
         params = [
             str(config["configurable"]["thread_id"]),
             checkpoint_ns,
@@ -651,9 +674,17 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
         await self.setup()
 
         query = (
-            "INSERT OR REPLACE INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            (
+                "INSERT OR REPLACE INTO writes (thread_id, checkpoint_ns, "
+                "checkpoint_id, task_id, idx, channel, type, value) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
             if all(w[0] in WRITES_IDX_MAP for w in writes)
-            else "INSERT OR IGNORE INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            else (
+                "INSERT OR IGNORE INTO writes (thread_id, checkpoint_ns, "
+                "checkpoint_id, task_id, idx, channel, type, value) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
         )
 
         for idx, (channel, value) in enumerate(writes):
@@ -682,15 +713,20 @@ class WorkerCloudflareD1Saver(BaseCheckpointSaver[str]):
                 result = await self._execute_query(query, params)
                 if not result.success and self.enable_logging:
                     logger.warning(
-                        f"Failed to save write for thread_id={config['configurable']['thread_id']}, "
-                        f"checkpoint_id={config['configurable']['checkpoint_id']}, "
-                        f"channel={channel}: D1 query returned success=False"
+                        f"Failed to save write for "
+                        f"thread_id={config['configurable']['thread_id']}, "
+                        f"checkpoint_id="
+                        f"{config['configurable']['checkpoint_id']}, "
+                        f"channel={channel}: D1 query returned "
+                        f"success=False"
                     )
             except Exception as e:
                 if self.enable_logging:
                     logger.error(
-                        f"Exception saving write for thread_id={config['configurable']['thread_id']}, "
-                        f"checkpoint_id={config['configurable']['checkpoint_id']}, "
+                        f"Exception saving write for "
+                        f"thread_id={config['configurable']['thread_id']}, "
+                        f"checkpoint_id="
+                        f"{config['configurable']['checkpoint_id']}, "
                         f"channel={channel}: {type(e).__name__}: {e}"
                     )
                 # Continue to next write even if this one fails

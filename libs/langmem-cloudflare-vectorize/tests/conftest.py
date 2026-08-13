@@ -171,7 +171,8 @@ def pywrangler_dev_server(
     process.terminate()
     full_output = "\n".join(output_lines)
     raise TimeoutError(
-        f"pywrangler dev did not start within {timeout} seconds.\nOutput:\n{full_output}"
+        f"pywrangler dev did not start within {timeout} seconds.\n"
+        f"Output:\n{full_output}"
     )
 
 

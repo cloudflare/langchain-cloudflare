@@ -69,7 +69,6 @@ ignore_missing_imports = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "T201"]
-ignore = ["E501"]
 
 [tool.coverage.run]
 omit = ["tests/*"]
