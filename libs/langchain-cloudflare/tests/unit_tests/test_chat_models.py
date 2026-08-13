@@ -826,7 +826,15 @@ class TestEndpointFormat:
         assert payload["messages"] == [{"role": "user", "content": "Hello"}]
 
     def test_openai_compatible_endpoint_format_uses_gateway_chat_completions(self):
-        """AI Gateway should route OpenAI-compatible requests through Workers AI."""
+        """AI Gateway should route OpenAI-compatible requests through the
+        unified Workers AI endpoint, gated via cf-aig-gateway-id.
+
+        Since the Workers AI / AI Gateway unification
+        (https://blog.cloudflare.com/workers-ai-gateway-unification/),
+        AI Gateway no longer uses a separate gateway.ai.cloudflare.com
+        host/path -- the URL is identical to the non-gateway case, and
+        routing happens via the cf-aig-gateway-id header instead.
+        """
         llm = ChatCloudflareWorkersAI(
             account_id="test_account",
             api_token="test_token",
@@ -835,10 +843,9 @@ class TestEndpointFormat:
             endpoint_format="openai_compatible",
         )
 
-        assert str(llm.client.base_url) == (
-            "https://gateway.ai.cloudflare.com/v1/test_account/my-gateway/"
-        )
-        assert llm._get_api_url() == "workers-ai/v1/chat/completions"
+        assert str(llm.client.base_url) == "https://api.cloudflare.com/client/v4/"
+        assert llm._get_api_url() == "accounts/test_account/ai/v1/chat/completions"
+        assert llm.client.headers["cf-aig-gateway-id"] == "my-gateway"
 
     def test_openai_compatible_endpoint_format_rejects_binding(self):
         """Bindings use env.AI.run() and cannot select chat completions."""
@@ -1077,13 +1084,25 @@ class TestWithStructuredOutputRouting:
         bound_llm = chain.steps[1]
         assert bound_llm.kwargs.get("response_format") == {"type": "json_object"}
 
-    def test_mistral_auto_routing_uses_tool_calling(self):
-        """Mistral with method='function_calling' should still use tool calling."""
+    def test_mistral_function_calling_auto_routes_to_json_schema(self):
+        """Mistral with method='function_calling' should auto-route to json_schema.
+
+        Mistral doesn't support tool_choice (see MODEL_BEHAVIORS), so a bound
+        tool can never be forced -- the model is always free to answer in
+        prose instead of calling it, making tool-calling-based structured
+        output unreliable the same way it is for gemma. Confirmed by a real
+        integration failure: mistral-small-3.1-24b-instruct returned prose
+        with embedded JSON instead of a tool call for a plain extraction
+        prompt, so with_structured_output(method="function_calling") (the
+        default) returned None.
+        """
         llm = _make_llm("@cf/mistralai/mistral-small-3.1-24b-instruct")
         chain = llm.with_structured_output(_Announcement)
 
-        assert not isinstance(chain.first, RunnableLambda)
-        assert "guided_json" not in chain.first.kwargs
+        # Same pipeline shape as json_schema: starts with injection lambda
+        assert isinstance(chain.first, RunnableLambda)
+        bound_llm = chain.steps[1]
+        assert bound_llm.kwargs.get("response_format") == {"type": "json_object"}
 
     # MARK: - gpt-oss json_schema_rf mode
 
@@ -1097,13 +1116,65 @@ class TestWithStructuredOutputRouting:
         assert rf.get("type") == "json_schema"
         assert "title" in rf.get("json_schema", {})
 
-    def test_gpt_oss_auto_routing_uses_tool_calling(self):
-        """gpt-oss with default method='function_calling' should use tool calling."""
+    def test_gpt_oss_function_calling_auto_routes_to_json_schema(self):
+        """gpt-oss with method='function_calling' should auto-route to json_schema.
+
+        Even with tool_choice forced, gpt-oss sometimes answers with
+        reasoning + text content blocks (raw JSON embedded in a text block)
+        instead of an actual tool call -- same unreliable-tool-calling
+        category as gemma/mistral. Confirmed by a real integration failure:
+        gpt-oss-20b returned no tool_calls for a plain extraction prompt, so
+        with_structured_output(method="function_calling") (the default)
+        returned None.
+        """
         llm = _make_llm("@cf/openai/gpt-oss-120b")
         chain = llm.with_structured_output(_Announcement)
 
         assert not isinstance(chain.first, RunnableLambda)
-        assert "response_format" not in chain.first.kwargs
+        rf = chain.first.kwargs.get("response_format", {})
+        assert rf.get("type") == "json_schema"
+
+    # MARK: - reasoning-model structured output max_tokens floor
+
+    def test_json_schema_rf_sets_max_tokens_floor_for_reasoning_model(self):
+        """json_schema_rf structured output should set a max_tokens floor
+        for reasoning models when the caller hasn't set one.
+
+        Reasoning models "think" before answering, and an injected schema
+        gives them more to reason about -- with no explicit max_tokens,
+        Cloudflare's platform default can be exhausted by the reasoning
+        phase alone, leaving no budget for the actual answer. Confirmed via
+        a real integration failure: gpt-oss-20b intermittently returned only
+        a "thinking" content block (no "text" block), so the JSON parser got
+        an empty string and structured output failed.
+        """
+        llm = _make_llm("@cf/openai/gpt-oss-120b")
+        chain = llm.with_structured_output(_Announcement, method="json_schema")
+
+        assert chain.first.kwargs.get("max_tokens") == 4096
+
+    def test_json_schema_rf_respects_explicit_max_tokens(self):
+        """An explicit max_tokens should not be overridden by the floor."""
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/openai/gpt-oss-120b",
+            max_tokens=256,
+        )
+        chain = llm.with_structured_output(_Announcement, method="json_schema")
+
+        assert "max_tokens" not in chain.first.kwargs
+
+    def test_json_schema_rf_no_max_tokens_floor_for_non_reasoning_model(self):
+        """The floor is reasoning-model-specific; non-reasoning models
+        (e.g. llama, via its json_object path) shouldn't get it."""
+        llm = _make_llm("@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+        chain = llm.with_structured_output(_Announcement, method="json_schema")
+
+        # llama uses the default json_object mode, whose pipeline starts
+        # with the schema-injection lambda -- the bound llm is steps[1].
+        bound_llm = chain.steps[1]
+        assert "max_tokens" not in bound_llm.kwargs
 
     # MARK: - invalid method
 
@@ -1112,3 +1183,70 @@ class TestWithStructuredOutputRouting:
         llm = _make_llm("@cf/meta/llama-3.3-70b-instruct-fp8-fast")
         with pytest.raises(ValueError, match="Unrecognized method argument"):
             llm.with_structured_output(_Announcement, method="bad_method")  # type: ignore[arg-type]
+
+
+class TestStreamingSafeUsage:
+    """Regression test: streamed chunk usage must survive chunk merging.
+
+    Workers AI reports `usage` on every streamed chunk, not just the last
+    one, and includes a `neurons` field that's a float. langchain_core's
+    merge_dicts auto-sums matching int keys (prompt_tokens/completion_tokens/
+    total_tokens merge fine) but has no rule for combining two floats under
+    the same key, so ChatGenerationChunk.__add__ raised TypeError the moment
+    a stream produced more than one chunk with usage data -- breaking
+    _stream/_astream for any response longer than a single token.
+    """
+
+    def test_streaming_safe_usage_drops_neurons(self):
+        llm = _make_llm("@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+        usage = {
+            "prompt_tokens": 39,
+            "completion_tokens": 1,
+            "total_tokens": 40,
+            "neurons": 0.204805,
+        }
+
+        safe = llm._streaming_safe_usage(usage)
+
+        assert "neurons" not in safe
+        assert safe == {
+            "prompt_tokens": 39,
+            "completion_tokens": 1,
+            "total_tokens": 40,
+        }
+
+    def test_merging_two_streamed_usage_chunks_does_not_raise(self):
+        from langchain_core.messages import AIMessageChunk
+        from langchain_core.outputs import ChatGenerationChunk
+
+        llm = _make_llm("@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+        raw_usage_chunk_1 = {
+            "prompt_tokens": 39,
+            "completion_tokens": 0,
+            "total_tokens": 39,
+            "neurons": 1.04,
+        }
+        raw_usage_chunk_2 = {
+            "prompt_tokens": 0,
+            "completion_tokens": 1,
+            "total_tokens": 1,
+            "neurons": 0.2048,
+        }
+
+        chunk_1 = ChatGenerationChunk(
+            message=AIMessageChunk(content="hello"),
+            generation_info={"usage": llm._streaming_safe_usage(raw_usage_chunk_1)},
+        )
+        chunk_2 = ChatGenerationChunk(
+            message=AIMessageChunk(content=" world"),
+            generation_info={"usage": llm._streaming_safe_usage(raw_usage_chunk_2)},
+        )
+
+        merged = chunk_1 + chunk_2
+
+        assert merged.text == "hello world"
+        assert merged.generation_info["usage"] == {
+            "prompt_tokens": 39,
+            "completion_tokens": 1,
+            "total_tokens": 40,
+        }

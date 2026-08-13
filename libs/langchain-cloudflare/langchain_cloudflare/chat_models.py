@@ -237,6 +237,13 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
         embed_tool_calls_in_content=False,
         supports_reasoning_content=True,
         json_schema_mode="json_schema_rf",
+        # Even with tool_choice forced, gpt-oss sometimes answers with
+        # reasoning + text content blocks (raw JSON in a text block) instead
+        # of an actual tool call -- same unreliable-tool-calling category as
+        # gemma/mistral. Route through the already-configured json_schema_rf
+        # path instead, which reproduced reliably (3/3) for a case observed
+        # failing via tool calling.
+        use_json_object_for_structured_output=True,
     ),
     "kimi": _REASONING_BEHAVIOR,
     "llama": ModelBehavior(embed_tool_calls_in_content=True),
@@ -245,12 +252,25 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
         unsupported_params=("tool_choice",),
         response_format_param="guided_json",
         json_schema_mode="json_object",
+        # tool_choice is unsupported (above), so the model is always free
+        # to skip calling the bound tool and answer in prose instead --
+        # tool-calling-based structured output is unreliable for the same
+        # reason it is for gemma. Route through the json_object path
+        # (already configured via json_schema_mode) instead.
+        use_json_object_for_structured_output=True,
     ),
     "nemotron": _REASONING_BEHAVIOR,
     "qwen": _REASONING_BEHAVIOR,
 }
 
 DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
+
+# Default max_tokens floor applied to reasoning-capable models' json_schema_rf/
+# json_object structured-output binding when the caller hasn't set max_tokens
+# themselves. See with_structured_output()'s use for why this exists. 2048
+# still let the reasoning phase alone exhaust the budget often enough to be
+# noticeable in testing; 4096 leaves more headroom without being unbounded.
+_REASONING_STRUCTURED_OUTPUT_MIN_MAX_TOKENS = 4096
 
 
 def get_model_behavior(model_name: str) -> ModelBehavior:
@@ -425,12 +445,17 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     endpoint_format: Literal["workers_ai", "openai_compatible"] = "workers_ai"
     """REST endpoint format to use.
 
-    ``"workers_ai"`` uses Workers AI native run endpoints:
-    ``/ai/run/{model}`` or AI Gateway ``/workers-ai/run/{model}``.
-    ``"openai_compatible"`` uses chat completions endpoints and includes
-    ``model`` in the JSON payload:
-    ``/ai/v1/chat/completions`` or AI Gateway
-    ``/workers-ai/v1/chat/completions``.
+    ``"workers_ai"`` uses the Workers AI native run endpoint:
+    ``/ai/run/{model}``. ``"openai_compatible"`` uses the chat completions
+    endpoint and includes ``model`` in the JSON payload:
+    ``/ai/v1/chat/completions``.
+
+    Both are unified endpoints as of the Workers AI / AI Gateway unification
+    (see https://blog.cloudflare.com/workers-ai-gateway-unification/): when
+    ``ai_gateway`` is set, requests still go to these same paths on
+    ``api.cloudflare.com``, routed through the gateway via a
+    ``cf-aig-gateway-id`` header rather than a separate
+    ``gateway.ai.cloudflare.com`` host/path.
     """
     request_timeout: Union[float, Tuple[float, float], Any, None] = Field(
         default=None, alias="timeout"
@@ -543,16 +568,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         try:
             import httpx
 
-            # Determine the base URL based on whether
-            # we're using AI Gateway or direct API
-            if self.ai_gateway:
-                base_url = (
-                    f"https://gateway.ai.cloudflare.com/v1/"
-                    f"{self.account_id}/{self.ai_gateway}"
-                )
-            else:
-                # Use the custom base_url if provided, otherwise use the default
-                base_url = self.base_url or "https://api.cloudflare.com/client/v4"
+            # Unified endpoint (see
+            # https://blog.cloudflare.com/workers-ai-gateway-unification/):
+            # AI Gateway routing no longer uses a separate
+            # gateway.ai.cloudflare.com host -- requests always go to the
+            # standard Workers AI endpoint, gated through cf-aig-gateway-id
+            # below instead.
+            base_url = self.base_url or "https://api.cloudflare.com/client/v4"
 
             # Build request headers
             headers: Dict[str, str] = {
@@ -563,8 +585,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             if self.session_id:
                 headers["x-session-affinity"] = self.session_id
 
-            # AI Gateway request handling headers
+            # AI Gateway routing and request handling headers
             if self.ai_gateway:
+                headers["cf-aig-gateway-id"] = self.ai_gateway
                 if self.aig_request_timeout is not None:
                     headers["cf-aig-request-timeout"] = str(self.aig_request_timeout)
                 if self.aig_max_attempts is not None:
@@ -838,14 +861,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         return params
 
     def _get_api_url(self) -> str:
-        """Return the REST API path for the configured endpoint format."""
-        if self.endpoint_format == "openai_compatible":
-            if self.ai_gateway:
-                return "workers-ai/v1/chat/completions"
-            return f"accounts/{self.account_id}/ai/v1/chat/completions"
+        """Return the REST API path for the configured endpoint format.
 
-        if self.ai_gateway:
-            return f"workers-ai/run/{self.model}"
+        Same path whether or not ai_gateway is set -- AI Gateway routing is
+        done via the cf-aig-gateway-id header (see validate_environment), not
+        a separate URL, since the Workers AI / AI Gateway unification.
+        """
+        if self.endpoint_format == "openai_compatible":
+            return f"accounts/{self.account_id}/ai/v1/chat/completions"
         return f"accounts/{self.account_id}/ai/run/{self.model}"
 
     def _create_request_payload(
@@ -863,6 +886,20 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         return {"messages": message_dicts, **params}
 
+    @staticmethod
+    def _streaming_safe_usage(usage: Dict[str, Any]) -> Dict[str, Any]:
+        """Drop usage fields that can't survive per-chunk merging.
+
+        Workers AI reports `usage` on every streamed chunk, not just the
+        last one. `prompt_tokens`/`completion_tokens`/`total_tokens` are
+        per-chunk deltas that langchain_core's merge_dicts sums correctly
+        (it auto-adds matching int keys) -- but `neurons` is a float, and
+        merge_dicts has no rule for combining two floats under the same
+        key, so ChatGenerationChunk.__add__ raises TypeError the moment a
+        stream produces more than one chunk with usage data.
+        """
+        return {k: v for k, v in usage.items() if k != "neurons"}
+
     def _create_openai_stream_chunk(
         self,
         chunk: Dict[str, Any],
@@ -878,7 +915,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         generation_info = {}
         if "usage" in chunk:
-            generation_info["usage"] = chunk["usage"]
+            generation_info["usage"] = self._streaming_safe_usage(chunk["usage"])
 
         return ChatGenerationChunk(
             message=AIMessageChunk(content=response_text),
@@ -1030,7 +1067,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                         # Initialize generation_info
                         generation_info = {}
                         if "usage" in stream_chunk:
-                            generation_info["usage"] = stream_chunk["usage"]
+                            generation_info["usage"] = self._streaming_safe_usage(
+                                stream_chunk["usage"]
+                            )
 
                         # Check for tool calls in accumulated content
                         tool_calls = []
@@ -1116,7 +1155,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
                     generation_info = {}
                     if "usage" in chunk:
-                        generation_info["usage"] = chunk["usage"]
+                        generation_info["usage"] = self._streaming_safe_usage(
+                            chunk["usage"]
+                        )
 
                     generation_chunk = ChatGenerationChunk(
                         message=message_chunk, generation_info=generation_info or None
@@ -1201,7 +1242,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                         # Check if this is the final chunk with usage data
                         generation_info = {}
                         if "usage" in stream_chunk:
-                            generation_info["usage"] = stream_chunk["usage"]
+                            generation_info["usage"] = self._streaming_safe_usage(
+                                stream_chunk["usage"]
+                            )
 
                         # Check for tool calls in accumulated content
                         tool_calls = []
@@ -1302,7 +1345,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
                     # Include usage stats when available
                     if "usage" in chunk:
-                        generation_info["usage"] = chunk["usage"]
+                        generation_info["usage"] = self._streaming_safe_usage(
+                            chunk["usage"]
+                        )
 
                     generation_chunk = ChatGenerationChunk(
                         message=message_chunk, generation_info=generation_info or None
@@ -1848,6 +1893,26 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 else CloudflareJsonOutputParser()
             )
 
+            # Reasoning models "think" before answering, and an injected
+            # schema (json_schema_rf's response_format or json_object's
+            # system message) gives them more to reason about -- with no
+            # explicit max_tokens, Cloudflare's platform default can be
+            # exhausted by the reasoning phase alone, leaving no budget for
+            # the actual answer (message.content ends up as only a
+            # {"type": "thinking", ...} block, no "text" block, so
+            # AIMessage.text is "" and the JSON parser gets nothing to
+            # parse). Confirmed empirically: gpt-oss-20b failed intermittently
+            # with the platform default and passed reliably (3/3) at 2048.
+            # Only applied when the caller hasn't already set max_tokens.
+            extra_bind_kwargs: Dict[str, Any] = {}
+            if (
+                self.max_tokens is None
+                and self._model_behavior.supports_reasoning_content
+            ):
+                extra_bind_kwargs["max_tokens"] = (
+                    _REASONING_STRUCTURED_OUTPUT_MIN_MAX_TOKENS
+                )
+
             if json_schema_mode == "guided_json":
                 # Mistral: bind guided_json=<schema> directly; constrained
                 # decoding handles schema adherence without system message injection.
@@ -1869,6 +1934,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                         "kwargs": {"method": "json_schema"},
                         "schema": schema,
                     },
+                    **extra_bind_kwargs,
                 )
                 pipeline = llm
 
@@ -1910,6 +1976,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                         "kwargs": {"method": "json_mode"},
                         "schema": schema,
                     },
+                    **extra_bind_kwargs,
                 )
                 pipeline = RunnableLambda(_inject_schema_message) | schema_bound_llm  # type: ignore[arg-type]
 
