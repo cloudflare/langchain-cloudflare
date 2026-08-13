@@ -97,6 +97,8 @@ ipython_config.py
 # mypy
 .mypy_cache/
 **/.mypy_cache/
+.mypy_cache_test/
+**/.mypy_cache_test/
 .dmypy.json
 dmypy.json
 

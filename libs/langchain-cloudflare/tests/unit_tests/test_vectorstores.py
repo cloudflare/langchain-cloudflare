@@ -5,11 +5,15 @@ SQL injection prevention is handled by SQLAlchemy's parameterized queries.
 """
 
 import json
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from langchain_cloudflare.vectorstores import CloudflareVectorize, VectorizeRecord
+from langchain_cloudflare.vectorstores import (
+    CloudflareVectorize,
+    VectorizeRecord,
+    _index_is_ready,
+)
 
 # Dummy embedding values for test records
 DUMMY_EMBEDDING = [0.0] * 10
@@ -410,6 +414,202 @@ class TestMetadataQuerySQLInjectionPrevention:
                     "test_table",
                     {bad_key: ["value"]},
                     operation="AND",
+                )
+
+
+class _FakeEmbeddings:
+    """Minimal Embeddings stand-in -- avoids a real REST/Workers AI call."""
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [DUMMY_EMBEDDING for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return DUMMY_EMBEDDING
+
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
+        return self.embed_documents(texts)
+
+    async def aembed_query(self, text: str) -> list[float]:
+        return self.embed_query(text)
+
+
+class _FakeVectorizeBinding:
+    """Minimal env.VECTORIZE binding stand-in, recording what it's given."""
+
+    def __init__(self) -> None:
+        self.upserted: list[dict] = []
+        self.inserted: list[dict] = []
+
+    async def upsert(self, vectors: list[dict]) -> dict:
+        self.upserted.extend(vectors)
+        return {"mutationId": "fake", "count": len(vectors)}
+
+    async def insert(self, vectors: list[dict]) -> dict:
+        self.inserted.extend(vectors)
+        return {"mutationId": "fake", "count": len(vectors)}
+
+
+class TestAaddDocumentsHonorsExplicitIds:
+    """Regression test: aadd_documents(documents, ids=[...]) must use those ids.
+
+    Before the fix, `ids` was accepted as an explicit named parameter but the
+    body checked `"ids" not in kwargs` to decide whether to generate random
+    UUIDs instead -- since `ids` was consumed by the named parameter, it
+    never appeared in kwargs, so that check was always true and any
+    caller-supplied ids were silently discarded. The sync add_documents()
+    doesn't have this bug: it never took `ids` as a named parameter, so its
+    identical-looking kwargs check is actually correct there.
+    """
+
+    async def test_aadd_documents_uses_given_ids_not_random_uuids(self) -> None:
+        from langchain_core.documents import Document
+
+        binding = _FakeVectorizeBinding()
+        cf_vectorize = CloudflareVectorize(
+            embedding=_FakeEmbeddings(),  # type: ignore[arg-type]
+            binding=binding,
+            index_name="test-index",
+        )
+
+        doc = Document(page_content="hello world", metadata={"k": "v"})
+        returned_ids = await cf_vectorize.aadd_documents([doc], ids=["my-explicit-id"])
+
+        assert returned_ids == ["my-explicit-id"]
+        assert len(binding.inserted) == 1
+        assert binding.inserted[0]["id"] == "my-explicit-id"
+
+    async def test_aadd_documents_generates_id_when_none_given(self) -> None:
+        from langchain_core.documents import Document
+
+        binding = _FakeVectorizeBinding()
+        cf_vectorize = CloudflareVectorize(
+            embedding=_FakeEmbeddings(),  # type: ignore[arg-type]
+            binding=binding,
+            index_name="test-index",
+        )
+
+        doc = Document(page_content="hello world", metadata={"k": "v"})
+        returned_ids = await cf_vectorize.aadd_documents([doc])
+
+        assert len(returned_ids) == 1
+        assert returned_ids[0]  # non-empty, auto-generated
+        assert binding.inserted[0]["id"] == returned_ids[0]
+
+
+class TestIndexIsReady:
+    """Regression test: _index_is_ready must match the actual `/info` shape.
+
+    Before the fix it checked `index_info.get("name") and
+    index_info.get("config")`, fields that belong to the `/indexes/{name}`
+    endpoint's response -- but _index_is_ready is only ever called with the
+    output of get_index_info()/aget_index_info(), which hit `/info` instead.
+    `/info` never returns `name` or `config`, so this always returned False,
+    meaning create_index(wait=True) could never detect "ready" and would
+    poll until _poll_mutation_status's timeout fired (previously: it hung
+    forever, since that loop had no timeout of its own either).
+    """
+
+    def test_ready_for_a_fresh_empty_index(self) -> None:
+        # Actual /info response for a just-created, zero-vector index.
+        assert _index_is_ready({"dimensions": 768, "vectorCount": 0}) is True
+
+    def test_ready_for_an_index_with_processed_mutations(self) -> None:
+        # Actual /info response shape once at least one mutation has landed.
+        assert (
+            _index_is_ready(
+                {
+                    "dimensions": 768,
+                    "vectorCount": 1,
+                    "processedUpToDatetime": "2026-08-13T04:31:31.713Z",
+                    "processedUpToMutation": "f3346a16-5900-44aa-917c-9204b2cedda6",
+                }
+            )
+            is True
+        )
+
+    def test_not_ready_for_an_empty_response(self) -> None:
+        assert _index_is_ready({}) is False
+
+    def test_not_ready_for_the_indexes_endpoint_shape(self) -> None:
+        # /indexes/{name}'s response shape -- not what get_index_info() ever
+        # actually returns, but worth pinning that this alone isn't "ready"
+        # since it lacks `dimensions`.
+        assert (
+            _index_is_ready(
+                {"name": "my-index", "config": {"dimensions": 768, "metric": "cosine"}}
+            )
+            is False
+        )
+
+
+class TestPollMutationStatusTimeout:
+    """Regression test: _poll_mutation_status/_apoll_mutation_status must not
+    hang forever.
+
+    Before the fix, both were `while True:` loops with no maximum duration,
+    and got_index_info()'s underlying requests.get() had no timeout either --
+    so a single stuck/slow API response left the loop spinning silently with
+    no error, ever. Observed in practice as a 45+ minute hang on
+    create_index(wait=True) during integration test development.
+    """
+
+    def test_poll_mutation_status_raises_timeout_error_past_max_wait(self) -> None:
+        cf_vectorize = CloudflareVectorize(
+            embedding=_FakeEmbeddings(),  # type: ignore[arg-type]
+            account_id="acct",
+            api_token="tok",
+            index_name="test-index",
+        )
+        # Never looks "ready" and never matches a mutation_id, so the only
+        # way out of the loop is the max_wait_seconds deadline.
+        cf_vectorize.get_index_info = MagicMock(return_value={})  # type: ignore[method-assign]
+
+        clock = {"now": 0.0}
+
+        def fake_monotonic() -> float:
+            clock["now"] += 5
+            return clock["now"]
+
+        with (
+            patch("langchain_cloudflare.vectorstores.time.sleep"),
+            patch("langchain_cloudflare.vectorstores.time.monotonic", fake_monotonic),
+        ):
+            with pytest.raises(TimeoutError, match="Timed out waiting"):
+                cf_vectorize._poll_mutation_status(
+                    index_name="test-index", max_wait_seconds=10
+                )
+
+    async def test_apoll_mutation_status_raises_timeout_error_past_max_wait(
+        self,
+    ) -> None:
+        cf_vectorize = CloudflareVectorize(
+            embedding=_FakeEmbeddings(),  # type: ignore[arg-type]
+            account_id="acct",
+            api_token="tok",
+            index_name="test-index",
+        )
+
+        async def fake_aget_index_info(*args: object, **kwargs: object) -> dict:
+            return {}
+
+        cf_vectorize.aget_index_info = fake_aget_index_info  # type: ignore[method-assign]
+
+        clock = {"now": 0.0}
+
+        def fake_monotonic() -> float:
+            clock["now"] += 5
+            return clock["now"]
+
+        async def fake_sleep(*args: object, **kwargs: object) -> None:
+            return None
+
+        with (
+            patch("langchain_cloudflare.vectorstores.asyncio.sleep", fake_sleep),
+            patch("langchain_cloudflare.vectorstores.time.monotonic", fake_monotonic),
+        ):
+            with pytest.raises(TimeoutError, match="Timed out waiting"):
+                await cf_vectorize._apoll_mutation_status(
+                    index_name="test-index", max_wait_seconds=10
                 )
 
 

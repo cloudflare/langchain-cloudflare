@@ -47,6 +47,16 @@ from ._types import BindingQueryOptions, VectorizedDict
 # MARK: - Constants
 MAX_INSERT_SIZE = 5000
 DEFAULT_WAIT_SECONDS = 5
+# Ceiling on how long _poll_mutation_status/_apoll_mutation_status will keep
+# retrying before giving up. Without this, a single stuck/slow Cloudflare API
+# response leaves the `while True:` poll loop spinning forever with no
+# visible error, since neither loop had any escape hatch.
+DEFAULT_MAX_WAIT_SECONDS = 300
+# Applied to the individual HTTP calls inside the mutation-status poll loop
+# above, so a single stuck response can't block past DEFAULT_MAX_WAIT_SECONDS
+# on its own -- the loop's error handling (which retries and eventually
+# raises) only ever runs once a request actually returns or times out.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 30
 DEFAULT_TOP_K = 20
 MAX_TOP_K = 100
 DEFAULT_DIMENSIONS = 1024
@@ -58,8 +68,19 @@ VST = TypeVar("VST", bound="CloudflareVectorize")
 
 # MARK: - Helper Functions
 def _index_is_ready(index_info: Dict[str, Any]) -> bool:
-    """Return True when an index describe payload looks queryable."""
-    return bool(index_info.get("name") and index_info.get("config"))
+    """Return True when an index info payload looks queryable.
+
+    This checks the shape returned by get_index_info()/aget_index_info(),
+    which call the Vectorize `/info` endpoint -- not the `/indexes/{name}`
+    endpoint used elsewhere in this file. `/info` never returns `name` or
+    `config` (checked here previously, which meant this always returned
+    False); it returns `dimensions` and `vectorCount` as soon as the index
+    exists and is queryable, even with zero vectors -- `processedUpToDatetime`/
+    `processedUpToMutation` only appear once at least one mutation has been
+    processed, so they can't be used as the "ready" signal for a brand-new
+    index either.
+    """
+    return index_info.get("dimensions") is not None
 
 
 # MARK: - RequestsKwargs
@@ -1001,6 +1022,7 @@ class CloudflareVectorize(VectorStore):
         index_name: str,
         mutation_id: Optional[str] = None,
         wait_seconds: Optional[int] = None,
+        max_wait_seconds: Optional[int] = None,
     ) -> None:
         """Poll the mutation status of an index operation until completion.
 
@@ -1010,15 +1032,25 @@ class CloudflareVectorize(VectorStore):
             wait_seconds:
                 Optional number of seconds to wait
                 per check interval for mutation status
+            max_wait_seconds:
+                Ceiling on total time spent polling before giving up
+                (default: DEFAULT_MAX_WAIT_SECONDS)
 
         Raises:
             Exception: If polling encounters repeated errors
+            TimeoutError: If the mutation hasn't completed within max_wait_seconds
         """
         poll_interval_seconds = wait_seconds or self.default_wait_seconds
+        deadline = time.monotonic() + (max_wait_seconds or DEFAULT_MAX_WAIT_SECONDS)
         time.sleep(poll_interval_seconds)
         err_cnt = 0
         err_lim = 5
         while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for index {index_name!r} mutation "
+                    f"to complete after {max_wait_seconds or DEFAULT_MAX_WAIT_SECONDS}s"
+                )
             try:
                 response_index = self.get_index_info(index_name)
                 err_cnt = 0
@@ -1044,6 +1076,7 @@ class CloudflareVectorize(VectorStore):
         index_name: str,
         mutation_id: Optional[str] = None,
         wait_seconds: Optional[int] = None,
+        max_wait_seconds: Optional[int] = None,
     ) -> None:
         """Asynchronously poll the mutation status
         of an index operation until completion.
@@ -1054,15 +1087,25 @@ class CloudflareVectorize(VectorStore):
             wait_seconds:
                 Optional number of seconds to wait
                 per check interval for mutation status
+            max_wait_seconds:
+                Ceiling on total time spent polling before giving up
+                (default: DEFAULT_MAX_WAIT_SECONDS)
 
         Raises:
             Exception: If polling encounters repeated errors
+            TimeoutError: If the mutation hasn't completed within max_wait_seconds
         """
         poll_interval_seconds = wait_seconds or self.default_wait_seconds
+        deadline = time.monotonic() + (max_wait_seconds or DEFAULT_MAX_WAIT_SECONDS)
         await asyncio.sleep(poll_interval_seconds)
         err_cnt = 0
         err_lim = 5
         while True:
+            if time.monotonic() > deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for index {index_name!r} mutation "
+                    f"to complete after {max_wait_seconds or DEFAULT_MAX_WAIT_SECONDS}s"
+                )
             try:
                 response_index = await self.aget_index_info(index_name)
                 err_cnt = 0
@@ -2445,6 +2488,7 @@ class CloudflareVectorize(VectorStore):
         if not index_name:
             raise ValueError("index_name must be provided")
 
+        kwargs.setdefault("timeout", DEFAULT_REQUEST_TIMEOUT_SECONDS)
         response = requests.get(
             self._get_url("info", index_name), headers=self._headers, **kwargs
         )
@@ -3570,20 +3614,24 @@ class CloudflareVectorize(VectorStore):
         texts = [doc.page_content for doc in documents]
         metadatas = [doc.metadata for doc in documents]
 
-        # Use document IDs if they exist, falling back to provided ids
-        if "ids" not in kwargs:
-            # Generate valid string IDs, ensuring no None values
+        # Use the explicit ids param if given, falling back to document IDs,
+        # then generating new ones. Must check `ids is None` here, not
+        # `"ids" not in kwargs" -- ids is an explicit named parameter above,
+        # so a caller-provided value never lands in kwargs and that check
+        # was always true, silently discarding any explicit ids.
+        if ids is None:
             doc_ids = []
             for doc in documents:
                 if hasattr(doc, "id") and doc.id is not None:
                     doc_ids.append(doc.id)
                 else:
                     doc_ids.append(str(uuid.uuid4()))
-            kwargs["ids"] = doc_ids
+            ids = doc_ids
 
         return await self.aadd_texts(
             texts=texts,
             metadatas=metadatas,
+            ids=ids,
             namespaces=namespaces,
             upsert=upsert,
             index_name=index_name,

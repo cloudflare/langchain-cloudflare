@@ -51,6 +51,28 @@ def wait_for_search_results(
     return last_results
 
 
+def wait_until(
+    fn, predicate, timeout_seconds: int = 30, poll_interval_seconds: int = 2
+):
+    """Poll `fn()` until `predicate(result)` is true, returning the last result.
+
+    Platform-level Vectorize behavior (create_index/add_documents/delete
+    with wait=True) only waits for the mutation to be *processed*, not for
+    get_by_ids/search to actually reflect it -- there's a real, if usually
+    short, propagation gap between the two. Assertions that depend on that
+    propagation should poll rather than check once, the same way
+    wait_for_search_results already does for similarity_search.
+    """
+    deadline = time.time() + timeout_seconds
+    result = fn()
+    while time.time() < deadline:
+        if predicate(result):
+            return result
+        time.sleep(poll_interval_seconds)
+        result = fn()
+    return result
+
+
 @pytest.fixture(scope="class")
 def embeddings() -> CloudflareWorkersAIEmbeddings:
     """Get embeddings model."""
@@ -174,8 +196,12 @@ class TestCloudflareVectorize:
         # Try adding same docs again with upsert=True (no duplicates)
         store.add_documents(documents=docs, upsert=True, wait=True)
 
-        # Search to verify no duplicates
-        results = store.get_by_ids(["test-id-1", "test-id-2"])
+        # Search to verify no duplicates. wait=True only guarantees the
+        # mutation was processed, not that get_by_ids reflects it yet.
+        results = wait_until(
+            lambda: store.get_by_ids(["test-id-1", "test-id-2"]),
+            lambda r: len(r) == 2,
+        )
 
         assert len(results) == 2, "Should only have 2 documents despite adding twice"
 
@@ -190,7 +216,10 @@ class TestCloudflareVectorize:
         store.add_documents(documents=[updated_doc], upsert=True, wait=True)
 
         # Verify update
-        results = store.get_by_ids(["test-id-1"])
+        results = wait_until(
+            lambda: store.get_by_ids(["test-id-1"]),
+            lambda r: len(r) == 1 and r[0].page_content.startswith("Updated:"),
+        )
         assert len(results) == 1
         assert results[0].page_content.startswith("Updated:")
 
@@ -220,22 +249,25 @@ class TestCloudflareVectorize:
         # Add documents
         store.add_documents(documents=docs, wait=True)
 
-        # Verify initial state
-        results = store.get_by_ids(
-            [
-                f"{test_id}-delete-test-1",
-                f"{test_id}-delete-test-2",
-                f"{test_id}-keep-test-1",
-            ]
-        )
+        # Verify initial state. wait=True only guarantees the insert
+        # mutation was processed, not that get_by_ids reflects it yet, so
+        # poll rather than assert once.
+        all_ids = [
+            f"{test_id}-delete-test-1",
+            f"{test_id}-delete-test-2",
+            f"{test_id}-keep-test-1",
+        ]
+        results = wait_until(lambda: store.get_by_ids(all_ids), lambda r: len(r) == 3)
         assert len(results) == 3, "Should have all 3 documents initially"
 
         # Delete specific documents
         ids_to_delete = [f"{test_id}-delete-test-1", f"{test_id}-delete-test-2"]
         store.delete(ids=ids_to_delete, wait=True)
 
-        # Verify deletion
-        results = store.get_by_ids(ids_to_delete)
+        # Verify deletion (same propagation-gap caveat as above)
+        results = wait_until(
+            lambda: store.get_by_ids(ids_to_delete), lambda r: len(r) == 0
+        )
         assert len(results) == 0
 
         # Verify remaining document
@@ -302,8 +334,10 @@ class TestCloudflareVectorize:
                 wait=True,
             )
 
-            docs = store.similarity_search(
-                query="California", k=1, index_name=new_index
+            docs = wait_for_search_results(
+                lambda: store.similarity_search(
+                    query="California", k=1, index_name=new_index
+                )
             )
             assert len(docs) > 0
             assert "California" in docs[0].page_content
