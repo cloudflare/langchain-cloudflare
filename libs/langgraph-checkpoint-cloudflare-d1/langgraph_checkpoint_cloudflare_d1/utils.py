@@ -1,8 +1,36 @@
+import base64
 import json
 from typing import Any, Dict, Optional, Sequence, Tuple
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import get_checkpoint_id
+
+
+def decode_metadata_blob(
+    metadata: Any, default: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """Decode a `checkpoints.metadata` BLOB value into a metadata dict.
+
+    The column is written as base64-encoded JSON bytes (see the bytes-encoding
+    branch in each saver's query-param formatting), and both the D1 REST API
+    and the Worker binding return BLOB columns as base64 strings -- so callers
+    must base64-decode before parsing as JSON.
+    """
+    if default is None:
+        default = {}
+    if metadata is None or metadata == "":
+        return dict(default)
+    try:
+        if isinstance(metadata, str):
+            try:
+                metadata = base64.b64decode(metadata)
+            except Exception:
+                pass
+        if isinstance(metadata, bytes):
+            metadata = metadata.decode("utf-8")
+        return json.loads(metadata)
+    except Exception:
+        return dict(default)
 
 
 def search_where(
@@ -51,14 +79,16 @@ def _metadata_predicate(
         """Return tuple of operator and value for WHERE clause predicate."""
         if query_value is None:
             return ("IS ?", None)
+        elif isinstance(query_value, bool):
+            # Must be checked before the int branch: bool is a subclass of int
+            # in Python, so `isinstance(True, int)` is also True.
+            return ("= ?", 1 if query_value else 0)
         elif (
             isinstance(query_value, str)
             or isinstance(query_value, int)
             or isinstance(query_value, float)
         ):
             return ("= ?", query_value)
-        elif isinstance(query_value, bool):
-            return ("= ?", 1 if query_value else 0)
         elif isinstance(query_value, dict) or isinstance(query_value, list):
             # query value for JSON object cannot have trailing space after separators (, :)
             # SQLite json_extract() returns JSON string without whitespace

@@ -39,7 +39,7 @@ from tenacity import (
 
 from .aio import AsyncCloudflareD1Saver
 from .models import D1Response
-from .utils import _metadata_predicate, search_where
+from .utils import _metadata_predicate, decode_metadata_blob, search_where
 
 logger = logging.getLogger(__name__)
 
@@ -401,17 +401,9 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                 )
 
                 # Get checkpoint metadata
-                try:
-                    if metadata is not None and metadata != "":
-                        metadata_dict = json.loads(metadata)
-                    else:
-                        metadata_dict = {"step": -2}  # Default initial metadata
-
-                    # Ensure required fields are present
-                    if "step" not in metadata_dict:
-                        metadata_dict["step"] = -2  # Default initial step value
-                except Exception:
-                    metadata_dict = {"step": -2}  # Default with required field
+                metadata_dict = decode_metadata_blob(metadata, default={"step": -2})
+                if "step" not in metadata_dict:
+                    metadata_dict["step"] = -2  # Default initial step value
 
                 # Cast to correct types for type checker
                 checkpoint_metadata: CheckpointMetadata = cast(
@@ -460,44 +452,13 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         Returns:
             Iterator[CheckpointTuple]: Iterator over checkpoint tuples.
         """
-        filter = filter or {}
-        thread_id = None
-
-        # Extract thread ID from config or filter
-        if (
-            config
-            and "configurable" in config
-            and "thread_id" in config["configurable"]
-        ):
-            thread_id = config["configurable"]["thread_id"]
-        elif filter and "thread_id" in filter:
-            thread_id = filter["thread_id"]
-
-        # Do not filter results - simply iterate and yield checkpoints
         with self.lock:
-            if not thread_id:
-                return
-
             self.setup()
 
-            # Determine what to filter by
-            filter_by = []
-            params = []
-
-            if filter:
-                # Support exact match filtering on thread_id and checkpoint_id
-                for key, value in filter.items():
-                    if key in ["thread_id", "checkpoint_id"]:
-                        filter_by.append(f"{key} = ?")
-                        params.append(value)
-                    else:
-                        # For complex filtering, would need metadata query support
-                        continue
-
-            filter_clause = f"WHERE {' AND '.join(filter_by)}" if filter_by else ""
+            where, params = search_where(config, filter, before)
             limit_clause = f"LIMIT {limit}" if limit else ""
 
-            query = f"SELECT * FROM checkpoints {filter_clause} ORDER BY checkpoint_id DESC {limit_clause}"
+            query = f"SELECT * FROM checkpoints {where} ORDER BY checkpoint_id DESC {limit_clause}"
 
             response = self._execute_query(query, params)
 
@@ -598,16 +559,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                                 continue
 
                     # Deserialize metadata safely
-                    try:
-                        metadata_dict = {}
-                        if (
-                            metadata is not None
-                            and metadata != ""
-                            and isinstance(metadata, (str, bytes))
-                        ):
-                            metadata_dict = json.loads(metadata)
-                    except Exception:
-                        metadata_dict = {}
+                    metadata_dict = decode_metadata_blob(metadata)
 
                     # Create and yield checkpoint tuple
                     type_str = cast(str, type_)

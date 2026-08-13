@@ -29,7 +29,7 @@ from tenacity import (
 )
 
 from .models import D1Response
-from .utils import search_where
+from .utils import decode_metadata_blob, search_where
 
 logger = logging.getLogger(__name__)
 
@@ -555,17 +555,9 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             )
 
             # Deserialize metadata safely
-            try:
-                if metadata is not None and metadata != "":
-                    metadata_dict = json.loads(metadata)
-                else:
-                    metadata_dict = {"step": -2}  # Default initial metadata
-
-                # Ensure required fields are present
-                if "step" not in metadata_dict:
-                    metadata_dict["step"] = -2  # Default initial step value
-            except Exception:
-                metadata_dict = {"step": -2}  # Default with required field
+            metadata_dict = decode_metadata_blob(metadata, default={"step": -2})
+            if "step" not in metadata_dict:
+                metadata_dict["step"] = -2  # Default initial step value
 
             # Properly cast metadata and writes to expected types
             checkpoint_metadata: CheckpointMetadata = cast(
@@ -705,7 +697,7 @@ class AsyncCloudflareD1Saver(BaseCheckpointSaver[str]):
             checkpoint_bytes = cast(bytes, checkpoint)
 
             # Cast metadata dict to CheckpointMetadata
-            metadata_dict = json.loads(metadata) if metadata is not None else {}
+            metadata_dict = decode_metadata_blob(metadata)
             checkpoint_metadata: CheckpointMetadata = cast(
                 CheckpointMetadata, metadata_dict
             )
