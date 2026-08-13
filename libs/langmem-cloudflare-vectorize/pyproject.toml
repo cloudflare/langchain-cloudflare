@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langmem-cloudflare-vectorize"
-version = "0.1.1"
+version = "0.1.2"
 description = "Langgraph BaseStore for Vectorize to use with Langmem"
 readme = "README.md"
 license = "MIT"

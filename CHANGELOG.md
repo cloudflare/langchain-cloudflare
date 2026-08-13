@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.7]
+
+#### Fixed
+
+- **Vectorize `add_documents`/`aadd_documents` dropping explicit `ids`**: Explicit `ids` were silently discarded in some code paths, regenerating random UUIDs instead.
+- **Vectorize mutation polling could hang indefinitely**: `_poll_mutation_status`/`_apoll_mutation_status` had no timeout, and the underlying request had none either. Added a configurable request timeout and a poll deadline.
+- **`create_index(wait=True)` never detected readiness**: `_index_is_ready()` checked fields (`name`/`config`) that the `/info` endpoint doesn't return; fixed to check `dimensions`, which it does.
+- **Streamed usage crashing on `neurons`**: Workers AI includes a per-chunk `neurons` float in streamed usage data, which broke `langchain_core`'s chunk-merging logic on any multi-chunk stream with usage. Stripped `neurons` before merging.
+- **Unreliable structured output for `mistral` and `gpt-oss`**: Both models don't reliably honor `tool_choice` for tool-calling-based structured output. Routed both through the `json_schema` path via `use_json_object_for_structured_output`, matching the existing `gemma` handling, and added a `max_tokens` floor for reasoning-capable models on that path so schema injection doesn't exhaust the reasoning budget before an answer is produced.
+- **Reranker requests had no timeout**: `CloudflareWorkersAIReranker`'s REST calls could hang (no timeout on `requests.post`, a tight 5s default on `httpx.AsyncClient`). Added a configurable `timeout` field (default 60s).
+
+#### Changed
+
+- **AI Gateway routing unified with the standard Workers AI endpoint**: Per [Cloudflare's Workers AI / AI Gateway unification](https://blog.cloudflare.com/workers-ai-gateway-unification/), AI Gateway no longer uses a separate `gateway.ai.cloudflare.com` host; routing is now via a `cf-aig-gateway-id` header on the standard `api.cloudflare.com` endpoint. Applies to `ChatCloudflareWorkersAI`, `CloudflareWorkersAIEmbeddings`, and `CloudflareWorkersAIReranker`.
+
+---
+
 ### [0.3.6]
 
 #### Added
@@ -249,6 +266,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Security
 - CVE-2025-64439 security fixes
+
+### [0.1.0] - Initial
+- Initial release
+
+
+## langmem-cloudflare-vectorize
+
+### [0.1.2]
+
+#### Added
+
+- **Python Worker binding support**: `CloudflareVectorizeBaseStore` now accepts `binding=`/`d1_binding=` parameters, talking to Vectorize and Workers AI through native Worker bindings instead of the REST API, mirroring the pattern already established in `langchain-cloudflare` and `langgraph-checkpoint-cloudflare-d1`. Async methods (`aget`/`aput`/`adelete`/`asearch`) are now real binding-backed implementations rather than sync wrappers; sync methods bridge via `pyodide.ffi.run_sync()` for use inside a Worker.
+- `examples/workers/`: a Python Worker example exercising the store end to end, including a `StateGraph` compiled with the store attached.
+- Integration test coverage: `tests/integration_tests/` (REST API, previously untested) and `tests/worker_tests/` (Worker binding, via a `pywrangler dev` server).
+
+#### Fixed
+
+- **`search()` crashed on an empty namespace prefix with no query**: `store.search(())` -- a documented valid LangGraph `BaseStore` usage for listing everything -- raised `UnboundLocalError` because the dummy-query fetch only ran when either `query` or `namespace_prefix_str` was truthy. Contributed by [@mittalpk](https://github.com/mittalpk).
+- **`with_cloudflare_embeddings()` not propagating `index_name`**: The constructed `CloudflareVectorize` instance never had `index_name` set, so any method relying on the instance default (e.g. `aget_by_ids`, `similarity_search`) failed with "index_name must be provided" outside of explicit per-call arguments.
+
+### [0.1.1]
+
+#### Changed
+- Dependency/build tooling updates as part of a broader monorepo migration to `uv`.
 
 ### [0.1.0] - Initial
 - Initial release
