@@ -210,6 +210,7 @@ class CloudflareWorkersAIReranker(BaseModel):
                 )
             )
 
+        results.sort(key=lambda r: r.score, reverse=True)
         return results
 
     @staticmethod
