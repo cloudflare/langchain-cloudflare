@@ -152,3 +152,54 @@ class TestAIGatewayUnifiedEndpoint:
         )
 
         assert "cf-aig-gateway-id" not in reranker.headers
+
+
+# MARK: - Response Ordering Tests
+class TestProcessResponseOrdering:
+    """_process_response's own docstring promises results sorted by score
+    (descending), but nothing in the implementation enforced that -- it just
+    appended results in whatever order the API response listed them.
+    """
+
+    def test_results_sorted_by_score_descending(self):
+        """A response with scores out of order must come back sorted."""
+        reranker = CloudflareWorkersAIReranker(
+            account_id="abc123",
+            api_token="valid-token",
+        )
+        documents = ["low relevance", "high relevance", "medium relevance"]
+        # Deliberately not in descending score order, matching a plausible
+        # raw API response order (e.g. original input order).
+        response_data = [
+            {"id": 0, "score": 0.1},
+            {"id": 1, "score": 0.9},
+            {"id": 2, "score": 0.5},
+        ]
+
+        results = reranker._process_response(
+            response_data, documents, [None, None, None], return_documents=False
+        )
+
+        scores = [r.score for r in results]
+        assert scores == sorted(scores, reverse=True)
+        assert scores == [0.9, 0.5, 0.1]
+        assert [r.index for r in results] == [1, 2, 0]
+
+    def test_already_sorted_response_stays_sorted(self):
+        """Sanity check: a response already in descending order is unaffected."""
+        reranker = CloudflareWorkersAIReranker(
+            account_id="abc123",
+            api_token="valid-token",
+        )
+        documents = ["a", "b", "c"]
+        response_data = [
+            {"id": 1, "score": 0.9},
+            {"id": 2, "score": 0.5},
+            {"id": 0, "score": 0.1},
+        ]
+
+        results = reranker._process_response(
+            response_data, documents, [None, None, None], return_documents=False
+        )
+
+        assert [r.score for r in results] == [0.9, 0.5, 0.1]
