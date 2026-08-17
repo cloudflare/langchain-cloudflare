@@ -44,6 +44,8 @@ SUPPORTED_MODELS = [
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.5",
     "@cf/moonshotai/kimi-k2.6",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
     "@cf/google/gemma-4-26b-a4b-it",
 ]
 

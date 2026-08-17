@@ -83,6 +83,8 @@ MODELS = [
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.6",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
 
@@ -96,8 +98,11 @@ JSON_SCHEMA_MODELS = [
 ]
 
 # Models confirmed to support vision (image input). Per CF docs and live testing.
+# deepseek-v4-flash is text/audio only (no vision), per its model card -- only
+# deepseek-v4-pro is included here.
 VISION_MODELS = [
     "@cf/moonshotai/kimi-k2.6",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
 
@@ -985,6 +990,8 @@ class TestWorkerReasoningContent:
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.6",
         "@cf/nvidia/nemotron-3-120b-a12b",
+        "@cf/deepseek-ai/deepseek-v4-pro-0813",
+        "@cf/deepseek-ai/deepseek-v4-flash-0731",
         _model_param("@cf/google/gemma-4-26b-a4b-it"),
     ]
 

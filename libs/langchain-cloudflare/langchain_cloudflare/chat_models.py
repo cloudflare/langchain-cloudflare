@@ -245,6 +245,7 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
         # failing via tool calling.
         use_json_object_for_structured_output=True,
     ),
+    "deepseek": _REASONING_BEHAVIOR,
     "kimi": _REASONING_BEHAVIOR,
     "llama": ModelBehavior(embed_tool_calls_in_content=True),
     "mistral": ModelBehavior(

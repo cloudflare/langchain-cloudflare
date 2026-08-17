@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### [0.3.7]
 
+#### Added
+
+- **`@cf/deepseek-ai/deepseek-v4-pro-0813`** and **`@cf/deepseek-ai/deepseek-v4-flash-0731`**: Added to the tested and example-supported model lists. First Workers AI models with a full 1,048,576-token context window; support thinking mode (`reasoning_content`), function calling, and structured output. `deepseek-v4-pro` additionally supports vision (image input); `deepseek-v4-flash` is text/audio only. Both require the Workers Paid plan or prepaid AI Gateway credits.
+
 #### Fixed
 
 - **Vectorize `add_documents`/`aadd_documents` dropping explicit `ids`**: Explicit `ids` were silently discarded in some code paths, regenerating random UUIDs instead.
