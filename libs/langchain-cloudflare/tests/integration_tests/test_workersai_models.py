@@ -71,7 +71,15 @@ except ImportError:
 # taking 200s+ on some calls and passing in seconds on immediate retry,
 # repeatedly, across every kind of request (invoke, structured output,
 # vision, multi-turn tool calling).
-FLAKY_MODELS = {"@cf/google/gemma-4-26b-a4b-it"}
+#
+# gpt-oss-120b intermittently produces runaway/degenerate output on
+# structured-output requests -- a JSON field filled with thousands of
+# repeated "-001" fragments (~20KB+), sometimes large/slow enough to trip a
+# 500 instead of returning. Confirmed by hitting the raw endpoint directly,
+# repeatedly, outside pytest: 2 of 3 calls reproduced it, 1 returned a normal
+# response. Not a code bug -- a live model-quality/stability issue on
+# Cloudflare's platform for this model.
+FLAKY_MODELS = {"@cf/google/gemma-4-26b-a4b-it", "@cf/openai/gpt-oss-120b"}
 
 
 def _model_param(model: str) -> str:
@@ -107,7 +115,7 @@ MODELS = [
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/zai-org/glm-4.7-flash",
     "@cf/zai-org/glm-5.2",
-    "@cf/openai/gpt-oss-120b",
+    _model_param("@cf/openai/gpt-oss-120b"),
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.6",
@@ -821,7 +829,7 @@ class TestReasoningContent:
         "@cf/qwen/qwen3-30b-a3b-fp8",
         "@cf/zai-org/glm-4.7-flash",
         "@cf/zai-org/glm-5.2",
-        "@cf/openai/gpt-oss-120b",
+        _model_param("@cf/openai/gpt-oss-120b"),
         "@cf/openai/gpt-oss-20b",
         "@cf/moonshotai/kimi-k2.6",
         _model_param("@cf/google/gemma-4-26b-a4b-it"),
