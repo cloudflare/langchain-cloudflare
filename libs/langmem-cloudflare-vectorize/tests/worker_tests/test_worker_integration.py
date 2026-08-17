@@ -168,9 +168,11 @@ class _WorkerStoreCrudBase:
             {"namespace": namespace, "key": key, "value": {"text": "to be deleted"}},
         )
         _poll_until(
-            lambda: self._post(port, "/store-get", {"namespace": namespace, "key": key})
-            .json()
-            .get("found")
+            lambda: (
+                self._post(port, "/store-get", {"namespace": namespace, "key": key})
+                .json()
+                .get("found")
+            )
         )
 
         del_res = self._post(

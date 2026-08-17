@@ -16,6 +16,7 @@ from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langmem_cloudflare_vectorize import CloudflareVectorizeBaseStore
 from workers import WorkerEntrypoint, Response
 
+
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         embeddings = CloudflareWorkersAIEmbeddings(

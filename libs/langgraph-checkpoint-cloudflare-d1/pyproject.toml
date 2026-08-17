@@ -35,6 +35,7 @@ dev = [
     "mypy>=1.15.0",
     "codespell>=2.2.0",
     "types-requests>=2.32.0",
+    "sqlalchemy-cloudflare-d1>=0.3.1",
 ]
 test = [
     "pytest>=7.4.0",
