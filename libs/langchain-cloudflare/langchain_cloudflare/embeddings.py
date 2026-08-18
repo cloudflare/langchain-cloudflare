@@ -140,15 +140,17 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}
 
+        # Unified endpoint (see
+        # https://blog.cloudflare.com/workers-ai-gateway-unification/):
+        # AI Gateway routing no longer uses a separate
+        # gateway.ai.cloudflare.com host -- requests always go to the
+        # standard Workers AI endpoint, gated through cf-aig-gateway-id below
+        # instead.
+        self._inference_url = (
+            f"{self.api_base_url}/{self.account_id}/ai/run/{self.model_name}"
+        )
         if self.ai_gateway:
-            self._inference_url = (
-                f"https://gateway.ai.cloudflare.com/v1/"
-                f"{self.account_id}/{self.ai_gateway}/workers-ai/run/{self.model_name}"
-            )
-        else:
-            self._inference_url = (
-                f"{self.api_base_url}/{self.account_id}/ai/run/{self.model_name}"
-            )
+            self.headers["cf-aig-gateway-id"] = self.ai_gateway
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 

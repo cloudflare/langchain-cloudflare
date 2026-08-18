@@ -109,6 +109,15 @@ class CloudflareWorkersAIReranker(BaseModel):
     )
     binding: Any = Field(default=None, exclude=True)
     """Workers AI binding (env.AI) for use in Python Workers."""
+    timeout: float = 60.0
+    """Request timeout in seconds for REST API calls.
+
+    rerank()'s requests.post() had no timeout at all (would hang
+    indefinitely on a stuck response), and arerank()'s httpx.AsyncClient()
+    had none either, silently falling back to httpx's default 5.0s -- tight
+    enough that a real integration test hit a ReadTimeout under load
+    reranking only 4 short documents.
+    """
 
     _inference_url: str = PrivateAttr()
 
@@ -130,15 +139,17 @@ class CloudflareWorkersAIReranker(BaseModel):
 
         self.headers = {"Authorization": f"Bearer {self.api_token.get_secret_value()}"}
 
+        # Unified endpoint (see
+        # https://blog.cloudflare.com/workers-ai-gateway-unification/):
+        # AI Gateway routing no longer uses a separate
+        # gateway.ai.cloudflare.com host -- requests always go to the
+        # standard Workers AI endpoint, gated through cf-aig-gateway-id below
+        # instead.
+        self._inference_url = (
+            f"{self.api_base_url}/{self.account_id}/ai/run/{self.model_name}"
+        )
         if self.ai_gateway:
-            self._inference_url = (
-                f"https://gateway.ai.cloudflare.com/v1/"
-                f"{self.account_id}/{self.ai_gateway}/workers-ai/run/{self.model_name}"
-            )
-        else:
-            self._inference_url = (
-                f"{self.api_base_url}/{self.account_id}/ai/run/{self.model_name}"
-            )
+            self.headers["cf-aig-gateway-id"] = self.ai_gateway
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
@@ -210,6 +221,7 @@ class CloudflareWorkersAIReranker(BaseModel):
                 )
             )
 
+        results.sort(key=lambda r: r.score, reverse=True)
         return results
 
     @staticmethod
@@ -267,6 +279,7 @@ class CloudflareWorkersAIReranker(BaseModel):
             url=self._inference_url,
             headers=self.headers,
             json=payload,
+            timeout=self.timeout,
         )
         response.raise_for_status()
 
@@ -316,7 +329,7 @@ class CloudflareWorkersAIReranker(BaseModel):
 
         import httpx
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(
                 url=self._inference_url,
                 headers=self.headers,

@@ -26,31 +26,92 @@ import uuid
 import pytest
 import requests
 
-# Models to test against
+# MARK: - Model Flakiness Handling
+#
+# Two categories of test failure:
+# - Model-specific: some Workers AI models are known to be intermittently
+#   slow/unreliable (not a code bug -- confirmed by retrying and passing
+#   seconds later, repeatedly, throughout development). These get a rerun
+#   via pytest-rerunfailures instead of being allowed to fail the suite.
+# - Platform-specific (Vectorize, D1, AI Search, reranker, etc.): should
+#   always pass. A failure there means something needs investigating, not
+#   tolerating -- do not add flaky-retry handling to those.
+#
+# gemma-4-26b-a4b-it is not deprecated per the Workers AI models API
+# (GET /accounts/{id}/ai/models/search -> properties has no
+# planned_deprecation_date for it), just intermittently slow -- observed
+# taking 200s+ on some calls and passing in seconds on immediate retry,
+# repeatedly, across every kind of request (invoke, structured output,
+# vision, multi-turn tool calling).
+#
+# gpt-oss-120b intermittently produces runaway/degenerate output on
+# structured-output requests -- a JSON field filled with thousands of
+# repeated "-001" fragments (~20KB+), sometimes large/slow enough to trip a
+# 500 instead of returning. Confirmed by hitting the raw endpoint directly,
+# repeatedly, outside pytest: 2 of 3 calls reproduced it, 1 returned a normal
+# response. Not a code bug -- a live model-quality/stability issue on
+# Cloudflare's platform for this model.
+FLAKY_MODELS = {"@cf/google/gemma-4-26b-a4b-it", "@cf/openai/gpt-oss-120b"}
+
+
+def _model_param(model: str) -> str:
+    """Wrap a known-flaky model in a rerun marker; pass others through.
+
+    Returns a plain str for non-flaky models and a pytest.param (which
+    duck-types as the parametrized value everywhere a str is expected
+    inside the test body) for flaky ones.
+    """
+    if model in FLAKY_MODELS:
+        return pytest.param(
+            model,
+            marks=pytest.mark.flaky(reruns=2, reruns_delay=5),
+            id=model,
+        )
+    return model
+
+
+def _model_str(model: object) -> str:
+    """Extract the underlying model string from a _model_param() result."""
+    values = getattr(model, "values", None)
+    return values[0] if values is not None else model  # type: ignore[return-value]
+
+
+# Models to test against. kimi-k2.5 was removed: it's deprecated
+# (planned_deprecation_date 2026-05-30, already past) and superseded by
+# kimi-k2.6, which is already in this list and supports the same features
+# (both report "per M cached input tokens" pricing, so k2.6 covers the
+# prompt-caching session-affinity tests k2.5 used to be needed for).
 MODELS = [
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/zai-org/glm-4.7-flash",
     "@cf/zai-org/glm-5.2",
-    "@cf/openai/gpt-oss-120b",
+    _model_param("@cf/openai/gpt-oss-120b"),
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
-    "@cf/moonshotai/kimi-k2.5",
     "@cf/moonshotai/kimi-k2.6",
-    "@cf/google/gemma-4-26b-a4b-it",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
 
 # Models live-validated in this suite for method='json_schema'.
 # Excluded families stay out of this list until their runtime behavior is
 # verified end-to-end in integration tests.
-JSON_SCHEMA_MODELS = [m for m in MODELS if "mistral" not in m and "gpt-oss" not in m]
+JSON_SCHEMA_MODELS = [
+    m
+    for m in MODELS
+    if "mistral" not in _model_str(m) and "gpt-oss" not in _model_str(m)
+]
 
 # Models confirmed to support vision (image input). Per CF docs and live testing.
+# deepseek-v4-flash is text/audio only (no vision), per its model card -- only
+# deepseek-v4-pro is included here.
 VISION_MODELS = [
-    "@cf/moonshotai/kimi-k2.5",
     "@cf/moonshotai/kimi-k2.6",
-    "@cf/google/gemma-4-26b-a4b-it",
+    "@cf/deepseek-ai/deepseek-v4-pro-0813",
+    _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
 
 
@@ -933,12 +994,13 @@ class TestWorkerReasoningContent:
         "@cf/qwen/qwen3-30b-a3b-fp8",
         "@cf/zai-org/glm-4.7-flash",
         "@cf/zai-org/glm-5.2",
-        "@cf/openai/gpt-oss-120b",
+        _model_param("@cf/openai/gpt-oss-120b"),
         "@cf/openai/gpt-oss-20b",
-        "@cf/moonshotai/kimi-k2.5",
         "@cf/moonshotai/kimi-k2.6",
         "@cf/nvidia/nemotron-3-120b-a12b",
-        "@cf/google/gemma-4-26b-a4b-it",
+        "@cf/deepseek-ai/deepseek-v4-pro-0813",
+        "@cf/deepseek-ai/deepseek-v4-flash-0731",
+        _model_param("@cf/google/gemma-4-26b-a4b-it"),
     ]
 
     @pytest.mark.parametrize("model", REASONING_MODELS)
@@ -1006,9 +1068,13 @@ class TestWorkerReasoningContent:
 
 
 def create_test_image_base64() -> str:
-    """Create a minimal 1x1 red pixel PNG and return as base64.
+    """Create a minimal solid-red PNG and return as base64.
 
     Uses raw PNG bytes to avoid requiring PIL in the test environment.
+    16x16, not 1x1: some vision models (e.g. @cf/google/gemma-4-26b-a4b-it)
+    reject images smaller than 10x10px with a 400 ("image dimensions must be
+    at least 10px"), so a 1x1 fixture image broke vision tests for those
+    models specifically.
     """
     import struct
     import zlib
@@ -1021,10 +1087,10 @@ def create_test_image_base64() -> str:
             + struct.pack(">I", zlib.crc32(chunk) & 0xFFFFFFFF)
         )
 
-    width, height = 1, 1
+    width, height = 16, 16
     ihdr_data = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    raw_row = b"\x00" + b"\xff\x00\x00"
-    idat_data = zlib.compress(raw_row)
+    raw_row = b"\x00" + b"\xff\x00\x00" * width
+    idat_data = zlib.compress(raw_row * height)
 
     png = b"\x89PNG\r\n\x1a\n"
     png += _png_chunk(b"IHDR", ihdr_data)
@@ -1138,7 +1204,8 @@ class TestWorkerSessionAffinity:
 
     Tests the /session-affinity endpoint which passes session_id
     through to the binding options as x-session-affinity header.
-    Currently only kimi-k2.5 is known to support prompt caching.
+    kimi-k2.6 is known to support prompt caching (both it and kimi-k2.5,
+    now removed as deprecated, report "per M cached input tokens" pricing).
     """
 
     def test_session_affinity_basic(self, dev_server):
@@ -1147,7 +1214,7 @@ class TestWorkerSessionAffinity:
         response = requests.post(
             f"http://localhost:{port}/session-affinity",
             json={
-                "model": "@cf/moonshotai/kimi-k2.5",
+                "model": "@cf/moonshotai/kimi-k2.6",
                 "message": "Say hello in exactly 3 words.",
                 "session_id": "test-worker-session",
             },
@@ -1172,7 +1239,7 @@ class TestWorkerSessionAffinity:
             response = requests.post(
                 f"http://localhost:{port}/session-affinity",
                 json={
-                    "model": "@cf/moonshotai/kimi-k2.5",
+                    "model": "@cf/moonshotai/kimi-k2.6",
                     "message": f"What is {i + 1} + {i + 1}?",
                     "session_id": session_id,
                 },

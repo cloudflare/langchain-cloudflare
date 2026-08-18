@@ -66,3 +66,35 @@ class TestTokenValidation:
             ValueError, match=re.escape(str(TokenErrors.INSUFFICIENT_AI_TOKENS))
         ):
             CloudflareWorkersAIEmbeddings(account_id="abc", api_token="")
+
+
+# MARK: - AI Gateway Unified Endpoint Tests
+class TestAIGatewayUnifiedEndpoint:
+    """Regression test: AI Gateway must route via header, not a separate host.
+
+    Since the Workers AI / AI Gateway unification
+    (https://blog.cloudflare.com/workers-ai-gateway-unification/), AI Gateway
+    no longer uses a separate gateway.ai.cloudflare.com host/path -- routing
+    happens via the cf-aig-gateway-id header on the standard endpoint.
+    """
+
+    def test_ai_gateway_uses_standard_url_with_header(self):
+        embeddings = CloudflareWorkersAIEmbeddings(
+            account_id="test_account",
+            api_token="test_token",
+            ai_gateway="my-gateway",
+        )
+
+        assert embeddings._inference_url == (
+            "https://api.cloudflare.com/client/v4/accounts/test_account/ai/run/"
+            f"{embeddings.model_name}"
+        )
+        assert embeddings.headers["cf-aig-gateway-id"] == "my-gateway"
+
+    def test_no_gateway_header_without_ai_gateway(self):
+        embeddings = CloudflareWorkersAIEmbeddings(
+            account_id="test_account",
+            api_token="test_token",
+        )
+
+        assert "cf-aig-gateway-id" not in embeddings.headers

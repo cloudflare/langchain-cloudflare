@@ -67,9 +67,7 @@ bindings use `env.AI.run()` and do not expose a chat completions route.
 ```python
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 
-embeddings = CloudflareWorkersAIEmbeddings(
-    model_name="@cf/baai/bge-base-en-v1.5"
-)
+embeddings = CloudflareWorkersAIEmbeddings(model_name="@cf/baai/bge-base-en-v1.5")
 embeddings.embed_query("What is the meaning of life?")
 ```
 
@@ -79,9 +77,7 @@ embeddings.embed_query("What is the meaning of life?")
 ```python
 from langchain_cloudflare.vectorstores import CloudflareVectorize
 
-vst = CloudflareVectorize(
-    embedding=embeddings
-)
+vst = CloudflareVectorize(embedding=embeddings)
 vst.create_index(index_name="my-cool-vectorstore")
 ```
 

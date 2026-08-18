@@ -4,19 +4,33 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langmem-cloudflare-vectorize"
-version = "0.1.1"
+version = "0.1.2"
 description = "Langgraph BaseStore for Vectorize to use with Langmem"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "langgraph>=0.5.0",
     "langchain-core>=0.3.81",
     "requests>=2.31.0",
     "httpx>=0.24.1",
     "pydantic>=1.10.0,<3.0.0",
-    "langchain-cloudflare>=0.1.8",
+    # >=0.3.0: needs CloudflareVectorize's binding=/d1_binding= support
+    # (introduced in 0.2.0, matured through the 0.3.x line) for
+    # CloudflareVectorizeBaseStore's own binding/Worker support.
+    # [async]: CloudflareVectorize auto-detects D1 from CF_D1_DATABASE_ID
+    # even when d1_database_id/d1_binding aren't explicitly passed, and its
+    # async D1 methods (used by aget/aput whenever D1 ends up configured)
+    # need SQLAlchemy's async engine, which needs greenlet -- without this
+    # extra, aget/aput fail with "the greenlet library is required" the
+    # moment D1 is configured, by explicit choice or by env var.
+    "langchain-cloudflare[async]>=0.3.0",
 ]
+
+[tool.uv.sources]
+# Use the local checkout so worker/binding features under active
+# development here are actually exercised, not a stale PyPI release.
+langchain-cloudflare = { path = "../langchain-cloudflare", editable = true }
 
 [project.urls]
 "Source Code" = "https://github.com/cloudflare/langchain-cloudflare/libs/langmem-cloudflare-vectorize"
@@ -35,6 +49,7 @@ test = [
     "pytest-socket>=0.7.0",
     "pytest-watcher>=0.3.4",
     "langchain-tests>=0.3.17",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -54,7 +69,6 @@ ignore_missing_imports = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "T201"]
-ignore = ["E501"]
 
 [tool.coverage.run]
 omit = ["tests/*"]

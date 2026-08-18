@@ -8,6 +8,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.7]
+
+#### Added
+
+- **`@cf/deepseek-ai/deepseek-v4-pro-0813`** and **`@cf/deepseek-ai/deepseek-v4-flash-0731`**: Added to the tested and example-supported model lists. First Workers AI models with a full 1,048,576-token context window; support thinking mode (`reasoning_content`), function calling, and structured output. `deepseek-v4-pro` additionally supports vision (image input); `deepseek-v4-flash` is text/audio only. Both require the Workers Paid plan or prepaid AI Gateway credits.
+
+#### Fixed
+
+- **Vectorize `add_documents`/`aadd_documents` dropping explicit `ids`**: Explicit `ids` were silently discarded in some code paths, regenerating random UUIDs instead.
+- **Vectorize mutation polling could hang indefinitely**: `_poll_mutation_status`/`_apoll_mutation_status` had no timeout, and the underlying request had none either. Added a configurable request timeout and a poll deadline.
+- **`create_index(wait=True)` never detected readiness**: `_index_is_ready()` checked fields (`name`/`config`) that the `/info` endpoint doesn't return; fixed to check `dimensions`, which it does.
+- **Streamed usage crashing on `neurons`**: Workers AI includes a per-chunk `neurons` float in streamed usage data, which broke `langchain_core`'s chunk-merging logic on any multi-chunk stream with usage. Stripped `neurons` before merging.
+- **Unreliable structured output for `mistral` and `gpt-oss`**: Both models don't reliably honor `tool_choice` for tool-calling-based structured output. Routed both through the `json_schema` path via `use_json_object_for_structured_output`, matching the existing `gemma` handling, and added a `max_tokens` floor for reasoning-capable models on that path so schema injection doesn't exhaust the reasoning budget before an answer is produced.
+- **Reranker requests had no timeout**: `CloudflareWorkersAIReranker`'s REST calls could hang (no timeout on `requests.post`, a tight 5s default on `httpx.AsyncClient`). Added a configurable `timeout` field (default 60s).
+
+#### Changed
+
+- **AI Gateway routing unified with the standard Workers AI endpoint**: Per [Cloudflare's Workers AI / AI Gateway unification](https://blog.cloudflare.com/workers-ai-gateway-unification/), AI Gateway no longer uses a separate `gateway.ai.cloudflare.com` host; routing is now via a `cf-aig-gateway-id` header on the standard `api.cloudflare.com` endpoint. Applies to `ChatCloudflareWorkersAI`, `CloudflareWorkersAIEmbeddings`, and `CloudflareWorkersAIReranker`.
+
+---
+
 ### [0.3.6]
 
 #### Added
@@ -226,6 +247,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langgraph-checkpoint-cloudflare-d1
 
+### [0.1.6]
+
+#### Added
+- **`WorkerCloudflareD1Saver`**: A checkpoint saver for use inside Cloudflare Python Workers, talking to D1 through the native Worker binding (`env.DB`) via `sqlalchemy-cloudflare-d1`'s `WorkerConnection` instead of the REST API -- no network round-trip to the Cloudflare API, no API token. Installable via the new optional `worker` extra: `pip install 'langgraph-checkpoint-cloudflare-d1[worker]'`. Both the native async methods (for `graph.ainvoke`/`astream`) and, mirroring `sqlalchemy-cloudflare-d1`'s `SyncWorkerConnection`, synchronous methods bridged via `pyodide.ffi.run_sync()` are implemented, for calling the saver directly outside of a compiled graph. `graph.invoke()` (sync) itself still can't run inside a Worker with any checkpointer attached -- LangGraph's sync `Pregel` loop always submits checkpoint writes to a real `ThreadPoolExecutor`, which Workers/Pyodide can't create.
+- `examples/workers/`: a Python Worker example exercising `WorkerCloudflareD1Saver` end to end, including a full `StateGraph` compiled with the saver as its checkpointer.
+- Integration test coverage: `tests/integration_tests/` (REST API savers, previously untested) and `tests/worker_tests/` (Worker binding saver, via a `pywrangler dev` server), mirroring the REST/Worker split already used in `sqlalchemy-cloudflare-d1` and `langchain-cloudflare`.
+
+#### Fixed
+- **Metadata decoding**: `get_tuple`/`aget_tuple`/`list`/`alist` read the `metadata` column without base64-decoding it first, so on both the REST and Worker savers every returned `CheckpointMetadata` silently fell back to `{"step": -2}` (or an empty dict in `list`/`alist`) instead of the real stored metadata. Fixed via a shared `decode_metadata_blob` helper, since this had no integration test coverage before this change.
+- **Sync `list()` ignored `before` and metadata filters**: `CloudflareD1Saver.list()` built its own ad-hoc WHERE clause supporting only exact-match filtering on `thread_id`/`checkpoint_id`, silently dropping every other filter key and the `before` argument entirely, unlike `alist()` (which correctly delegates to `search_where()`). Also fixed a related bug in `search_where()`'s metadata predicate builder, where the `bool` branch was checked after the `int` branch and was therefore unreachable (`bool` is a subclass of `int` in Python), so boolean filter values were passed through as raw `True`/`False` instead of the `1`/`0` SQLite's `json_extract()` actually returns. Contributed by [@mittalpk](https://github.com/mittalpk).
+
 ### [0.1.5]
 
 #### Security
@@ -238,6 +270,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Security
 - CVE-2025-64439 security fixes
+
+### [0.1.0] - Initial
+- Initial release
+
+
+## langmem-cloudflare-vectorize
+
+### [0.1.2]
+
+#### Added
+
+- **Python Worker binding support**: `CloudflareVectorizeBaseStore` now accepts `binding=`/`d1_binding=` parameters, talking to Vectorize and Workers AI through native Worker bindings instead of the REST API, mirroring the pattern already established in `langchain-cloudflare` and `langgraph-checkpoint-cloudflare-d1`. Async methods (`aget`/`aput`/`adelete`/`asearch`) are now real binding-backed implementations rather than sync wrappers; sync methods bridge via `pyodide.ffi.run_sync()` for use inside a Worker.
+- `examples/workers/`: a Python Worker example exercising the store end to end, including a `StateGraph` compiled with the store attached.
+- Integration test coverage: `tests/integration_tests/` (REST API, previously untested) and `tests/worker_tests/` (Worker binding, via a `pywrangler dev` server).
+
+#### Fixed
+
+- **`search()` crashed on an empty namespace prefix with no query**: `store.search(())` -- a documented valid LangGraph `BaseStore` usage for listing everything -- raised `UnboundLocalError` because the dummy-query fetch only ran when either `query` or `namespace_prefix_str` was truthy. Contributed by [@mittalpk](https://github.com/mittalpk).
+- **`with_cloudflare_embeddings()` not propagating `index_name`**: The constructed `CloudflareVectorize` instance never had `index_name` set, so any method relying on the instance default (e.g. `aget_by_ids`, `similarity_search`) failed with "index_name must be provided" outside of explicit per-call arguments.
+
+### [0.1.1]
+
+#### Changed
+- Dependency/build tooling updates as part of a broader monorepo migration to `uv`.
 
 ### [0.1.0] - Initial
 - Initial release

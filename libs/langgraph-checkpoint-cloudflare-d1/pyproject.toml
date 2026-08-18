@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "langgraph-checkpoint-cloudflare-d1"
-version = "0.1.5"
+version = "0.1.6"
 description = "LangGraph Checkpoint implementation for Cloudflare D1"
 readme = "README.md"
 license = "MIT"
@@ -20,6 +20,11 @@ dependencies = [
     "tenacity>=8.0.0",
 ]
 
+[project.optional-dependencies]
+worker = [
+    "sqlalchemy-cloudflare-d1>=0.3.1",
+]
+
 [project.urls]
 "Source Code" = "https://github.com/cloudflare/langchain-cloudflare/libs/langgraph-checkpoint-cloudflare-d1"
 "Release Notes" = "https://github.com/cloudflare/langchain-cloudflare/libs/langgraph-checkpoint-cloudflare-d1/blob/main/README.md"
@@ -30,6 +35,7 @@ dev = [
     "mypy>=1.15.0",
     "codespell>=2.2.0",
     "types-requests>=2.32.0",
+    "sqlalchemy-cloudflare-d1>=0.3.1",
 ]
 test = [
     "pytest>=7.4.0",
@@ -37,6 +43,8 @@ test = [
     "pytest-socket>=0.7.0",
     "pytest-watcher>=0.3.4",
     "langchain-tests>=0.3.17",
+    "python-dotenv>=1.0.0",
+    "sqlalchemy-cloudflare-d1>=0.3.1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -54,7 +62,6 @@ ignore_missing_imports = true
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "T201"]
-ignore = ["E501"]
 
 [tool.coverage.run]
 omit = ["tests/*"]

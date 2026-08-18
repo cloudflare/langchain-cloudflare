@@ -39,7 +39,8 @@ from tenacity import (
 
 from .aio import AsyncCloudflareD1Saver
 from .models import D1Response
-from .utils import _metadata_predicate, search_where
+from .utils import _metadata_predicate, decode_metadata_blob, search_where
+from .worker import WorkerCloudflareD1Saver
 
 logger = logging.getLogger(__name__)
 
@@ -52,8 +53,9 @@ try:
     _checkpoint_version = importlib.metadata.version("langgraph-checkpoint")
     if Version(_checkpoint_version) < Version("3.0.0"):
         raise RuntimeError(
-            f"SECURITY ERROR: langgraph-checkpoint {_checkpoint_version} is vulnerable to "
-            f"CVE-2025-64439 (Remote Code Execution). Please upgrade to >= 3.0.0 immediately. "
+            f"SECURITY ERROR: langgraph-checkpoint {_checkpoint_version} is "
+            f"vulnerable to CVE-2025-64439 (Remote Code Execution). Please "
+            f"upgrade to >= 3.0.0 immediately. "
             f"Run: pip install --upgrade 'langgraph-checkpoint>=3.0.0'"
         )
 except ImportError:
@@ -64,17 +66,19 @@ except ImportError:
 class CloudflareD1Saver(BaseCheckpointSaver[str]):
     """A checkpoint saver that stores checkpoints in a Cloudflare D1 database.
 
-    This class provides a way to store and retrieve checkpoints using Cloudflare's D1
-    database service through their REST API.
+    This class provides a way to store and retrieve checkpoints using
+    Cloudflare's D1 database service through their REST API.
 
     Args:
-        account_id (str): Your Cloudflare account ID. If not provided, will be read from
-            the CF_ACCOUNT_ID environment variable.
-        database_id (str): The ID of your D1 database. If not provided, will be read from
-            the CF_D1_DATABASE_ID environment variable.
-        api_token (str): Your Cloudflare API token with D1 permissions. If not provided, will be read from
-            the CF_D1_API_TOKEN environment variable.
-        serde (Optional[SerializerProtocol]): The serializer to use for serializing and deserializing checkpoints.
+        account_id (str): Your Cloudflare account ID. If not provided, will
+            be read from the CF_ACCOUNT_ID environment variable.
+        database_id (str): The ID of your D1 database. If not provided, will
+            be read from the CF_D1_DATABASE_ID environment variable.
+        api_token (str): Your Cloudflare API token with D1 permissions. If
+            not provided, will be read from the CF_D1_API_TOKEN environment
+            variable.
+        serde (Optional[SerializerProtocol]): The serializer to use for
+            serializing and deserializing checkpoints.
         enable_logging (bool): Whether to enable logging. Defaults to False.
 
     Examples:
@@ -238,7 +242,8 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
             except Exception as e:
                 if self.enable_logging:
                     logger.warning(
-                        f"D1 response parsing failed, using fallback: {type(e).__name__}: {e}"
+                        f"D1 response parsing failed, using fallback: "
+                        f"{type(e).__name__}: {e}"
                     )
                 # Direct dictionary to bypass model validation during debugging
                 return D1Response(
@@ -248,7 +253,8 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         except requests.exceptions.HTTPError as e:
             if self.enable_logging:
                 logger.error(
-                    f"D1 API HTTP error: {e.response.status_code if e.response else 'N/A'} - "
+                    f"D1 API HTTP error: "
+                    f"{e.response.status_code if e.response else 'N/A'} - "
                     f"{e.response.text if e.response else str(e)}\n"
                     f"Query: {query[:200]}..."
                 )
@@ -264,23 +270,25 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         except Exception as e:
             if self.enable_logging:
                 logger.error(
-                    f"D1 API unexpected error: {type(e).__name__}: {e}\nQuery: {query[:200]}..."
+                    f"D1 API unexpected error: {type(e).__name__}: {e}\n"
+                    f"Query: {query[:200]}..."
                 )
             return D1Response(success=False)
 
     def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
         """Get a checkpoint tuple from the database.
 
-        This method retrieves a checkpoint tuple from the D1 database based on the
-        provided config. If the config contains a "checkpoint_id" key, the checkpoint with
-        the matching thread ID and checkpoint ID is retrieved. Otherwise, the latest checkpoint
-        for the given thread ID is retrieved.
+        This method retrieves a checkpoint tuple from the D1 database based on
+        the provided config. If the config contains a "checkpoint_id" key, the
+        checkpoint with the matching thread ID and checkpoint ID is retrieved.
+        Otherwise, the latest checkpoint for the given thread ID is retrieved.
 
         Args:
             config: The config to use for retrieving the checkpoint.
 
         Returns:
-            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None
+                if no matching checkpoint was found.
         """
         with self.lock:
             self.setup()
@@ -293,11 +301,17 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
             # If a specific checkpoint ID is requested, get that one
             checkpoint_id = config["configurable"].get("checkpoint_id")
             if checkpoint_id:
-                query = "SELECT * FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ?"
+                query = (
+                    "SELECT * FROM checkpoints WHERE thread_id = ? "
+                    "AND checkpoint_ns = ? AND checkpoint_id = ?"
+                )
                 params = [thread_id, checkpoint_ns, checkpoint_id]
             else:
                 # Otherwise get the most recent checkpoint for this thread
-                query = "SELECT * FROM checkpoints WHERE thread_id = ? AND checkpoint_ns = ? ORDER BY checkpoint_id DESC LIMIT 1"
+                query = (
+                    "SELECT * FROM checkpoints WHERE thread_id = ? "
+                    "AND checkpoint_ns = ? ORDER BY checkpoint_id DESC LIMIT 1"
+                )
                 params = [thread_id, checkpoint_ns]
 
             result = self._execute_query(query, params)
@@ -337,7 +351,11 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                 }
 
             # Get all writes associated with this checkpoint
-            writes_query = "SELECT task_id, channel, type, value FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY task_id, idx"
+            writes_query = (
+                "SELECT task_id, channel, type, value FROM writes "
+                "WHERE thread_id = ? AND checkpoint_ns = ? "
+                "AND checkpoint_id = ? ORDER BY task_id, idx"
+            )
             writes_params = [thread_id, checkpoint_ns, checkpoint_id]
 
             writes_result = self._execute_query(writes_query, writes_params)
@@ -401,17 +419,9 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                 )
 
                 # Get checkpoint metadata
-                try:
-                    if metadata is not None and metadata != "":
-                        metadata_dict = json.loads(metadata)
-                    else:
-                        metadata_dict = {"step": -2}  # Default initial metadata
-
-                    # Ensure required fields are present
-                    if "step" not in metadata_dict:
-                        metadata_dict["step"] = -2  # Default initial step value
-                except Exception:
-                    metadata_dict = {"step": -2}  # Default with required field
+                metadata_dict = decode_metadata_blob(metadata, default={"step": -2})
+                if "step" not in metadata_dict:
+                    metadata_dict["step"] = -2  # Default initial step value
 
                 # Cast to correct types for type checker
                 checkpoint_metadata: CheckpointMetadata = cast(
@@ -460,44 +470,16 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
         Returns:
             Iterator[CheckpointTuple]: Iterator over checkpoint tuples.
         """
-        filter = filter or {}
-        thread_id = None
-
-        # Extract thread ID from config or filter
-        if (
-            config
-            and "configurable" in config
-            and "thread_id" in config["configurable"]
-        ):
-            thread_id = config["configurable"]["thread_id"]
-        elif filter and "thread_id" in filter:
-            thread_id = filter["thread_id"]
-
-        # Do not filter results - simply iterate and yield checkpoints
         with self.lock:
-            if not thread_id:
-                return
-
             self.setup()
 
-            # Determine what to filter by
-            filter_by = []
-            params = []
-
-            if filter:
-                # Support exact match filtering on thread_id and checkpoint_id
-                for key, value in filter.items():
-                    if key in ["thread_id", "checkpoint_id"]:
-                        filter_by.append(f"{key} = ?")
-                        params.append(value)
-                    else:
-                        # For complex filtering, would need metadata query support
-                        continue
-
-            filter_clause = f"WHERE {' AND '.join(filter_by)}" if filter_by else ""
+            where, params = search_where(config, filter, before)
             limit_clause = f"LIMIT {limit}" if limit else ""
 
-            query = f"SELECT * FROM checkpoints {filter_clause} ORDER BY checkpoint_id DESC {limit_clause}"
+            query = (
+                f"SELECT * FROM checkpoints {where} "
+                f"ORDER BY checkpoint_id DESC {limit_clause}"
+            )
 
             response = self._execute_query(query, params)
 
@@ -544,7 +526,11 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                         continue
 
                     # Get writes for this checkpoint
-                    writes_query = "SELECT task_id, channel, type, value FROM writes WHERE thread_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? ORDER BY task_id, idx"
+                    writes_query = (
+                        "SELECT task_id, channel, type, value FROM writes "
+                        "WHERE thread_id = ? AND checkpoint_ns = ? "
+                        "AND checkpoint_id = ? ORDER BY task_id, idx"
+                    )
                     writes_params = [thread_id, checkpoint_ns, checkpoint_id]
 
                     writes_response = self._execute_query(writes_query, writes_params)
@@ -598,16 +584,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                                 continue
 
                     # Deserialize metadata safely
-                    try:
-                        metadata_dict = {}
-                        if (
-                            metadata is not None
-                            and metadata != ""
-                            and isinstance(metadata, (str, bytes))
-                        ):
-                            metadata_dict = json.loads(metadata)
-                    except Exception:
-                        metadata_dict = {}
+                    metadata_dict = decode_metadata_blob(metadata)
 
                     # Create and yield checkpoint tuple
                     type_str = cast(str, type_)
@@ -682,7 +659,8 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
 
             # Ensure serialized data is bytes for BLOB columns
             if not isinstance(serialized_checkpoint, bytes):
-                # Convert to bytes if needed (should not happen with proper serialization)
+                # Convert to bytes if needed (should not happen with proper
+                # serialization)
                 if isinstance(serialized_checkpoint, str):
                     try:
                         serialized_checkpoint = serialized_checkpoint.encode("utf-8")
@@ -697,7 +675,11 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                     except Exception:
                         pass
 
-            query = "INSERT OR REPLACE INTO checkpoints (thread_id, checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, checkpoint, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            query = (
+                "INSERT OR REPLACE INTO checkpoints (thread_id, "
+                "checkpoint_ns, checkpoint_id, parent_checkpoint_id, type, "
+                "checkpoint, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)"
+            )
             params = [
                 str(config["configurable"]["thread_id"]),
                 checkpoint_ns,
@@ -713,14 +695,18 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                 if not result.success:
                     if self.enable_logging:
                         logger.error(
-                            f"Failed to save checkpoint for thread_id={thread_id}, "
-                            f"checkpoint_id={checkpoint['id']}: D1 query returned success=False"
+                            f"Failed to save checkpoint for "
+                            f"thread_id={thread_id}, "
+                            f"checkpoint_id={checkpoint['id']}: D1 query "
+                            f"returned success=False"
                         )
             except Exception as e:
                 if self.enable_logging:
                     logger.error(
-                        f"Exception saving checkpoint for thread_id={thread_id}, "
-                        f"checkpoint_id={checkpoint['id']}: {type(e).__name__}: {e}",
+                        f"Exception saving checkpoint for "
+                        f"thread_id={thread_id}, "
+                        f"checkpoint_id={checkpoint['id']}: "
+                        f"{type(e).__name__}: {e}",
                         exc_info=True,
                     )
                 # Don't raise - allow the graph to continue but log the failure
@@ -742,7 +728,8 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
     ) -> None:
         """Store intermediate writes linked to a checkpoint.
 
-        This method saves intermediate writes associated with a checkpoint to the D1 database.
+        This method saves intermediate writes associated with a checkpoint to
+        the D1 database.
 
         Args:
             config: Configuration of the related checkpoint.
@@ -754,9 +741,17 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
             self.setup()
 
             query = (
-                "INSERT OR REPLACE INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                (
+                    "INSERT OR REPLACE INTO writes (thread_id, "
+                    "checkpoint_ns, checkpoint_id, task_id, idx, channel, "
+                    "type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                )
                 if all(w[0] in WRITES_IDX_MAP for w in writes)
-                else "INSERT OR IGNORE INTO writes (thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                else (
+                    "INSERT OR IGNORE INTO writes (thread_id, "
+                    "checkpoint_ns, checkpoint_id, task_id, idx, channel, "
+                    "type, value) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                )
             )
 
             # Execute with many batches due to D1 limitations
@@ -788,15 +783,22 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                     if not result.success:
                         if self.enable_logging:
                             logger.warning(
-                                f"Failed to save write for thread_id={config['configurable']['thread_id']}, "
-                                f"checkpoint_id={config['configurable']['checkpoint_id']}, "
-                                f"channel={channel}: D1 query returned success=False"
+                                f"Failed to save write for "
+                                f"thread_id="
+                                f"{config['configurable']['thread_id']}, "
+                                f"checkpoint_id="
+                                f"{config['configurable']['checkpoint_id']}, "
+                                f"channel={channel}: D1 query returned "
+                                f"success=False"
                             )
                 except Exception as e:
                     if self.enable_logging:
                         logger.error(
-                            f"Exception saving write for thread_id={config['configurable']['thread_id']}, "
-                            f"checkpoint_id={config['configurable']['checkpoint_id']}, "
+                            f"Exception saving write for "
+                            f"thread_id="
+                            f"{config['configurable']['thread_id']}, "
+                            f"checkpoint_id="
+                            f"{config['configurable']['checkpoint_id']}, "
                             f"channel={channel}: {type(e).__name__}: {e}"
                         )
                     # Continue to next write even if this one fails
@@ -894,14 +896,17 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
     def get_next_version(self, current: Optional[str], channel: None) -> str:
         """Generate the next version ID for a channel.
 
-        This method creates a new version identifier for a channel based on its current version.
+        This method creates a new version identifier for a channel based on
+        its current version.
 
         Args:
-            current (Optional[str]): The current version identifier of the channel.
+            current (Optional[str]): The current version identifier of the
+                channel.
             channel: Deprecated argument, kept for backwards compatibility.
 
         Returns:
-            str: The next version identifier, which is guaranteed to be monotonically increasing.
+            str: The next version identifier, which is guaranteed to be
+                monotonically increasing.
         """
         if current is None:
             current_v = 0
@@ -918,6 +923,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
 __all__ = [
     "CloudflareD1Saver",
     "AsyncCloudflareD1Saver",
+    "WorkerCloudflareD1Saver",
     "search_where",
     "_metadata_predicate",
 ]
