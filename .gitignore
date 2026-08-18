@@ -123,9 +123,13 @@ install_and_test.sh
 .claude/
 .codex/
 AGENTS.md
-uv.lock
 python_modules/
 .venv-workers/
 .wrangler/
+# examples/workers/ lockfiles are pywrangler-managed (Pyodide resolution,
+# frequently re-vendored per DEVELOPMENT.md's documented workarounds) and
+# never touched by CI -- unlike the package-level uv.lock files, pinning
+# these wouldn't prevent a real CI failure, so leave them out.
+**/examples/workers/uv.lock
 node_modules/
 dev/
