@@ -20,6 +20,8 @@ It contains the following packages.
 - [CloudflareWorkersAIReranker](https://developers.cloudflare.com/workers-ai/) — document reranking on Workers AI
 - [CloudflareVectorize](https://python.langchain.com/docs/integrations/vectorstores/cloudflare_vectorize/)
 - [CloudflareAISearchRetriever](libs/langchain-cloudflare/README.md#retrievers) — Cloudflare [AI Search](https://developers.cloudflare.com/ai-search/) (fka AutoRAG)
+- [CloudflareBrowserRunLoader](libs/langchain-cloudflare/README.md#browser-run-document-loader) — document loader via [Browser Run](https://developers.cloudflare.com/browser-run/)
+- [CloudflareBrowserRunTool](libs/langchain-cloudflare/README.md#browser-run-agent-tool) — agent tool via [Browser Run](https://developers.cloudflare.com/browser-run/)
 
 ### LangGraph
 

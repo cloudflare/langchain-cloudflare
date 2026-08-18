@@ -25,6 +25,8 @@ from workers import Response, WorkerEntrypoint
 from langchain_cloudflare import (
     ChatCloudflareWorkersAI,
     CloudflareAISearchRetriever,
+    CloudflareBrowserRunLoader,
+    CloudflareBrowserRunTool,
     CloudflareVectorize,
 )
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
@@ -130,6 +132,11 @@ class Default(WorkerEntrypoint):
             # Reranker endpoint
             elif path == "rerank":
                 return await self.handle_rerank(request)
+            # Browser Run endpoint (quickAction() binding)
+            elif path == "browser-run":
+                return await self.handle_browser_run(request)
+            elif path == "browser-run-loader":
+                return await self.handle_browser_run_loader(request)
             # AI Gateway test endpoint
             elif path == "ai-gateway-test":
                 return await self.handle_ai_gateway_test(request)
@@ -167,6 +174,7 @@ class Default(WorkerEntrypoint):
         vectorize_available = hasattr(self.env, "VECTORIZE")
         ai_search_available = hasattr(self.env, "AI_SEARCH")
         d1_available = hasattr(self.env, "D1")
+        browser_available = hasattr(self.env, "BROWSER")
 
         return Response.json(
             {
@@ -175,6 +183,7 @@ class Default(WorkerEntrypoint):
                 "vectorize_available": vectorize_available,
                 "ai_search_available": ai_search_available,
                 "d1_available": d1_available,
+                "browser_available": browser_available,
                 "supported_models": SUPPORTED_MODELS,
                 "default_model": DEFAULT_MODEL,
                 "embedding_model": EMBEDDING_MODEL,
@@ -196,6 +205,15 @@ class Default(WorkerEntrypoint):
                     "/vectorize-info": "Get Vectorize index info",
                     "/ai-search": "Search AI Search via binding",
                     "/rerank": "Rerank documents by query relevance",
+                    "/browser-run": (
+                        "Run a Browser Run Quick Action via the browser "
+                        "binding (markdown/json/links/screenshot/pdf/"
+                        "snapshot/accessibility_tree)"
+                    ),
+                    "/browser-run-loader": (
+                        "Load Browser Run Loader modes via the browser "
+                        "binding (markdown/content/scrape)"
+                    ),
                     "/ai-gateway-test": "Test AI Gateway with bindings",
                     "/d1-health": "D1 database health check",
                     "/d1-create-table": "Create a D1 table",
@@ -1152,6 +1170,69 @@ Return JSON with an "announcements" array. Each announcement should have:
                 "model": RERANKER_MODEL,
                 "results": formatted_results,
                 "count": len(formatted_results),
+            }
+        )
+
+    # MARK: - Browser Run Handler
+
+    async def handle_browser_run(self, request):
+        """Handle a Browser Run Quick Action via the browser binding.
+
+        Body: ``{"url": ..., "mode": "markdown" (default), "json_prompt": ...,
+        "json_response_format": ..., "snapshot_formats": [...]}``.
+        """
+        data = await request.json()
+
+        url = data.get("url", "https://example.com")
+        mode = data.get("mode", "markdown")
+
+        tool_kwargs = {"mode": mode, "binding": self.env.BROWSER}
+        if data.get("json_prompt"):
+            tool_kwargs["json_prompt"] = data["json_prompt"]
+        if data.get("json_response_format"):
+            tool_kwargs["json_response_format"] = data["json_response_format"]
+        if data.get("snapshot_formats"):
+            tool_kwargs["snapshot_formats"] = data["snapshot_formats"]
+
+        tool = CloudflareBrowserRunTool(**tool_kwargs)
+        result = await tool.ainvoke({"url": url})
+
+        return Response.json(
+            {
+                "success": True,
+                "mode": mode,
+                "url": url,
+                "result": result,
+            }
+        )
+
+    async def handle_browser_run_loader(self, request):
+        """Handle a Browser Run Loader mode via the browser binding.
+
+        Body: ``{"url": ..., "mode": "markdown" (default), "elements": [...]}``.
+        Note: ``mode="crawl"`` is REST-only, not supported via the binding.
+        """
+        data = await request.json()
+
+        url = data.get("url", "https://example.com")
+        mode = data.get("mode", "markdown")
+
+        loader_kwargs = {"urls": [url], "mode": mode, "binding": self.env.BROWSER}
+        if data.get("elements"):
+            loader_kwargs["elements"] = data["elements"]
+
+        loader = CloudflareBrowserRunLoader(**loader_kwargs)
+        docs = await loader.aload()
+
+        return Response.json(
+            {
+                "success": True,
+                "mode": mode,
+                "url": url,
+                "documents": [
+                    {"page_content": d.page_content, "metadata": d.metadata}
+                    for d in docs
+                ],
             }
         )
 
