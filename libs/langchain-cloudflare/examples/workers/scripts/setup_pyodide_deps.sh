@@ -3,20 +3,22 @@
 #
 # This script handles packages that have no Pyodide wheels:
 # - langchain>=1.0.0, langgraph, langgraph_sdk (manually extracted wheels)
-# - xxhash, ormsgpack (pure Python stubs)
+# - xxhash, ormsgpack, uuid_utils (pure Python stubs)
 #
 # Why this is needed:
 # - langchain>=1.0.0 depends on langgraph
 # - langgraph depends on langgraph-checkpoint
 # - langgraph-checkpoint depends on xxhash and ormsgpack
 # - xxhash and ormsgpack are C extensions with no Pyodide wheels
+# - langchain-core pulls in langsmith, whose _internal/_uuid helper imports
+#   uuid_utils -- a compiled Rust extension, also with no Pyodide wheel
 # - pywrangler sync fails when it encounters these missing wheels
 #
 # Solution:
 # - Install a Pyodide-compatible langchain-core 0.3.x via pywrangler
 # - Replace it by manually extracting langchain-core 1.x plus langchain,
 #   langgraph, and langgraph_sdk wheels
-# - Use pure Python stubs for xxhash and ormsgpack
+# - Use pure Python stubs for xxhash, ormsgpack, and uuid_utils
 
 set -e
 
@@ -141,6 +143,10 @@ rm -rf "$PYTHON_MODULES/websockets" "$PYTHON_MODULES/websockets-"*.dist-info 2>/
 
 build_stub "xxhash"
 build_stub "ormsgpack"
+# langsmith >= 0.10 imports uuid_utils.compat.uuid7 at import time, which would
+# otherwise abort Worker startup now that the line above removed the real
+# (unusable, Rust-compiled) package.
+build_stub "uuid_utils"
 
 # Cleanup
 rm -rf "$TEMP_DIR"
