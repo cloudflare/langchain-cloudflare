@@ -79,7 +79,11 @@ except ImportError:
 # repeatedly, outside pytest: 2 of 3 calls reproduced it, 1 returned a normal
 # response. Not a code bug -- a live model-quality/stability issue on
 # Cloudflare's platform for this model.
-FLAKY_MODELS = {"@cf/google/gemma-4-26b-a4b-it", "@cf/openai/gpt-oss-120b"}
+FLAKY_MODELS = {
+    "@cf/google/gemma-4-26b-a4b-it",
+    "@cf/openai/gpt-oss-120b",
+    "@cf/openai/gpt-oss-20b",
+}
 
 
 def _model_param(model: str) -> str:
@@ -116,7 +120,7 @@ MODELS = [
     "@cf/zai-org/glm-4.7-flash",
     "@cf/zai-org/glm-5.2",
     _model_param("@cf/openai/gpt-oss-120b"),
-    "@cf/openai/gpt-oss-20b",
+    _model_param("@cf/openai/gpt-oss-20b"),
     "@cf/nvidia/nemotron-3-120b-a12b",
     "@cf/moonshotai/kimi-k2.6",
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
@@ -830,7 +834,7 @@ class TestReasoningContent:
         "@cf/zai-org/glm-4.7-flash",
         "@cf/zai-org/glm-5.2",
         _model_param("@cf/openai/gpt-oss-120b"),
-        "@cf/openai/gpt-oss-20b",
+        _model_param("@cf/openai/gpt-oss-20b"),
         "@cf/moonshotai/kimi-k2.6",
         _model_param("@cf/google/gemma-4-26b-a4b-it"),
         "@cf/nvidia/nemotron-3-120b-a12b",
