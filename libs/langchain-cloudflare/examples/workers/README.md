@@ -17,7 +17,10 @@ This example demonstrates how to use `langchain-cloudflare` with Cloudflare Pyth
 
 1. Cloudflare account with Workers, AI, Vectorize, AI Search, and D1 access
 2. Python 3.12+
-3. [uv](https://docs.astral.sh/uv/) package manager
+3. [uv](https://docs.astral.sh/uv/) package manager, **0.12.3 or newer** --
+   pywrangler enforces this itself and `pywrangler sync` fails with
+   `uv version at least 0.12.3 required` on older versions. Run
+   `uv self update` if you hit it.
 4. [pywrangler](https://pypi.org/project/workers-py/) for local development
 
 ## Setup
