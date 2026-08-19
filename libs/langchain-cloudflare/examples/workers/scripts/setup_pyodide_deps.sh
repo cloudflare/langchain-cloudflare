@@ -145,8 +145,12 @@ build_stub "xxhash"
 build_stub "ormsgpack"
 # langsmith >= 0.10 imports uuid_utils.compat.uuid7 at import time, which would
 # otherwise abort Worker startup now that the line above removed the real
-# (unusable, Rust-compiled) package.
+# (unusable, Rust-compiled) package. websockets is removed for the same reason
+# (C accelerator, no Pyodide wheel) and stubbed so langgraph_sdk's transport
+# module still imports. Both stubs are shared verbatim with the langmem and
+# D1 checkpointer Worker examples -- keep them in sync.
 build_stub "uuid_utils"
+build_stub "websockets"
 
 # Cleanup
 rm -rf "$TEMP_DIR"
