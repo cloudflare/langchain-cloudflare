@@ -1201,7 +1201,13 @@ class TestWorkerReasoningContent:
         data = response.json()
 
         assert "content" in data
-        assert len(data["content"]) > 0, f"Expected non-empty content for {model}"
+        # Some reasoning models put the whole answer inside reasoning_content
+        # and return an empty content string -- gpt-oss-20b does this on
+        # roughly 2 of 5 calls. That is a complete answer, just carried in the
+        # other field, so require one of the two rather than content alone.
+        assert len(data["content"]) > 0 or len(data["reasoning_content"] or "") > 0, (
+            f"Expected content or reasoning_content for {model}"
+        )
         assert data["model"] == model
 
         assert data["has_reasoning_content"] is True, (
