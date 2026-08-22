@@ -39,6 +39,7 @@ SUPPORTED_MODELS = [
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/qwen/qwen3.8-27b",
     "@cf/zai-org/glm-4.7-flash",
     "@cf/zai-org/glm-5.2",
     "@cf/openai/gpt-oss-120b",

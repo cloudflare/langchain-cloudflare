@@ -89,6 +89,7 @@ MODELS = [
     "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
+    "@cf/qwen/qwen3.8-27b",
     "@cf/zai-org/glm-4.7-flash",
     "@cf/zai-org/glm-5.2",
     _model_param("@cf/openai/gpt-oss-120b"),
@@ -114,6 +115,7 @@ JSON_SCHEMA_MODELS = [
 # deepseek-v4-pro is included here.
 VISION_MODELS = [
     "@cf/moonshotai/kimi-k2.6",
+    "@cf/qwen/qwen3.8-27b",
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
@@ -1177,6 +1179,7 @@ class TestWorkerReasoningContent:
 
     REASONING_MODELS = [
         "@cf/qwen/qwen3-30b-a3b-fp8",
+        "@cf/qwen/qwen3.8-27b",
         "@cf/zai-org/glm-4.7-flash",
         "@cf/zai-org/glm-5.2",
         _model_param("@cf/openai/gpt-oss-120b"),
