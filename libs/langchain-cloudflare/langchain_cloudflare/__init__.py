@@ -9,6 +9,8 @@ from langchain_cloudflare.bindings import (
     convert_payload_for_binding,
     # Vectorize binding utilities
     convert_query_options_for_binding,
+    # Browser Run binding utilities
+    convert_quickaction_response,
     # Reranker binding utilities
     convert_reranker_response,
     convert_vectorize_describe_response,
@@ -19,6 +21,10 @@ from langchain_cloudflare.bindings import (
 )
 from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
+from langchain_cloudflare.loaders import (
+    CloudflareBrowserRunLoader,
+    CloudflareBrowserRunTool,
+)
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker, RerankResult
 from langchain_cloudflare.retrievers import CloudflareAISearchRetriever
 from langchain_cloudflare.vectorstores import CloudflareVectorize
@@ -34,6 +40,8 @@ del metadata  # optional, avoids polluting the results of dir(__package__)
 __all__ = [
     "ChatCloudflareWorkersAI",
     "CloudflareAISearchRetriever",
+    "CloudflareBrowserRunLoader",
+    "CloudflareBrowserRunTool",
     "CloudflareVectorize",
     "CloudflareWorkersAIEmbeddings",
     "CloudflareWorkersAIReranker",
@@ -52,5 +60,7 @@ __all__ = [
     "convert_reranker_response",
     # AI Search binding utilities
     "convert_aisearch_response",
+    # Browser Run binding utilities
+    "convert_quickaction_response",
     "__version__",
 ]

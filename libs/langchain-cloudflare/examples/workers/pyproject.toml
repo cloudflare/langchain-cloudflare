@@ -17,7 +17,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "workers-py",
+    # Pinned: pywrangler enforces a minimum uv version at runtime (1.16.x wants
+    # uv >= 0.12.3) and hard-fails sync when it isn't met. Leaving this
+    # unconstrained lets a routine resolve raise that floor with no warning.
+    "workers-py>=1.16.4,<2",
     "workers-runtime-sdk",
     "pytest>=7.0.0",
     "requests>=2.31.0",

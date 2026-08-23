@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "websockets"
+version = "15.0.1"
+description = "Stub websockets for Pyodide compatibility"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/websockets"]

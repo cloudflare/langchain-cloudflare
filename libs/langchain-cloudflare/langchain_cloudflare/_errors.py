@@ -55,3 +55,12 @@ class TokenErrors(StrEnum):
         "using the REST API. Alternatively, when running in a Python Worker, "
         "you can pass the 'binding' parameter instead."
     )
+
+    INSUFFICIENT_BROWSER_RUN_TOKEN = (
+        "A Cloudflare API token with Browser Rendering – Edit permission "
+        "must be provided either through the api_token parameter or the "
+        "CF_API_TOKEN / CF_AI_API_TOKEN environment variable. "
+        "Alternatively, when running in a Python Worker, you can pass the "
+        "'binding' parameter (env.BROWSER) instead -- note the binding does "
+        "not support crawl mode, which is REST-only."
+    )
