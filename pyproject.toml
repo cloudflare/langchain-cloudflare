@@ -3,7 +3,7 @@ name = "langchain-cloudflare-monorepo"
 version = "0.1.0"
 description = "Langchain Cloudflare mono-repo"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = []
 
@@ -12,6 +12,13 @@ dev = [
     "ruff>=0.8.4",
     "mypy>=1.15.0",
     "types-requests>=2.31.0",
+]
+notebook = [
+    "cloudflare>=4.0.0",
+    "ipykernel>=6.29.0",
+    "jupyterlab>=4.2.0",
+    "langchain-cloudflare",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.uv.sources]
