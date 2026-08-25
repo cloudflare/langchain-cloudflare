@@ -35,19 +35,25 @@ except ImportError:
         return json.loads(data.decode("utf-8"))
 
 
-# Export options that ormsgpack defines (referenced by langgraph-checkpoint)
-OPT_SERIALIZE_NUMPY = 1
-OPT_SERIALIZE_DATACLASS = 2
-OPT_SERIALIZE_UUID = 4
-OPT_UTC_Z = 8
-OPT_NAIVE_UTC = 16
-OPT_OMIT_MICROSECONDS = 32
-OPT_PASSTHROUGH_BIG_INT = 64
-OPT_PASSTHROUGH_DATACLASS = 128
-OPT_PASSTHROUGH_DATETIME = 256
-OPT_PASSTHROUGH_SUBCLASS = 512
-OPT_NON_STR_KEYS = 1024
-OPT_PASSTHROUGH_ENUM = 2048
+# Export options that ormsgpack defines (referenced by langgraph-checkpoint).
+# Values match the real ormsgpack 1.12.x package so bitwise-OR'd option
+# combinations behave identically to constant lookups; the stub's packb/unpackb
+# ignore them (JSON/msgpack fallback has no native support for most of these).
+OPT_NAIVE_UTC = 1
+OPT_NON_STR_KEYS = 2
+OPT_OMIT_MICROSECONDS = 4
+OPT_PASSTHROUGH_BIG_INT = 8
+OPT_PASSTHROUGH_DATACLASS = 16
+OPT_PASSTHROUGH_DATETIME = 32
+OPT_PASSTHROUGH_SUBCLASS = 64
+OPT_PASSTHROUGH_TUPLE = 128
+OPT_SERIALIZE_NUMPY = 256
+OPT_SERIALIZE_PYDANTIC = 512
+OPT_SORT_KEYS = 1024
+OPT_UTC_Z = 2048
 OPT_PASSTHROUGH_UUID = 4096
+OPT_PASSTHROUGH_ENUM = 8192
+OPT_DATETIME_AS_TIMESTAMP_EXT = 16384
+OPT_REPLACE_SURROGATES = 32768
 
-__version__ = "1.10.0"  # Stub version matching requirement
+__version__ = "1.12.1"  # Stub version matching requirement

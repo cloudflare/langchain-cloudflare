@@ -335,6 +335,33 @@ def convert_reranker_response(response: Any) -> List[Dict[str, Any]]:
     return []
 
 
+# MARK: - Browser Run Binding Utilities
+
+
+def convert_quickaction_response(response: Any) -> Dict[str, Any]:
+    """Convert a Browser Run ``quickAction()`` JSON response to Python format.
+
+    ``env.BROWSER.quickAction(action, params)`` resolves to a standard Fetch
+    API ``Response``; callers ``await response.json()`` first and pass the
+    result here to normalize JS proxies to plain Python dicts, matching the
+    ``{"success": ..., "result": ...}`` envelope the REST API returns.
+
+    Args:
+        response: The value from ``await response.json()``.
+
+    Returns:
+        Dict in the same shape as the REST API's JSON envelope.
+    """
+    if hasattr(response, "to_py"):
+        response = response.to_py()
+
+    if isinstance(response, dict):
+        return response
+    if isinstance(response, list):
+        return {"result": response}
+    return {"result": response}
+
+
 # MARK: - AI Search Binding Utilities
 
 
@@ -380,4 +407,6 @@ __all__ = [
     "convert_reranker_response",
     # AI Search binding utilities
     "convert_aisearch_response",
+    # Browser Run binding utilities
+    "convert_quickaction_response",
 ]

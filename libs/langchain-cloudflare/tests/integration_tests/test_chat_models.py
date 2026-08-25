@@ -1,6 +1,6 @@
 """Test chat model integration using standard integration tests."""
 
-from typing import Literal, Type
+from typing import Type
 
 import pytest
 from langchain_core.language_models import BaseChatModel
@@ -54,36 +54,3 @@ class TestChatCloudflareWorkersAI(ChatModelIntegrationTests):
     @pytest.mark.xfail(reason=("Does not support tool_choice."))
     def test_tool_calling_with_no_arguments(self, model: BaseChatModel) -> None:
         super().test_tool_calling_with_no_arguments(model)
-
-    # llama-3.3-70b-instruct-fp8-fast intermittently returns zero chunks when
-    # streaming a structured-output response ("Stream returned no chunks --
-    # possible API issue" from langchain_tests itself), while the equivalent
-    # non-streaming invoke() call succeeds -- a live API/model reliability
-    # issue, not a code bug. Confirmed pre-existing (reproduces identically
-    # against a clean checkout with none of this session's changes) and
-    # intermittent (different subset of these fails each run, never all).
-    # Same flaky-model category as gemma-4-26b-a4b-it/gpt-oss-120b elsewhere
-    # in this repo, just in a file with no existing FLAKY_MODELS/_model_param
-    # infrastructure to hook into, since it's a fixed single-model conformance
-    # suite rather than a parametrized model list.
-    @pytest.mark.flaky(reruns=2, reruns_delay=5)
-    @pytest.mark.parametrize("schema_type", ["pydantic", "typeddict", "json_schema"])
-    def test_structured_output(
-        self,
-        model: BaseChatModel,
-        schema_type: Literal["pydantic", "typeddict", "json_schema"],
-    ) -> None:
-        super().test_structured_output(model, schema_type)
-
-    @pytest.mark.flaky(reruns=2, reruns_delay=5)
-    @pytest.mark.parametrize("schema_type", ["pydantic", "typeddict", "json_schema"])
-    async def test_structured_output_async(
-        self,
-        model: BaseChatModel,
-        schema_type: Literal["pydantic", "typeddict", "json_schema"],
-    ) -> None:
-        await super().test_structured_output_async(model, schema_type)
-
-    @pytest.mark.flaky(reruns=2, reruns_delay=5)
-    def test_structured_output_pydantic_2_v1(self, model: BaseChatModel) -> None:
-        super().test_structured_output_pydantic_2_v1(model)

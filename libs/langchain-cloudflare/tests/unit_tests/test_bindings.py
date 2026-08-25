@@ -3,6 +3,7 @@
 
 from langchain_cloudflare.bindings import (
     convert_aisearch_response,
+    convert_quickaction_response,
     convert_reranker_response,
     create_binding_run_options,
 )
@@ -126,3 +127,32 @@ class TestConvertAISearchResponse:
     def test_unknown_returns_empty_chunks(self):
         """An unexpected scalar should return an empty chunks result."""
         assert convert_aisearch_response("nope") == {"result": {"chunks": []}}
+
+
+# MARK: - convert_quickaction_response Tests
+class TestConvertQuickactionResponse:
+    """Test convert_quickaction_response normalizes quickAction() JSON bodies."""
+
+    def test_dict_passthrough(self):
+        """A dict response (already Python) should be returned as-is."""
+        data = {"success": True, "result": "# Hello"}
+        assert convert_quickaction_response(data) == data
+
+    def test_list_wrapped_as_result(self):
+        """A bare list (e.g. /links) should be wrapped under 'result'."""
+        links = ["https://a.example", "https://b.example"]
+        assert convert_quickaction_response(links) == {"result": links}
+
+    def test_scalar_wrapped_as_result(self):
+        """A bare scalar should be wrapped under 'result'."""
+        assert convert_quickaction_response("plain text") == {"result": "plain text"}
+
+    def test_to_py_proxy_is_converted(self):
+        """A JS proxy object exposing to_py() should be converted first."""
+
+        class FakeJsProxy:
+            def to_py(self):
+                return {"success": True, "result": {"role": "main"}}
+
+        result = convert_quickaction_response(FakeJsProxy())
+        assert result == {"success": True, "result": {"role": "main"}}

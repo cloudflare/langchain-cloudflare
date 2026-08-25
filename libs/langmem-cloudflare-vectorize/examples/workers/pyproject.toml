@@ -36,7 +36,10 @@ langchain-cloudflare = { path = "../../../langchain-cloudflare", editable = true
 
 [dependency-groups]
 dev = [
-    "workers-py",
+    # Pinned: pywrangler enforces a minimum uv version at runtime (1.16.x
+    # wants uv >= 0.12.3) and hard-fails sync when it is not met. Leaving
+    # this unconstrained lets a routine resolve raise that floor silently.
+    "workers-py>=1.16.4,<2",
     "workers-runtime-sdk",
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",

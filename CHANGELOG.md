@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.3.8]
+
+#### Added
+
+- **`CloudflareBrowserRunLoader`**: New `BaseLoader` for document ingestion via [Cloudflare Browser Run](https://developers.cloudflare.com/browser-run/). Supports `markdown` (`/markdown`), `crawl` (`/crawl`, REST-only, async polling), `scrape` (`/scrape`), and `content` (`/content`) modes, both sync and async.
+- **`CloudflareBrowserRunTool`**: New `BaseTool` for LangGraph agent workflows. Supports `markdown`, `json` (AI-powered structured extraction via `/json`), `links`, `screenshot`, `pdf`, `snapshot` (combined-format capture via `/snapshot`), and `accessibility_tree` (`/accessibilityTree`) modes. Tool name is auto-set per mode (e.g. `cloudflare_browser_run_json`) for agent disambiguation.
+- **Worker binding support**: Both classes accept a `binding` parameter (`env.BROWSER`) for use inside Python Workers, calling Browser Run's `quickAction()` RPC method (GA 2026-05-28) instead of the REST API. The binding path is async-only and does not support `mode="crawl"` (no `quickAction()` equivalent — crawl is an async, job-polling endpoint). `convert_quickaction_response` binding utility added to `bindings.py`.
+- **`TokenErrors.INSUFFICIENT_BROWSER_RUN_TOKEN`**: New centralized error message for missing Browser Run REST credentials.
+- **`browser="kitesurf"`**: Both classes accept a `browser` field to opt into Cloudflare's stateless, agent-optimized browser runtime ([GA 2026-08-06](https://developers.cloudflare.com/changelog/post/2026-08-06-kitesurf/)) via the REST API's `?browser=kitesurf` query parameter. REST-only — verified live that it's rejected as an unrecognized body key if sent through `quickAction()`, so setting `browser` together with `binding` raises `ValueError`.
+
+#### Fixed
+
+- **`response_format` JSON-schema key**: the nested key for `mode="json"` structured extraction is `json_schema` (matching the API's OpenAI-style `response_format` shape), not `schema` — the latter, used in the original PR #41 proposal's docs/tests, returns a live 400 (`response_format.json_schema is required ...`). Corrected in code, tests, and the example notebook.
+- **Binary Quick Actions (`screenshot`/`pdf`) via the Worker binding**: `quickAction()` resolves to `workers._workers.Response`, the Python-native Workers runtime wrapper — not a raw JS `Response` proxy. It has no `.arrayBuffer()`; binary data is read via `.bytes()`, which already returns plain Python `bytes` with no JS/pyodide conversion needed. Caught by running the binding live inside an actual Python Worker rather than trusting the by-analogy assumption.
+- **`TestWorkerBrowserRun` used the wrong `dev_server` fixture shape**: copied the `port, _ = dev_server_with_vectorize` unpacking pattern from a neighboring test class, but the plain `dev_server` fixture (used here, since the browser binding needs no per-test index setup) yields a bare `int`, not a tuple — would have raised `TypeError` on first real run. Fixed to `port = dev_server`.
+
+#### Tests
+
+- Unit tests for both classes: token/binding validation, mode configuration, request body construction, crawl polling (timeout/error/pagination), binary endpoint error detection, `browser="kitesurf"` query-param construction (including that it doesn't corrupt the `/crawl` job-status poll URL, which reuses the base URL), and mocked `quickAction()` binding calls.
+- REST integration tests covering all loader and tool modes (sync + async) plus `browser="kitesurf"`, verified live against the Cloudflare API (21/21).
+- Worker binding integration test coverage (`TestWorkerBrowserRun` in `test_worker_integration.py`), plus `/browser-run` (Tool) and `/browser-run-loader` (Loader) example routes in `examples/workers`. All 9 binding-supported modes verified live end-to-end through a real running Python Worker and the `quickAction()` binding: Tool's `markdown`, `links`, `json`, `accessibility_tree`, `screenshot`, `pdf`, `snapshot`, and Loader's `markdown`, `content`, `scrape`.
+
+#### Credit
+
+Originally proposed as a REST-only integration in [PR #41](https://github.com/cloudflare/langchain-cloudflare/pull/41) by Vamshi Mugala ([@vamshi694](https://github.com/vamshi694)). This release adds Worker binding support (unavailable at the time the PR was opened) plus the `snapshot` and `accessibility_tree` modes and expanded `crawl` options added to the API since.
+
+---
+
 ### [0.3.7]
 
 #### Added
