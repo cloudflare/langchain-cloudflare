@@ -22,9 +22,10 @@ Note:
     class's docstring).
 
 Credit:
-    Originally proposed as REST-only in
-    https://github.com/cloudflare/langchain-cloudflare/pull/41 by
-    Vamshi Mugala (vamshi694).
+    The REST Loader and Tool implementation originated in
+    https://github.com/cloudflare/langchain-cloudflare/pull/41 from
+    Vamshi Mugala (@vamshi694). This module extends that contribution with
+    Worker binding support and additional Browser Run modes.
 """
 
 # MARK: - Imports
