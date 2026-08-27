@@ -84,7 +84,6 @@ FLAKY_MODELS = {
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
 }
-LLAMA_3_3_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
 
 def _flaky_model_param(model: str) -> str:
@@ -92,15 +91,6 @@ def _flaky_model_param(model: str) -> str:
     return pytest.param(
         model,
         marks=pytest.mark.flaky(reruns=2, reruns_delay=5),
-        id=model,
-    )
-
-
-def _xfail_model_param(model: str, *, reason: str) -> str:
-    """Wrap one legacy-model parameter in a non-strict expected-failure marker."""
-    return pytest.param(
-        model,
-        marks=pytest.mark.xfail(reason=reason, strict=False),
         id=model,
     )
 
@@ -129,12 +119,12 @@ def _model_str(model: object) -> str:
 # (both report "per M cached input tokens" pricing, so k2.6 covers the
 # prompt-caching session-affinity tests k2.5 used to be needed for).
 MODELS = [
-    LLAMA_3_3_MODEL,
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/qwen/qwen3.8-27b",
     "@cf/zai-org/glm-4.7-flash",
     "@cf/zai-org/glm-5.2",
+    "@cf/zai-org/glm-5.3-flash",
     _model_param("@cf/openai/gpt-oss-120b"),
     _model_param("@cf/openai/gpt-oss-20b"),
     "@cf/nvidia/nemotron-3-120b-a12b",
@@ -142,18 +132,6 @@ MODELS = [
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
     "@cf/deepseek-ai/deepseek-v4-flash-0731",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
-]
-
-TOOL_CALLING_MULTI_TURN_MODELS = [
-    # The legacy Llama model repeats the tool call after receiving its result
-    # instead of returning final content. Scope the xfail to this test only.
-    _xfail_model_param(
-        _model_str(model),
-        reason="Legacy Llama model repeats tool calls instead of returning content",
-    )
-    if _model_str(model) == LLAMA_3_3_MODEL
-    else model
-    for model in MODELS
 ]
 
 # Models live-validated in this suite for method='json_schema'.
@@ -171,6 +149,7 @@ JSON_SCHEMA_MODELS = [
 VISION_MODELS = [
     "@cf/moonshotai/kimi-k2.6",
     "@cf/qwen/qwen3.8-27b",
+    "@cf/zai-org/glm-5.3-flash",
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
@@ -415,7 +394,7 @@ class TestToolCalling:
                 f"  No tool call made, content: {get_text_content(result.content)[:200] if result.content else 'empty'}"
             )
 
-    @pytest.mark.parametrize("model", TOOL_CALLING_MULTI_TURN_MODELS)
+    @pytest.mark.parametrize("model", MODELS)
     def test_tool_calling_multi_turn(self, model, account_id, api_token, ai_gateway):
         """Test multi-turn tool calling conversation.
 
@@ -863,6 +842,7 @@ class TestReasoningContent:
         "@cf/qwen/qwen3.8-27b",
         "@cf/zai-org/glm-4.7-flash",
         "@cf/zai-org/glm-5.2",
+        "@cf/zai-org/glm-5.3-flash",
         _model_param("@cf/openai/gpt-oss-120b"),
         _model_param("@cf/openai/gpt-oss-20b"),
         "@cf/moonshotai/kimi-k2.6",
@@ -986,24 +966,24 @@ class TestReasoningContent:
         else:
             print("  Status: WARN - no tool call made")
 
-    def test_no_reasoning_content_for_llama(self, account_id, api_token, ai_gateway):
-        """Test that Llama content is a plain string, not content blocks."""
+    def test_no_reasoning_content_for_mistral(self, account_id, api_token, ai_gateway):
+        """Test that Mistral content is a plain string, not content blocks."""
         if not account_id or not api_token:
             pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
 
         llm = create_llm(
-            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "@cf/mistralai/mistral-small-3.1-24b-instruct",
             account_id,
             api_token,
             ai_gateway,
         )
         result = llm.invoke("Say hello.")
 
-        print("\n[llama] Reasoning Content check:")
+        print("\n[mistral] Reasoning Content check:")
         print(f"  Content type: {type(result.content).__name__}")
 
         assert isinstance(result.content, str), (
-            "Llama should return plain string content, not content blocks"
+            "Mistral should return plain string content, not content blocks"
         )
 
 
@@ -1655,7 +1635,7 @@ class TestAIGatewayHeaders:
     def test_aig_timeout_invoke(self):
         """Request with AI Gateway timeout header should succeed."""
         llm = ChatCloudflareWorkersAI(
-            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            model="@cf/qwen/qwen3-30b-a3b-fp8",
             ai_gateway=os.environ["AI_GATEWAY"],
             aig_request_timeout=30000,
         )
@@ -1666,7 +1646,7 @@ class TestAIGatewayHeaders:
     def test_aig_retries_invoke(self):
         """Request with AI Gateway retry headers should succeed."""
         llm = ChatCloudflareWorkersAI(
-            model="@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            model="@cf/qwen/qwen3-30b-a3b-fp8",
             ai_gateway=os.environ["AI_GATEWAY"],
             aig_max_attempts=2,
             aig_retry_delay=1000,

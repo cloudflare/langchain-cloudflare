@@ -463,9 +463,13 @@ class TestReasoningContent:
         assert "tool_choice" not in translated
         assert translated["temperature"] == 0.7
 
-    def test_glm_5_2_preserves_supported_params(self):
-        """GLM-5.2 should keep parameters supported by its OpenAI schema."""
-        llm = self._create_llm("@cf/zai-org/glm-5.2")
+    @pytest.mark.parametrize(
+        "model",
+        ["@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"],
+    )
+    def test_modern_glm_preserves_supported_params(self, model):
+        """Modern GLM models should keep parameters supported by their schemas."""
+        llm = self._create_llm(model)
         params = {
             "max_tokens": 100,
             "top_k": 50,

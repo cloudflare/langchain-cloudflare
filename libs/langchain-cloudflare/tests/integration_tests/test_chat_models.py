@@ -21,7 +21,7 @@ class TestChatCloudflareWorkersAI(ChatModelIntegrationTests):
     def chat_model_params(self) -> dict:
         """Get the parameters to initialize the chat model."""
         return {
-            "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "model": "@cf/qwen/qwen3-30b-a3b-fp8",
             "temperature": 0.7,
         }
 

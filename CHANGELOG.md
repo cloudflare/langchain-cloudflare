@@ -1,3 +1,10 @@
+---
+codex_session_id: "01a0448b-978b-7992-84d8-dbecb9f8497c"
+repo: "cloudflare/langchain-cloudflare"
+branch: "feat/add-glm-5-3-flash"
+last_updated: "2026-08-27"
+---
+
 # Changelog
 
 All notable changes to the Langchain Cloudflare packages will be documented in this file.
@@ -7,6 +14,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## langchain-cloudflare
+
+### [0.3.9]
+
+#### Added
+
+- **`@cf/zai-org/glm-5.3-flash`**: Added to the tested and example-supported
+  model lists with reasoning content, function calling, structured output,
+  streaming, and vision support. The model has a 1,048,576-token context window
+  and requires the Workers Paid plan or prepaid AI Gateway credits.
+
+#### Changed
+
+- **Llama 3.3 live coverage removed**: Removed
+  `@cf/meta/llama-3.3-70b-instruct-fp8-fast` from the advertised example list
+  and recurring REST and Worker model matrices. Generic integration checks now
+  use current Qwen or Mistral models instead.
+
+---
 
 ### [0.3.8]
 

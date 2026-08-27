@@ -216,13 +216,15 @@ _REASONING_BEHAVIOR = ModelBehavior(
     embed_tool_calls_in_content=False,
     supports_reasoning_content=True,
 )
+_MODERN_GLM_BEHAVIOR = ModelBehavior(
+    embed_tool_calls_in_content=False,
+    unsupported_params=("top_k", "repetition_penalty"),
+    supports_reasoning_content=True,
+)
 
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
-    "glm-5.2": ModelBehavior(
-        embed_tool_calls_in_content=False,
-        unsupported_params=("top_k", "repetition_penalty"),
-        supports_reasoning_content=True,
-    ),
+    "glm-5.3-flash": _MODERN_GLM_BEHAVIOR,
+    "glm-5.2": _MODERN_GLM_BEHAVIOR,
     "glm": ModelBehavior(
         embed_tool_calls_in_content=False,
         unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),

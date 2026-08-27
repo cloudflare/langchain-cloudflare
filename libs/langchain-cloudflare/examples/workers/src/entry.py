@@ -36,12 +36,12 @@ from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
 # Supported Workers AI models for this example
 SUPPORTED_MODELS = [
-    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
     "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/qwen/qwen3.8-27b",
     "@cf/zai-org/glm-4.7-flash",
     "@cf/zai-org/glm-5.2",
+    "@cf/zai-org/glm-5.3-flash",
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
     "@cf/nvidia/nemotron-3-120b-a12b",
