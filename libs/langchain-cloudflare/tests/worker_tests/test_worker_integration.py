@@ -20,6 +20,7 @@ Note: These tests require:
 """
 
 import base64
+import os
 import time
 import uuid
 
@@ -1546,3 +1547,129 @@ class TestWorkerGlmSamplingParams:
             f"{param} should still be stripped for {model}"
         )
         assert data["response"].strip(), f"Empty content for {model} with {param}"
+
+
+# MARK: - AI Gateway Dynamic Route Tests
+
+
+def dynamic_route(env_var: str):
+    """Build a ``dynamic/<route>`` model string from a route-name env var."""
+    route = os.environ.get(env_var)
+    return f"dynamic/{route}" if route else None
+
+
+# Routes provisioned on the AI_GATEWAY gateway. rt-fallback is the load-bearing
+# one: its name contains no registry family substring, so before dynamic routes
+# were excluded from family matching it silently got the default behavior and
+# dropped reasoning. rt-qwen masks the bug because "qwen" matches a registry key.
+DYNAMIC_ROUTE_QWEN = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_QWEN")
+DYNAMIC_ROUTE_GLM = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_GLM")
+DYNAMIC_ROUTE_FALLBACK = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_FALLBACK")
+
+AI_GATEWAY = os.environ.get("AI_GATEWAY")
+
+
+@pytest.mark.skipif(not AI_GATEWAY, reason="AI_GATEWAY env var not set")
+class TestWorkerDynamicRoutes:
+    """Live coverage for AI Gateway dynamic routes over the AI binding.
+
+    The gateway id is required -- the binding raises ``AiGatewayError: 7003``
+    without it. Streaming is omitted because bindings do not stream.
+
+    rt-fallback rate-limits its primary node to 1 request / 60 s, which is
+    what exercises the fallback path. Its test makes a single call and accepts
+    either node's answer, since both Qwen and GLM are reasoning models.
+    """
+
+    @staticmethod
+    def _post(port, model, mode="invoke", **body):
+        response = requests.post(
+            f"http://localhost:{port}/dynamic-route",
+            json={"model": model, "gateway_id": AI_GATEWAY, "mode": mode, **body},
+            headers={"Content-Type": "application/json"},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_invoke(self, dev_server):
+        """A dynamic route should answer a plain invoke over the binding."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN)
+
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] invoke: {data['response'][:200]}")  # noqa: T201
+        assert "hello" in data["response"].lower()
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_GLM, reason="GLM route env var not set")
+    def test_dynamic_route_invoke_second_route(self, dev_server):
+        """A second route pointing at a different family should also work."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_GLM)
+
+        print(f"  [{DYNAMIC_ROUTE_GLM}] invoke: {data['response'][:200]}")  # noqa: T201
+        assert "hello" in data["response"].lower()
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_batch(self, dev_server):
+        """abatch() should work through a dynamic route."""
+        data = self._post(
+            dev_server,
+            DYNAMIC_ROUTE_QWEN,
+            mode="batch",
+            messages=["Say 'Hello' and nothing else.", "Say 'World' and nothing else."],
+        )
+
+        assert data["count"] == 2
+        for i, text in enumerate(data["results"]):
+            print(f"  [{DYNAMIC_ROUTE_QWEN}] batch {i}: {text[:100]}")  # noqa: T201
+            assert text.strip(), f"Empty content for batch result {i}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_tool_calling(self, dev_server):
+        """Tool calling should work through a dynamic route."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN, mode="tools")
+
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] tool_calls: {data['tool_calls']}")  # noqa: T201
+        assert data["tool_calls"], "No tool call made through dynamic route"
+        assert data["tool_calls"][0]["name"] == "get_weather"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_multi_turn_tool_calling(self, dev_server):
+        """Tool result history should round-trip through a dynamic route."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN, mode="multi-turn")
+
+        assert data["tool_calls"], "No tool call made on the first turn"
+        final = data.get("final_response", "")
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] multi-turn final: {final[:200]}")  # noqa: T201
+        assert final.strip(), "Empty final answer after tool result"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    @pytest.mark.parametrize("mode", ["structured", "structured-json-schema"])
+    def test_dynamic_route_structured_output(self, dev_server, mode):
+        """Structured output should work through a dynamic route."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN, mode=mode)
+
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] {mode}: {data['extracted']}")  # noqa: T201
+        assert data["extracted"] is not None
+        assert "announcements" in data["extracted"]
+
+    @pytest.mark.skipif(
+        not DYNAMIC_ROUTE_FALLBACK, reason="Fallback route env var not set"
+    )
+    def test_dynamic_route_surfaces_reasoning(self, dev_server):
+        """Reasoning must surface on a route whose name has no family substring.
+
+        This is the regression the issue describes: rt-fallback matched no
+        registry key, so the old registry gate suppressed reasoning entirely.
+        Both the primary (Qwen) and the fallback (GLM) are reasoning models,
+        so either node satisfies this -- a rate-limited fallback is a pass.
+        """
+        data = self._post(dev_server, DYNAMIC_ROUTE_FALLBACK, mode="reasoning")
+
+        reasoning = data.get("reasoning_content") or ""
+        print(f"  [{DYNAMIC_ROUTE_FALLBACK}] reasoning: {reasoning[:200]}")  # noqa: T201
+
+        assert data["has_reasoning_content"], (
+            "No reasoning surfaced through the fallback route "
+            f"(content_type={data['content_type']})"
+        )
+        assert reasoning.strip()

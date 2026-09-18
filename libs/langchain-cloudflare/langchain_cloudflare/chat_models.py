@@ -278,12 +278,24 @@ DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
 # noticeable in testing; 4096 leaves more headroom without being unbounded.
 _REASONING_STRUCTURED_OUTPUT_MIN_MAX_TOKENS = 4096
 
+# AI Gateway dynamic routes are addressed as "dynamic/<route name>". The route
+# name is chosen by the user, so it carries no information about the model.
+_DYNAMIC_ROUTE_PREFIX = "dynamic/"
+
 
 def get_model_behavior(model_name: str) -> ModelBehavior:
     """Get the behavior configuration for a model.
 
     Matches model name against known model families and returns
     the appropriate behavior config. Falls back to default for unknown models.
+
+    AI Gateway dynamic routes (``dynamic/<route name>``) never family-match:
+    the route resolves server-side, possibly to a different provider between
+    calls, so any family inferred from the route name would be a coincidence
+    of naming. ``dynamic/mistral-backup`` is not necessarily Mistral. Note
+    that returning defaults also means a route never receives the reasoning
+    structured-output ``max_tokens`` floor applied in
+    :meth:`ChatCloudflareWorkersAI.with_structured_output`.
 
     Args:
         model_name: The full model identifier
@@ -293,6 +305,8 @@ def get_model_behavior(model_name: str) -> ModelBehavior:
         ModelBehavior configuration for this model family
     """
     model_lower = model_name.lower()
+    if model_lower.startswith(_DYNAMIC_ROUTE_PREFIX):
+        return DEFAULT_MODEL_BEHAVIOR
     for family, behavior in MODEL_BEHAVIORS.items():
         if family in model_lower:
             return behavior
@@ -462,6 +476,10 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     ``api.cloudflare.com``, routed through the gateway via a
     ``cf-aig-gateway-id`` header rather than a separate
     ``gateway.ai.cloudflare.com`` host/path.
+
+    AI Gateway dynamic routes (``model="dynamic/<route name>"``) resolve over
+    REST only with ``"openai_compatible"``, because ``/ai/run/{model}``
+    rejects ``dynamic/<route>`` with ``7000 No route for that URI``.
     """
     request_timeout: Union[float, Tuple[float, float], Any, None] = Field(
         default=None, alias="timeout"
@@ -1568,15 +1586,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 # Not JSON, treat as regular content
                 pass
 
-        # Extract reasoning_content if model supports it
+        # Extract reasoning from the response rather than the registry.
         # Models use different field names: "reasoning_content" (Qwen, GLM,
-        # GPT-OSS, Kimi) or "reasoning" (Nemotron)
-        behavior = self._model_behavior
-        reasoning_content = None
-        if behavior.supports_reasoning_content:
-            reasoning_content = message_data.get(
-                "reasoning_content"
-            ) or message_data.get("reasoning")
+        # GPT-OSS, Kimi) or "reasoning" (Nemotron). Detection beats a registry
+        # gate here: a dynamic/* route resolves server-side, so there is no
+        # model family to look up, and newly released models have no entry
+        # yet. Non-reasoning models either omit the key or send it as null
+        # (Mistral), so an absent/empty value falls through unchanged.
+        reasoning_content = message_data.get("reasoning_content") or message_data.get(
+            "reasoning"
+        )
 
         # MARK: - Create the AI message
         if tool_calls and reasoning_content:
@@ -1910,6 +1929,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             # parse). Confirmed empirically: gpt-oss-20b failed intermittently
             # with the platform default and passed reliably (3/3) at 2048.
             # Only applied when the caller hasn't already set max_tokens.
+            #
+            # This consumer stays registry-gated on purpose: it shapes the
+            # request, so unlike reasoning extraction there is no response to
+            # detect from at this point. The consequence is that dynamic/*
+            # never gets the floor -- get_model_behavior() returns defaults for
+            # routes -- so callers routing to a reasoning model should set
+            # max_tokens explicitly.
             extra_bind_kwargs: Dict[str, Any] = {}
             if (
                 self.max_tokens is None

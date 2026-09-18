@@ -263,6 +263,17 @@ def get_text_content(content):
     return content or ""
 
 
+def extract_reasoning(content) -> str:
+    """Return the first thinking block's text, or '' when there is none."""
+    if isinstance(content, list):
+        blocks = [
+            b for b in content if isinstance(b, dict) and b.get("type") == "thinking"
+        ]
+        if blocks:
+            return blocks[0]["thinking"]
+    return ""
+
+
 class TestStructuredOutput:
     """Test structured output across Workers AI models."""
 
@@ -950,15 +961,8 @@ class TestReasoningContent:
 
     @staticmethod
     def _extract_reasoning(result):
-        """Extract reasoning from content blocks."""
-        if isinstance(result.content, list):
-            thinking_blocks = [
-                b
-                for b in result.content
-                if isinstance(b, dict) and b.get("type") == "thinking"
-            ]
-            return thinking_blocks[0]["thinking"] if thinking_blocks else ""
-        return ""
+        """Extract reasoning from a result's content blocks."""
+        return extract_reasoning(result.content)
 
     @pytest.mark.parametrize("model", REASONING_MODELS)
     def test_reasoning_content_sync(self, model, account_id, api_token, ai_gateway):
@@ -1763,3 +1767,197 @@ class TestAIGatewayHeaders:
         result = llm.invoke("Say hello.")
         text = get_text_content(result)
         assert text, "Empty response with combined headers"
+
+
+# MARK: - AI Gateway Dynamic Route Tests
+
+
+def dynamic_route(env_var: str) -> Optional[str]:
+    """Build a ``dynamic/<route>`` model string from a route-name env var."""
+    route = os.environ.get(env_var)
+    return f"dynamic/{route}" if route else None
+
+
+# Routes provisioned on the AI_GATEWAY gateway. rt-fallback is the load-bearing
+# one: its name contains no registry family substring, so before dynamic routes
+# were excluded from family matching it silently got the default behavior and
+# dropped reasoning. rt-qwen masks the bug because "qwen" matches a registry key.
+DYNAMIC_ROUTE_QWEN = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_QWEN")
+DYNAMIC_ROUTE_GLM = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_GLM")
+DYNAMIC_ROUTE_FALLBACK = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_FALLBACK")
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AI_GATEWAY"),
+    reason="AI_GATEWAY env var not set",
+)
+class TestDynamicRoutes:
+    """Live coverage for AI Gateway dynamic routes over REST.
+
+    A dynamic route resolves server-side, so the model string carries no
+    family information and ``get_model_behavior()`` must return defaults.
+    Reasoning therefore has to be detected from the response.
+
+    The gateway is required: without the ``cf-aig-gateway-id`` header the
+    endpoint rejects the route with ``7003 Dynamic route not found``.
+
+    Over REST, dynamic routes only resolve on the OpenAI-compatible endpoint
+    (``/ai/v1/chat/completions``). The Workers AI endpoint builds the model
+    into the path, and ``/ai/run/dynamic/<route>`` is rejected with
+    ``7000 No route for that URI``.
+
+    rt-fallback rate-limits its primary node to 1 request / 60 s, which is
+    what exercises the fallback path. Its tests make a single call each and
+    accept either node's answer, since both Qwen and GLM are reasoning models.
+    """
+
+    @pytest.fixture
+    def gateway(self):
+        return os.environ["AI_GATEWAY"]
+
+    def _llm(self, model, gateway, **kwargs):
+        return ChatCloudflareWorkersAI(
+            model=model,
+            ai_gateway=gateway,
+            temperature=0.0,
+            endpoint_format="openai_compatible",
+            **kwargs,
+        )
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_invoke(self, gateway):
+        """A dynamic route should answer a plain invoke."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] invoke: {text[:200]}")
+        assert "hello" in text.lower(), f"Unexpected response: {text[:200]}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_GLM, reason="GLM route env var not set")
+    def test_dynamic_route_invoke_second_route(self, gateway):
+        """A second route pointing at a different family should also work."""
+        llm = self._llm(DYNAMIC_ROUTE_GLM, gateway)
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{DYNAMIC_ROUTE_GLM}] invoke: {text[:200]}")
+        assert "hello" in text.lower(), f"Unexpected response: {text[:200]}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_stream(self, gateway):
+        """Streaming is REST-only and should work through a dynamic route."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+
+        chunks = list(llm.stream("Count from 1 to 5, separated by spaces."))
+        streamed = "".join(get_text_content(c.content) for c in chunks)
+
+        print(
+            f"\n[{DYNAMIC_ROUTE_QWEN}] stream ({len(chunks)} chunks): {streamed[:200]}"
+        )
+        assert len(chunks) > 1, "Expected more than one streamed chunk"
+        assert streamed.strip(), "Streamed content was empty"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_batch(self, gateway):
+        """batch() should work through a dynamic route."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+
+        results = llm.batch(
+            ["Say 'Hello' and nothing else.", "Say 'World' and nothing else."],
+            config={"max_concurrency": 2},
+        )
+
+        assert len(results) == 2
+        for i, result in enumerate(results):
+            text = get_text_content(result.content)
+            print(f"\n[{DYNAMIC_ROUTE_QWEN}] batch {i}: {text[:100]}")
+            assert text.strip(), f"Empty content for batch result {i}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_tool_calling(self, gateway):
+        """Tool calling should work through a dynamic route."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        llm_with_tools = llm.bind_tools([get_weather, get_stock_price])
+
+        result = llm_with_tools.invoke("What's the weather in San Francisco?")
+
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] tool_calls: {result.tool_calls}")
+        assert result.tool_calls, "No tool call made through dynamic route"
+        assert result.tool_calls[0]["name"] == "get_weather"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_multi_turn_tool_calling(self, gateway):
+        """Tool result history should round-trip through a dynamic route."""
+        from langchain_core.messages import ToolMessage
+
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        llm_with_tools = llm.bind_tools([get_weather, get_stock_price])
+
+        messages = [HumanMessage(content="What's the weather in San Francisco?")]
+        response1 = llm_with_tools.invoke(messages)
+        assert response1.tool_calls, "No tool call made on the first turn"
+
+        tool_call = response1.tool_calls[0]
+        tool_result = get_weather.invoke(tool_call["args"])
+        messages.append(response1)
+        messages.append(
+            ToolMessage(
+                content=tool_result,
+                tool_call_id=tool_call["id"],
+                name=tool_call["name"],
+            )
+        )
+
+        response2 = llm_with_tools.invoke(messages)
+        text = get_text_content(response2.content)
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] multi-turn final: {text[:200]}")
+        assert text.strip(), "Empty final answer after tool result"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    @pytest.mark.parametrize("method", [None, "json_schema"])
+    def test_dynamic_route_structured_output(self, gateway, method):
+        """Structured output should work through a dynamic route.
+
+        method=None exercises the default tool-calling path; 'json_schema'
+        exercises the json_object path a default ModelBehavior selects.
+        """
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        kwargs = {"method": method} if method else {}
+        structured_llm = llm.with_structured_output(Data, **kwargs)
+
+        result = structured_llm.invoke(
+            "Extract announcements from this text:\n\n"
+            "Acme Corp announced a strategic partnership with TechGiant Inc."
+        )
+
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] structured ({method or 'default'}): {result}")
+        assert result is not None
+        assert isinstance(result, (dict, Data))
+        if isinstance(result, dict):
+            assert "announcements" in result
+        else:
+            assert hasattr(result, "announcements")
+
+    @pytest.mark.skipif(
+        not DYNAMIC_ROUTE_FALLBACK, reason="Fallback route env var not set"
+    )
+    def test_dynamic_route_surfaces_reasoning(self, gateway):
+        """Reasoning must surface on a route whose name has no family substring.
+
+        This is the regression the issue describes: rt-fallback matched no
+        registry key, so the old registry gate suppressed reasoning entirely.
+        Both the primary (Qwen) and the fallback (GLM) are reasoning models,
+        so either node satisfies this -- a rate-limited fallback is a pass.
+        """
+        llm = self._llm(DYNAMIC_ROUTE_FALLBACK, gateway)
+        result = llm.invoke("What is 25 * 37? Think step by step.")
+
+        reasoning = extract_reasoning(result.content)
+        print(f"\n[{DYNAMIC_ROUTE_FALLBACK}] reasoning: {reasoning[:200]}")
+
+        assert isinstance(result.content, list), (
+            "Expected content blocks carrying reasoning, got "
+            f"{type(result.content).__name__}"
+        )
+        assert reasoning, "No reasoning surfaced through the fallback route"

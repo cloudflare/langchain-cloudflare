@@ -161,6 +161,9 @@ class Default(WorkerEntrypoint):
             # Sampling parameter passthrough endpoint
             elif path == "sampling-params":
                 return await self.handle_sampling_params(request)
+            # AI Gateway dynamic route endpoint
+            elif path == "dynamic-route":
+                return await self.handle_dynamic_route(request)
             else:
                 return await self.handle_index()
 
@@ -228,6 +231,11 @@ class Default(WorkerEntrypoint):
                     "/sampling-params": (
                         "Chat with sampling params (top_k, repetition_penalty, "
                         "max_tokens, tool_choice) to check registry passthrough"
+                    ),
+                    "/dynamic-route": (
+                        "Exercise an AI Gateway dynamic route over the AI "
+                        "binding (invoke/batch/tools/multi-turn/structured/"
+                        "structured-json-schema/reasoning)"
                     ),
                 },
             }
@@ -1702,3 +1710,127 @@ Return JSON with an "announcements" array. Each announcement should have:
                 ],
             }
         )
+
+    # MARK: - Dynamic Route Handler
+
+    @staticmethod
+    def _split_content(content):
+        """Split an AIMessage content into (text, reasoning).
+
+        Reasoning models return content blocks; everything else returns a
+        plain string.
+        """
+        if not isinstance(content, list):
+            return content, None
+
+        text_parts = [
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        thinking_parts = [
+            b.get("thinking", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "thinking"
+        ]
+        return (
+            " ".join(text_parts),
+            thinking_parts[0] if thinking_parts else None,
+        )
+
+    async def handle_dynamic_route(self, request):
+        """Exercise an AI Gateway dynamic route over the AI binding.
+
+        The route resolves server-side, so the model string is
+        ``dynamic/<route name>`` and the gateway id is required -- without it
+        the binding raises ``AiGatewayError: 7003``. Streaming is omitted
+        because bindings do not support it.
+
+        Request body:
+            - model: ``dynamic/<route name>``
+            - gateway_id: AI Gateway id the route lives on
+            - mode: invoke (default), batch, tools, multi-turn, structured,
+              structured-json-schema, or reasoning
+            - message / text / messages: input for the selected mode
+        """
+        data = await request.json()
+        model = data.get("model", DEFAULT_MODEL)
+        gateway_id = data.get("gateway_id")
+        mode = data.get("mode", "invoke")
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+            ai_gateway=gateway_id,
+        )
+
+        result = {"model": model, "gateway_id": gateway_id, "mode": mode}
+
+        if mode == "batch":
+            messages = data.get("messages", ["Say 'Hello'", "Say 'World'"])
+            responses = await llm.abatch(messages)
+            result["results"] = [self._split_content(r.content)[0] for r in responses]
+            result["count"] = len(responses)
+            return Response.json(result)
+
+        if mode in ("structured", "structured-json-schema"):
+            text = data.get(
+                "text", "Acme Corp announced a partnership with TechGiant Inc."
+            )
+            kwargs = {"method": "json_schema"} if mode.endswith("json-schema") else {}
+            structured_llm = llm.with_structured_output(Data, **kwargs)
+            extracted = await structured_llm.ainvoke(
+                f"Extract announcements from this text:\n\n{text}"
+            )
+            if isinstance(extracted, Data):
+                extracted = extracted.model_dump()
+            result["extracted"] = extracted
+            return Response.json(result)
+
+        if mode in ("tools", "multi-turn"):
+            message = data.get("message", "What's the weather in San Francisco?")
+            llm_with_tools = llm.bind_tools(ALL_TOOLS)
+            messages = [HumanMessage(content=message)]
+            first = await llm_with_tools.ainvoke(messages)
+            result["tool_calls"] = [
+                {"name": tc["name"], "args": tc["args"]}
+                for tc in (first.tool_calls or [])
+            ]
+
+            if mode == "tools" or not first.tool_calls:
+                return Response.json(result)
+
+            tool_call = first.tool_calls[0]
+            tool_result = (
+                get_weather.invoke(tool_call["args"])
+                if tool_call["name"] == "get_weather"
+                else get_stock_price.invoke(tool_call["args"])
+            )
+            messages.append(first)
+            messages.append(
+                ToolMessage(
+                    content=tool_result,
+                    tool_call_id=tool_call.get("id", "unknown"),
+                    name=tool_call["name"],
+                )
+            )
+            final = await llm_with_tools.ainvoke(messages)
+            result["tool_result"] = tool_result
+            result["final_response"] = self._split_content(final.content)[0]
+            return Response.json(result)
+
+        # invoke / reasoning: same call, the reasoning mode just asks for a
+        # prompt that makes the model think and reports the thinking block.
+        default_message = (
+            "What is 25 * 37? Think step by step."
+            if mode == "reasoning"
+            else "Say 'Hello World' and nothing else."
+        )
+        response = await llm.ainvoke(data.get("message", default_message))
+        text, reasoning = self._split_content(response.content)
+        result["response"] = text
+        result["reasoning_content"] = reasoning
+        result["has_reasoning_content"] = reasoning is not None
+        result["content_type"] = type(response.content).__name__
+        return Response.json(result)

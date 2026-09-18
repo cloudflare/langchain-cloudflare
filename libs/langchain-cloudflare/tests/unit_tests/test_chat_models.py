@@ -17,6 +17,7 @@ from langchain_tests.unit_tests import ChatModelUnitTests
 from pydantic import BaseModel as PydanticBaseModel
 
 from langchain_cloudflare.chat_models import (
+    DEFAULT_MODEL_BEHAVIOR,
     MODEL_BEHAVIORS,
     ChatCloudflareWorkersAI,
     _convert_message_to_dict,
@@ -158,9 +159,23 @@ class TestReasoningContent:
         assert isinstance(msg.content, str)
         assert msg.content == "Hello!"
 
-    def test_no_reasoning_content_for_llama(self):
-        """Llama model should not extract reasoning_content even if present."""
-        llm = self._create_llm("@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "@cf/acme/brand-new-model-with-no-registry-entry",
+            "dynamic/rt-fallback",
+        ],
+        ids=["registered-non-reasoning", "unregistered", "dynamic-route"],
+    )
+    @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+    def test_reasoning_detected_regardless_of_registry(self, model, field):
+        """Reasoning is read off the response, not gated on the registry.
+
+        A dynamic route resolves server-side and a newly released model has
+        no registry entry, so neither can be looked up ahead of the call.
+        """
+        llm = self._create_llm(model)
         response = {
             "result": {
                 "choices": [
@@ -168,7 +183,38 @@ class TestReasoningContent:
                         "message": {
                             "role": "assistant",
                             "content": "Hello!",
-                            "reasoning_content": "Some text",
+                            field: "Some reasoning",
+                        }
+                    }
+                ],
+            }
+        }
+
+        result = llm._create_chat_result(response)
+        msg = result.generations[0].message
+
+        assert isinstance(msg.content, list)
+        thinking_blocks = [b for b in msg.content if b["type"] == "thinking"]
+        assert len(thinking_blocks) == 1
+        assert thinking_blocks[0]["thinking"] == "Some reasoning"
+
+    def test_null_reasoning_key_stays_plain_string(self):
+        """A null `reasoning` key must not produce content blocks.
+
+        This is the live Mistral response shape: the key is always present
+        and always null (confirmed 3/3), which is why dropping the registry
+        gate is a no-op for it.
+        """
+        llm = self._create_llm("@cf/mistralai/mistral-small-3.1-24b-instruct")
+        response = {
+            "result": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello!",
+                            "reasoning": None,
+                            "reasoning_content": None,
                         }
                     }
                 ],
@@ -501,6 +547,58 @@ class TestReasoningContent:
             assert behavior.unsupported_params == ()
 
         assert get_model_behavior("@cf/zai-org/glm-4.7-flash") is legacy
+
+
+# MARK: - Model Behavior Lookup Tests
+
+
+class TestGetModelBehavior:
+    """Test registry lookup, including AI Gateway dynamic routes."""
+
+    # One representative model id per registry family, so a family that stops
+    # resolving is caught here rather than in a live suite.
+    FAMILY_MODELS = {
+        "@cf/zai-org/glm-5.3-flash": "glm-5.3-flash",
+        "@cf/zai-org/glm-5.2": "glm-5.2",
+        "@cf/zai-org/glm-4.7-flash": "glm",
+        "@cf/google/gemma-4-26b-a4b-it": "gemma",
+        "@cf/openai/gpt-oss-120b": "gpt-oss",
+        "@cf/deepseek-ai/deepseek-v4-pro-0813": "deepseek",
+        "@cf/moonshotai/kimi-k2.6": "kimi",
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast": "llama",
+        "@cf/mistralai/mistral-small-3.1-24b-instruct": "mistral",
+        "@cf/nvidia/nemotron-3-120b-a12b": "nemotron",
+        "@cf/qwen/qwen3-30b-a3b-fp8": "qwen",
+    }
+
+    @pytest.mark.parametrize(("model", "family"), sorted(FAMILY_MODELS.items()))
+    def test_model_ids_resolve_to_their_family(self, model, family):
+        """Non-dynamic model ids keep resolving exactly as before."""
+        assert get_model_behavior(model) is MODEL_BEHAVIORS[family]
+
+    def test_unknown_model_falls_back_to_default(self):
+        """A model with no registry entry gets the default behavior."""
+        assert get_model_behavior("@cf/acme/brand-new-model") is DEFAULT_MODEL_BEHAVIOR
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "dynamic/rt-fallback",
+            "dynamic/rt-qwen",
+            "dynamic/rt-glm",
+            "dynamic/mistral-backup",
+            "dynamic/my-llama-route",
+            "DYNAMIC/My-Gemma-Route",
+        ],
+    )
+    def test_dynamic_routes_never_family_match(self, model):
+        """Route names are user-chosen, so a family substring means nothing.
+
+        An AI Gateway dynamic route resolves server-side and can fall back to
+        a different provider between calls, so no family can be inferred
+        before the request is sent.
+        """
+        assert get_model_behavior(model) is DEFAULT_MODEL_BEHAVIOR
 
 
 # MARK: - GPT-OSS Model Tests
