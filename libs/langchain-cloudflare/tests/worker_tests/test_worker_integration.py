@@ -1447,3 +1447,102 @@ class TestWorkerSessionAffinity:
             assert response.status_code == 200
             data = response.json()
             assert len(data["response"]) > 0
+
+
+# MARK: - GLM Sampling Param Passthrough Tests
+
+
+# (model, param, value) combinations the GLM registry entries must now let
+# through. Each one used to be silently popped before the request was sent.
+GLM_PASSTHROUGH_PARAMS = [
+    ("@cf/zai-org/glm-5.2", "top_k", 20),
+    ("@cf/zai-org/glm-5.2", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-5.3-flash", "top_k", 20),
+    ("@cf/zai-org/glm-5.3-flash", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-4.7-flash", "top_k", 20),
+]
+
+
+class TestWorkerGlmSamplingParams:
+    """Test GLM sampling param passthrough over the Worker AI binding.
+
+    The /sampling-params endpoint echoes back which params survived
+    MODEL_BEHAVIORS translation, so these tests distinguish a param that was
+    actually sent to the binding from one the registry silently dropped.
+    """
+
+    @pytest.mark.parametrize(
+        ("model", "param", "value"),
+        GLM_PASSTHROUGH_PARAMS,
+        ids=[f"{m}-{p}" for m, p, _ in GLM_PASSTHROUGH_PARAMS],
+    )
+    def test_sampling_param_reaches_binding(self, dev_server, model, param, value):
+        """top_k / repetition_penalty should be sent and accepted."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/sampling-params",
+            json={
+                "model": model,
+                "message": "Say 'Hello World' and nothing else.",
+                param: value,
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        print(f"  [{model}] {param}={value} sent: {data['sent_params']}")  # noqa: T201
+
+        assert data["sent_params"].get(param) == value, f"{param} stripped for {model}"
+        assert data["response"].strip(), f"Empty content for {model} with {param}"
+
+    def test_glm_4_7_flash_tool_choice_forces_tool_call(self, dev_server):
+        """tool_choice should be sent to glm-4.7-flash and force a tool call."""
+        port = dev_server
+        model = "@cf/zai-org/glm-4.7-flash"
+        response = requests.post(
+            f"http://localhost:{port}/sampling-params",
+            json={
+                "model": model,
+                "message": "What's the weather in San Francisco?",
+                "tool_choice": "get_weather",
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        print(f"  [{model}] tool_calls: {data['tool_calls']}")  # noqa: T201
+
+        assert data["tool_calls"], f"tool_choice did not force a tool call for {model}"
+        assert data["tool_calls"][0]["name"] == "get_weather"
+
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [("max_tokens", 64), ("repetition_penalty", 1.05)],
+    )
+    def test_glm_4_7_flash_still_strips_broken_params(self, dev_server, param, value):
+        """max_tokens (null content) and repetition_penalty (timeout) stay stripped."""
+        port = dev_server
+        model = "@cf/zai-org/glm-4.7-flash"
+        response = requests.post(
+            f"http://localhost:{port}/sampling-params",
+            json={
+                "model": model,
+                "message": "Say 'Hello World' and nothing else.",
+                param: value,
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        print(f"  [{model}] {param}={value} sent: {data['sent_params']}")  # noqa: T201
+
+        assert param not in data["sent_params"], (
+            f"{param} should still be stripped for {model}"
+        )
+        assert data["response"].strip(), f"Empty content for {model} with {param}"

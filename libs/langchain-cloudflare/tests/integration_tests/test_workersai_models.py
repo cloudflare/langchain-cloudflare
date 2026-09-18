@@ -233,6 +233,7 @@ def create_llm(
     api_token: str,
     ai_gateway: Optional[str] = None,
     endpoint_format: str = "workers_ai",
+    **kwargs,
 ):
     """Create a ChatCloudflareWorkersAI instance."""
     return ChatCloudflareWorkersAI(
@@ -242,6 +243,7 @@ def create_llm(
         temperature=0.0,
         ai_gateway=ai_gateway,
         endpoint_format=endpoint_format,
+        **kwargs,
     )
 
 
@@ -829,6 +831,100 @@ class TestBasicInvoke:
         for i, result in enumerate(results):
             assert result is not None, f"Result {i} is None for {model}"
             assert result.content, f"Empty content for result {i} for {model}"
+
+
+# MARK: - GLM Sampling Param Passthrough Tests
+
+
+# (model, param, value) combinations the GLM registry entries must now let
+# through. Each one used to be silently popped before the request was sent.
+GLM_PASSTHROUGH_PARAMS = [
+    ("@cf/zai-org/glm-5.2", "top_k", 20),
+    ("@cf/zai-org/glm-5.2", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-5.3-flash", "top_k", 20),
+    ("@cf/zai-org/glm-5.3-flash", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-4.7-flash", "top_k", 20),
+]
+
+
+class TestGlmSamplingParams:
+    """Live coverage for the params GLM models actually accept.
+
+    The registry used to strip top_k / repetition_penalty from every GLM
+    model and tool_choice from glm-4.7-flash. Each test both asserts the
+    param survives request translation and confirms the live model accepts
+    it, so a regression in either the registry or the model is caught.
+    """
+
+    @pytest.mark.parametrize(
+        ("model", "param", "value"),
+        GLM_PASSTHROUGH_PARAMS,
+        ids=[f"{m}-{p}" for m, p, _ in GLM_PASSTHROUGH_PARAMS],
+    )
+    def test_sampling_param_reaches_model(
+        self, model, param, value, account_id, api_token, ai_gateway
+    ):
+        """top_k / repetition_penalty should be sent and accepted."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway, **{param: value})
+
+        translated = llm._translate_params_for_model(dict(llm._default_params))
+        assert translated.get(param) == value, f"{param} stripped for {model}"
+
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{model}] {param}={value}: {text[:200]}")
+        assert text.strip(), f"Empty content for {model} with {param}={value}"
+
+    def test_glm_4_7_flash_tool_choice_forces_tool_call(
+        self, account_id, api_token, ai_gateway
+    ):
+        """tool_choice should be sent to glm-4.7-flash and force a tool call."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        model = "@cf/zai-org/glm-4.7-flash"
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        llm_with_tools = llm.bind_tools([get_weather], tool_choice="get_weather")
+
+        assert llm_with_tools.kwargs["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "get_weather"},
+        }
+
+        result = llm_with_tools.invoke("What's the weather in San Francisco?")
+
+        print(f"\n[{model}] tool_choice tool_calls: {result.tool_calls}")
+        assert result.tool_calls, f"tool_choice did not force a tool call for {model}"
+        assert result.tool_calls[0]["name"] == "get_weather"
+
+    @pytest.mark.parametrize("param", ["max_tokens", "repetition_penalty"])
+    def test_glm_4_7_flash_still_strips_broken_params(
+        self, param, account_id, api_token, ai_gateway
+    ):
+        """max_tokens (null content) and repetition_penalty (timeout) stay stripped.
+
+        Setting either one live must still produce a normal response, which
+        only holds while the registry drops them before the request is sent.
+        """
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        model = "@cf/zai-org/glm-4.7-flash"
+        value = 64 if param == "max_tokens" else 1.05
+        llm = create_llm(model, account_id, api_token, ai_gateway, **{param: value})
+
+        translated = llm._translate_params_for_model(dict(llm._default_params))
+        assert param not in translated, f"{param} should still be stripped for {model}"
+
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{model}] {param}={value} (stripped): {text[:200]}")
+        assert text.strip(), f"Empty content for {model} with {param}={value}"
 
 
 # MARK: - Reasoning Content Tests

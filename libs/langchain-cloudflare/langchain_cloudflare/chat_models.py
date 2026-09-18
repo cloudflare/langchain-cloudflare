@@ -216,18 +216,21 @@ _REASONING_BEHAVIOR = ModelBehavior(
     embed_tool_calls_in_content=False,
     supports_reasoning_content=True,
 )
-_MODERN_GLM_BEHAVIOR = ModelBehavior(
-    embed_tool_calls_in_content=False,
-    unsupported_params=("top_k", "repetition_penalty"),
-    supports_reasoning_content=True,
-)
 
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
-    "glm-5.3-flash": _MODERN_GLM_BEHAVIOR,
-    "glm-5.2": _MODERN_GLM_BEHAVIOR,
+    # GLM 5.x accepts every sampling param the legacy "glm" entry strips
+    # (top_k and repetition_penalty both verified live, 3/3), so these keys
+    # need no unsupported_params of their own. They must stay ahead of the
+    # "glm" key: get_model_behavior() returns the first substring match in
+    # insertion order, and "glm" matches the 5.x model names too.
+    "glm-5.3-flash": _REASONING_BEHAVIOR,
+    "glm-5.2": _REASONING_BEHAVIOR,
+    # glm-4.7-flash only. Verified live, 3/3 each: max_tokens returns null
+    # content and repetition_penalty times out, while top_k and tool_choice
+    # both work and so are passed through.
     "glm": ModelBehavior(
         embed_tool_calls_in_content=False,
-        unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
+        unsupported_params=("max_tokens", "repetition_penalty"),
         supports_reasoning_content=True,
     ),
     "gemma": ModelBehavior(

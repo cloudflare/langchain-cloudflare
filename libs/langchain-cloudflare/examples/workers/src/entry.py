@@ -158,6 +158,9 @@ class Default(WorkerEntrypoint):
             # Session affinity (prompt caching) endpoint
             elif path == "session-affinity":
                 return await self.handle_session_affinity(request)
+            # Sampling parameter passthrough endpoint
+            elif path == "sampling-params":
+                return await self.handle_sampling_params(request)
             else:
                 return await self.handle_index()
 
@@ -222,6 +225,10 @@ class Default(WorkerEntrypoint):
                     "/d1-query": "Query D1 table",
                     "/d1-drop-table": "Drop a D1 table",
                     "/multi-modal": "Multi-modal image input test",
+                    "/sampling-params": (
+                        "Chat with sampling params (top_k, repetition_penalty, "
+                        "max_tokens, tool_choice) to check registry passthrough"
+                    ),
                 },
             }
         )
@@ -1624,5 +1631,74 @@ Return JSON with an "announcements" array. Each announcement should have:
                 "response": content,
                 "model": model,
                 "session_id": session_id,
+            }
+        )
+
+    # MARK: - Sampling Params Handler
+
+    async def handle_sampling_params(self, request):
+        """Handle chat with explicit sampling params via the binding.
+
+        Reports which params survived MODEL_BEHAVIORS translation alongside
+        the model's answer, so tests can tell a param that was actually sent
+        from one the registry silently dropped.
+
+        Request body:
+            - model: Workers AI model name (optional, defaults to DEFAULT_MODEL)
+            - message: User message text
+            - top_k / repetition_penalty / max_tokens: sampling params (optional)
+            - tool_choice: tool name or "required" to force a tool call (optional)
+        """
+        data = await request.json()
+        model = data.get("model", DEFAULT_MODEL)
+        message = data.get("message", "Say 'Hello World' and nothing else.")
+        tool_choice = data.get("tool_choice")
+
+        sampling_params = {
+            name: data[name]
+            for name in ("top_k", "repetition_penalty", "max_tokens")
+            if data.get(name) is not None
+        }
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+            **sampling_params,
+        )
+
+        # Private, but it is the only way to observe what the registry left in
+        # the request body -- the stripping it verifies is silent by design.
+        sent_params = llm._translate_params_for_model(dict(llm._default_params))
+
+        runnable = llm
+        if tool_choice:
+            runnable = llm.bind_tools([get_weather], tool_choice=tool_choice)
+
+        response = await runnable.ainvoke(message)
+
+        content = response.content
+        if isinstance(content, list):
+            text_parts = [
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            content = " ".join(text_parts)
+
+        return Response.json(
+            {
+                "model": model,
+                "response": content,
+                "requested_params": sampling_params,
+                "sent_params": {
+                    name: sent_params[name]
+                    for name in sampling_params
+                    if name in sent_params
+                },
+                "tool_calls": [
+                    {"name": tc["name"], "args": tc["args"]}
+                    for tc in (response.tool_calls or [])
+                ],
             }
         )

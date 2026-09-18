@@ -17,8 +17,10 @@ from langchain_tests.unit_tests import ChatModelUnitTests
 from pydantic import BaseModel as PydanticBaseModel
 
 from langchain_cloudflare.chat_models import (
+    MODEL_BEHAVIORS,
     ChatCloudflareWorkersAI,
     _convert_message_to_dict,
+    get_model_behavior,
 )
 
 
@@ -444,23 +446,27 @@ class TestReasoningContent:
         assert len(msg.tool_calls) == 1
         assert msg.tool_calls[0]["name"] == "get_weather"
 
-    def test_glm_unsupported_params_removed(self):
-        """GLM unsupported params should be removed."""
-        llm = self._create_llm("@cf/zai-org/glm-4.7-flash")
-        params = {
-            "max_tokens": 100,
-            "top_k": 50,
-            "repetition_penalty": 1.1,
-            "tool_choice": "required",
-            "temperature": 0.7,
-        }
+    SAMPLING_PARAMS = {
+        "max_tokens": 100,
+        "top_k": 50,
+        "repetition_penalty": 1.1,
+        "tool_choice": "required",
+        "temperature": 0.7,
+    }
 
-        translated = llm._translate_params_for_model(params)
+    def test_glm_unsupported_params_removed(self):
+        """glm-4.7-flash should only drop max_tokens and repetition_penalty.
+
+        top_k and tool_choice are accepted by the model and must survive.
+        """
+        llm = self._create_llm("@cf/zai-org/glm-4.7-flash")
+
+        translated = llm._translate_params_for_model(dict(self.SAMPLING_PARAMS))
 
         assert "max_tokens" not in translated
-        assert "top_k" not in translated
         assert "repetition_penalty" not in translated
-        assert "tool_choice" not in translated
+        assert translated["top_k"] == 50
+        assert translated["tool_choice"] == "required"
         assert translated["temperature"] == 0.7
 
     @pytest.mark.parametrize(
@@ -468,23 +474,33 @@ class TestReasoningContent:
         ["@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"],
     )
     def test_modern_glm_preserves_supported_params(self, model):
-        """Modern GLM models should keep parameters supported by their schemas."""
+        """Modern GLM models should keep every parameter their schemas accept."""
         llm = self._create_llm(model)
-        params = {
-            "max_tokens": 100,
-            "top_k": 50,
-            "repetition_penalty": 1.1,
-            "tool_choice": "required",
-            "temperature": 0.7,
-        }
 
-        translated = llm._translate_params_for_model(params)
+        translated = llm._translate_params_for_model(dict(self.SAMPLING_PARAMS))
 
-        assert translated["max_tokens"] == 100
-        assert "top_k" not in translated
-        assert "repetition_penalty" not in translated
-        assert translated["tool_choice"] == "required"
-        assert translated["temperature"] == 0.7
+        assert translated == self.SAMPLING_PARAMS
+
+    def test_modern_glm_does_not_fall_back_to_legacy_entry(self):
+        """glm-5.x keys must be matched before the legacy 'glm' entry.
+
+        get_model_behavior() returns the first substring match in insertion
+        order, so reordering MODEL_BEHAVIORS would silently route glm-5.x
+        through the glm-4.7-flash restrictions.
+        """
+        families = list(MODEL_BEHAVIORS)
+        assert families.index("glm-5.3-flash") < families.index("glm")
+        assert families.index("glm-5.2") < families.index("glm")
+
+        legacy = MODEL_BEHAVIORS["glm"]
+        assert legacy.unsupported_params == ("max_tokens", "repetition_penalty")
+
+        for model in ("@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"):
+            behavior = get_model_behavior(model)
+            assert behavior is not legacy
+            assert behavior.unsupported_params == ()
+
+        assert get_model_behavior("@cf/zai-org/glm-4.7-flash") is legacy
 
 
 # MARK: - GPT-OSS Model Tests
