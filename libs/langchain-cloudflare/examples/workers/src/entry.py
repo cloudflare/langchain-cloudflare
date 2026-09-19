@@ -164,6 +164,9 @@ class Default(WorkerEntrypoint):
             # AI Gateway dynamic route endpoint
             elif path == "dynamic-route":
                 return await self.handle_dynamic_route(request)
+            # rejectIfBusy capacity option endpoint
+            elif path == "reject-if-busy":
+                return await self.handle_reject_if_busy(request)
             else:
                 return await self.handle_index()
 
@@ -236,6 +239,10 @@ class Default(WorkerEntrypoint):
                         "Exercise an AI Gateway dynamic route over the AI "
                         "binding (invoke/batch/tools/multi-turn/structured/"
                         "structured-json-schema/reasoning)"
+                    ),
+                    "/reject-if-busy": (
+                        "Run chat/embeddings/rerank over the AI binding with "
+                        "the rejectIfBusy capacity option"
                     ),
                 },
             }
@@ -1833,4 +1840,93 @@ Return JSON with an "announcements" array. Each announcement should have:
         result["reasoning_content"] = reasoning
         result["has_reasoning_content"] = reasoning is not None
         result["content_type"] = type(response.content).__name__
+        return Response.json(result)
+
+    # MARK: - Reject If Busy Handler
+
+    async def handle_reject_if_busy(self, request):
+        """Run a binding call with the rejectIfBusy capacity option.
+
+        The binding only reads rejectIfBusy from the options argument of
+        ``env.AI.run()`` -- it is ignored inside the model input object -- so
+        the response echoes the options object the client actually built,
+        letting tests assert the flag reached the third argument rather than
+        waiting for a 429/3040 that is not reproducible on demand.
+
+        Request body:
+            - target: chat (default), embeddings, or rerank
+            - model: Workers AI model name (chat only)
+            - reject_if_busy: bool, defaults to True
+            - message / text / query / documents: input for the target
+        """
+        from langchain_cloudflare.bindings import create_binding_run_options
+
+        data = await request.json()
+        target = data.get("target", "chat")
+        reject_if_busy = data.get("reject_if_busy", True)
+
+        result = {"target": target, "reject_if_busy": reject_if_busy}
+
+        if target == "embeddings":
+            embeddings = CloudflareWorkersAIEmbeddings(
+                model_name=EMBEDDING_MODEL,
+                binding=self.env.AI,
+                reject_if_busy=reject_if_busy,
+            )
+            vector = await embeddings.aembed_query(data.get("text", "Hello world"))
+            result["model"] = EMBEDDING_MODEL
+            result["dimensions"] = len(vector)
+            run_options = create_binding_run_options(
+                gateway_id=embeddings.ai_gateway,
+                reject_if_busy=embeddings.reject_if_busy,
+            )
+
+        elif target == "rerank":
+            reranker = CloudflareWorkersAIReranker(
+                model_name=RERANKER_MODEL,
+                binding=self.env.AI,
+                reject_if_busy=reject_if_busy,
+            )
+            ranked = await reranker.arerank(
+                query=data.get("query", "What is the capital of France?"),
+                documents=data.get(
+                    "documents",
+                    [
+                        "Paris is the capital of France.",
+                        "Berlin is the capital of Germany.",
+                    ],
+                ),
+            )
+            result["model"] = RERANKER_MODEL
+            result["count"] = len(ranked)
+            run_options = create_binding_run_options(
+                gateway_id=reranker.ai_gateway,
+                reject_if_busy=reranker.reject_if_busy,
+            )
+
+        else:
+            model = data.get("model", DEFAULT_MODEL)
+            llm = ChatCloudflareWorkersAI(
+                model_name=model,
+                binding=self.env.AI,
+                temperature=0.0,
+                reject_if_busy=reject_if_busy,
+            )
+            response = await llm.ainvoke(
+                data.get("message", "Say 'Hello World' and nothing else.")
+            )
+            content, _ = self._split_content(response.content)
+            result["model"] = model
+            result["response"] = content
+            run_options = create_binding_run_options(
+                gateway_id=llm.ai_gateway,
+                session_id=llm.session_id,
+                reject_if_busy=llm.reject_if_busy,
+            )
+
+        # Normalize the JS proxy back to a plain dict for the JSON response.
+        if run_options is not None and hasattr(run_options, "to_py"):
+            run_options = run_options.to_py()
+        result["run_options"] = run_options
+
         return Response.json(result)

@@ -80,6 +80,8 @@ from pydantic import (
 )
 from typing_extensions import Self
 
+from ._options import apply_reject_if_busy
+
 # MARK: - Model Behavior Registry
 
 
@@ -462,6 +464,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         alias="cloudflare_ai_gateway",
         default_factory=from_env("AI_GATEWAY", default=None),
     )
+    reject_if_busy: Optional[bool] = None
+    """Fail fast instead of queueing when Workers AI is at capacity.
+
+    When True, a request that would otherwise wait in the capacity queue is
+    rejected immediately with HTTP 429 and Cloudflare error code 3040
+    ("Capacity temporarily exceeded, please try again"). Works on both the
+    REST paths (sent as ``options.rejectIfBusy`` in the request body) and the
+    Workers AI binding (sent in the options argument to ``env.AI.run()``,
+    which is the only place the binding reads it from).
+    """
     endpoint_format: Literal["workers_ai", "openai_compatible"] = "workers_ai"
     """REST endpoint format to use.
 
@@ -900,7 +912,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         message_dicts: List[Dict[str, Any]],
         params: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Build the REST request payload for the configured endpoint format."""
+        """Build the model input object for the configured endpoint format.
+
+        Deliberately carries no ``options`` key: this same object is handed to
+        the binding as the model input, where Cloudflare's docs are explicit
+        that rejectIfBusy is ignored and must travel in the run options
+        argument instead. REST senders add it with :meth:`_rest_body`.
+        """
         if self.endpoint_format == "openai_compatible":
             return {
                 **params,
@@ -909,6 +927,15 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             }
 
         return {"messages": message_dicts, **params}
+
+    def _rest_body(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrap a model input object as a REST request body.
+
+        Both endpoint formats take a top-level ``options`` object, so this is
+        the single place the REST paths (sync, async, and both streaming
+        variants) add it.
+        """
+        return apply_reject_if_busy(payload, self.reject_if_busy)
 
     @staticmethod
     def _streaming_safe_usage(usage: Dict[str, Any]) -> Dict[str, Any]:
@@ -982,7 +1009,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             api_url = self._get_api_url()
 
             # Make the API request
-            response = self.client.post(api_url, json=payload)
+            response = self.client.post(api_url, json=self._rest_body(payload))
             response.raise_for_status()
             response_data = response.json()
 
@@ -1012,7 +1039,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             api_url = self._get_api_url()
 
             # Make the API request
-            response = await self.async_client.post(api_url, json=payload)
+            response = await self.async_client.post(
+                api_url, json=self._rest_body(payload)
+            )
             response.raise_for_status()
             response_data = response.json()
 
@@ -1044,7 +1073,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         payload = self._create_request_payload(message_dicts, params)
 
         # Make the streaming API request
-        with self.client.stream("POST", api_url, json=payload) as response:
+        with self.client.stream(
+            "POST", api_url, json=self._rest_body(payload)
+        ) as response:
             response.raise_for_status()
             accumulated_content = ""
             tool_calls_detected = False
@@ -1220,7 +1251,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         payload = self._create_request_payload(message_dicts, params)
 
         # Make the streaming API request
-        async with self.async_client.stream("POST", api_url, json=payload) as response:
+        async with self.async_client.stream(
+            "POST", api_url, json=self._rest_body(payload)
+        ) as response:
             response.raise_for_status()
 
             accumulated_content = ""
@@ -1404,10 +1437,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         # Convert payload to JS-compatible format for Pyodide
         js_payload = convert_payload_for_binding(payload)
 
-        # Create options for the binding (gateway + session affinity)
+        # Create options for the binding (gateway + session affinity +
+        # rejectIfBusy, which the binding only reads from this argument)
         run_options = create_binding_run_options(
             gateway_id=self.ai_gateway,
             session_id=self.session_id,
+            reject_if_busy=self.reject_if_busy,
         )
 
         # Call the binding with optional options

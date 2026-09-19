@@ -203,3 +203,58 @@ class TestProcessResponseOrdering:
         )
 
         assert [r.score for r in results] == [0.9, 0.5, 0.1]
+
+
+# MARK: - Reject If Busy Tests
+class TestRejectIfBusy:
+    """Test reject_if_busy reaches the REST body and the binding options."""
+
+    @staticmethod
+    def _reranker(**kwargs):
+        return CloudflareWorkersAIReranker(
+            account_id="test_account",
+            api_token="test_token",
+            **kwargs,
+        )
+
+    def test_option_emitted_when_set(self):
+        """The REST body carries options.rejectIfBusy alongside the query."""
+        from langchain_cloudflare._options import apply_reject_if_busy
+
+        reranker = self._reranker(reject_if_busy=True)
+        payload = reranker._rerank_payload("q", [{"text": "d"}], 2)
+        body = apply_reject_if_busy(payload, reranker.reject_if_busy)
+
+        assert body == {
+            "query": "q",
+            "contexts": [{"text": "d"}],
+            "top_k": 2,
+            "options": {"rejectIfBusy": True},
+        }
+
+    def test_model_input_object_never_carries_options(self):
+        """The binding ignores rejectIfBusy in the input object, so keep it out."""
+        reranker = self._reranker(reject_if_busy=True)
+        payload = reranker._rerank_payload("q", [{"text": "d"}], None)
+        assert payload == {"query": "q", "contexts": [{"text": "d"}]}
+
+    @pytest.mark.parametrize("value", [None, False])
+    def test_no_options_key_when_unset(self, value):
+        """Leaving it off must not add an options key at all."""
+        from langchain_cloudflare._options import apply_reject_if_busy
+
+        reranker = self._reranker(reject_if_busy=value)
+        payload = reranker._rerank_payload("q", [{"text": "d"}], None)
+        assert "options" not in apply_reject_if_busy(payload, reranker.reject_if_busy)
+
+    def test_default_is_off(self):
+        assert self._reranker().reject_if_busy is None
+
+    def test_binding_options_receive_the_flag(self):
+        """The binding reads it from the run options, not the input object."""
+        from langchain_cloudflare.bindings import create_binding_run_options
+
+        reranker = self._reranker(reject_if_busy=True, ai_gateway="gw")
+        assert create_binding_run_options(
+            gateway_id=reranker.ai_gateway, reject_if_busy=reranker.reject_if_busy
+        ) == {"gateway": {"id": "gw"}, "rejectIfBusy": True}

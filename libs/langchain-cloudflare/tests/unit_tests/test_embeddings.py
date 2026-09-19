@@ -98,3 +98,39 @@ class TestAIGatewayUnifiedEndpoint:
         )
 
         assert "cf-aig-gateway-id" not in embeddings.headers
+
+
+# MARK: - Reject If Busy Tests
+class TestRejectIfBusy:
+    """Test reject_if_busy reaches the REST body and the binding options."""
+
+    @staticmethod
+    def _embeddings(**kwargs):
+        return CloudflareWorkersAIEmbeddings(
+            account_id="test_account",
+            api_token="test_token",
+            **kwargs,
+        )
+
+    def test_option_emitted_when_set(self):
+        """The REST body carries options.rejectIfBusy alongside the texts."""
+        payload = self._embeddings(reject_if_busy=True)._embed_payload(["a", "b"])
+        assert payload == {"text": ["a", "b"], "options": {"rejectIfBusy": True}}
+
+    @pytest.mark.parametrize("value", [None, False])
+    def test_no_options_key_when_unset(self, value):
+        """Leaving it off must not add an options key at all."""
+        payload = self._embeddings(reject_if_busy=value)._embed_payload(["a"])
+        assert payload == {"text": ["a"]}
+
+    def test_default_is_off(self):
+        assert self._embeddings().reject_if_busy is None
+
+    def test_binding_options_receive_the_flag(self):
+        """The binding reads it from the run options, not the input object."""
+        from langchain_cloudflare.bindings import create_binding_run_options
+
+        emb = self._embeddings(reject_if_busy=True, ai_gateway="gw")
+        assert create_binding_run_options(
+            gateway_id=emb.ai_gateway, reject_if_busy=emb.reject_if_busy
+        ) == {"gateway": {"id": "gw"}, "rejectIfBusy": True}

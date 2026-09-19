@@ -1673,3 +1673,62 @@ class TestWorkerDynamicRoutes:
             f"(content_type={data['content_type']})"
         )
         assert reasoning.strip()
+
+
+# MARK: - Reject If Busy Tests
+
+
+class TestWorkerRejectIfBusy:
+    """Live coverage for the rejectIfBusy capacity option over the AI binding.
+
+    The binding reads rejectIfBusy only from the options argument of
+    env.AI.run() and silently ignores it inside the model input object, so
+    these tests assert on the options object the handler built. A real
+    rejection (429 / 3040) needs Workers AI to actually be at capacity and
+    cannot be provoked, so the second assertion is that the call still
+    succeeds with the option set.
+    """
+
+    @staticmethod
+    def _post(port, target, **body):
+        response = requests.post(
+            f"http://localhost:{port}/reject-if-busy",
+            json={"target": target, **body},
+            headers={"Content-Type": "application/json"},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def test_chat_option_reaches_run_options(self, dev_server):
+        """Chat: the flag lands in the third argument to env.AI.run()."""
+        data = self._post(dev_server, "chat")
+
+        print(f"  [chat] run_options: {data['run_options']}")  # noqa: T201
+        assert data["run_options"]["rejectIfBusy"] is True
+        assert data["response"].strip(), "Empty content with reject_if_busy set"
+
+    def test_embeddings_option_reaches_run_options(self, dev_server):
+        """Embeddings: same options object, and the call still embeds."""
+        data = self._post(dev_server, "embeddings")
+
+        print(f"  [embeddings] run_options: {data['run_options']}")  # noqa: T201
+        assert data["run_options"]["rejectIfBusy"] is True
+        assert data["dimensions"] > 0
+
+    def test_reranker_option_reaches_run_options(self, dev_server):
+        """Reranker: same options object, and the call still ranks."""
+        data = self._post(dev_server, "rerank")
+
+        print(f"  [rerank] run_options: {data['run_options']}")  # noqa: T201
+        assert data["run_options"]["rejectIfBusy"] is True
+        assert data["count"] > 0
+
+    @pytest.mark.parametrize("target", ["chat", "embeddings", "rerank"])
+    def test_option_absent_when_not_requested(self, dev_server, target):
+        """Unset must not put rejectIfBusy in the options object at all."""
+        data = self._post(dev_server, target, reject_if_busy=False)
+
+        run_options = data["run_options"]
+        print(f"  [{target}] run_options without flag: {run_options}")  # noqa: T201
+        assert run_options is None or "rejectIfBusy" not in run_options

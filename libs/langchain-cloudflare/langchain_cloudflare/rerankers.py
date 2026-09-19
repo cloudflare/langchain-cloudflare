@@ -17,6 +17,7 @@ from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
 from ._errors import TokenErrors
+from ._options import apply_reject_if_busy
 
 # MARK: - Constants
 DEFAULT_RERANKER_MODEL = "@cf/baai/bge-reranker-base"
@@ -109,6 +110,16 @@ class CloudflareWorkersAIReranker(BaseModel):
     )
     binding: Any = Field(default=None, exclude=True)
     """Workers AI binding (env.AI) for use in Python Workers."""
+    reject_if_busy: Optional[bool] = None
+    """Fail fast instead of queueing when Workers AI is at capacity.
+
+    When True, a request that would otherwise wait in the capacity queue is
+    rejected immediately with HTTP 429 and Cloudflare error code 3040
+    ("Capacity temporarily exceeded, please try again"). Works on both the
+    REST path (sent as ``options.rejectIfBusy`` in the request body) and the
+    Workers AI binding (sent in the options argument to ``env.AI.run()``,
+    which is the only place the binding reads it from).
+    """
     timeout: float = 60.0
     """Request timeout in seconds for REST API calls.
 
@@ -177,6 +188,23 @@ class CloudflareWorkersAIReranker(BaseModel):
                 original_docs.append(None)
 
         return contexts, original_docs
+
+    def _rerank_payload(
+        self,
+        query: str,
+        contexts: List[Dict[str, str]],
+        top_k: Optional[int],
+    ) -> Dict[str, Any]:
+        """Build the model input object for a rerank request.
+
+        Deliberately carries no ``options`` key: the binding reads
+        rejectIfBusy from the run options argument and ignores it here. The
+        REST callers add it to the body with ``apply_reject_if_busy``.
+        """
+        payload: Dict[str, Any] = {"query": query, "contexts": contexts}
+        if top_k is not None:
+            payload["top_k"] = top_k
+        return payload
 
     def _process_response(
         self,
@@ -268,17 +296,12 @@ class CloudflareWorkersAIReranker(BaseModel):
 
         contexts, original_docs = self._prepare_documents(documents)
 
-        payload: Dict[str, Any] = {
-            "query": query,
-            "contexts": contexts,
-        }
-        if top_k is not None:
-            payload["top_k"] = top_k
+        payload = self._rerank_payload(query, contexts, top_k)
 
         response = requests.post(
             url=self._inference_url,
             headers=self.headers,
-            json=payload,
+            json=apply_reject_if_busy(payload, self.reject_if_busy),
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -314,12 +337,7 @@ class CloudflareWorkersAIReranker(BaseModel):
 
         contexts, original_docs = self._prepare_documents(documents)
 
-        payload: Dict[str, Any] = {
-            "query": query,
-            "contexts": contexts,
-        }
-        if top_k is not None:
-            payload["top_k"] = top_k
+        payload = self._rerank_payload(query, contexts, top_k)
 
         # Use binding if available (for Python Workers)
         if self.binding is not None:
@@ -333,7 +351,7 @@ class CloudflareWorkersAIReranker(BaseModel):
             response = await client.post(
                 url=self._inference_url,
                 headers=self.headers,
-                json=payload,
+                json=apply_reject_if_busy(payload, self.reject_if_busy),
             )
             response.raise_for_status()
 
@@ -365,20 +383,22 @@ class CloudflareWorkersAIReranker(BaseModel):
         from .bindings import (
             convert_payload_for_binding,
             convert_reranker_response,
-            create_gateway_options,
+            create_binding_run_options,
         )
 
         # Convert payload to JS-compatible format for Pyodide
         js_payload = convert_payload_for_binding(payload)
 
-        # Create AI Gateway options if configured
-        gateway_options = create_gateway_options(self.ai_gateway)
+        # Gateway and rejectIfBusy both belong in the run options argument --
+        # the binding ignores rejectIfBusy inside the model input object.
+        run_options = create_binding_run_options(
+            gateway_id=self.ai_gateway,
+            reject_if_busy=self.reject_if_busy,
+        )
 
-        # Call the binding with optional gateway
-        if gateway_options is not None:
-            response = await self.binding.run(
-                self.model_name, js_payload, gateway_options
-            )
+        # Call the binding with optional options
+        if run_options is not None:
+            response = await self.binding.run(self.model_name, js_payload, run_options)
         else:
             response = await self.binding.run(self.model_name, js_payload)
 

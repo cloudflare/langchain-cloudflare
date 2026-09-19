@@ -1368,3 +1368,129 @@ class TestStreamingSafeUsage:
             "completion_tokens": 1,
             "total_tokens": 40,
         }
+
+
+# MARK: - Reject If Busy Tests
+
+
+class TestRejectIfBusy:
+    """Test the reject_if_busy field reaches the REST body and binding options."""
+
+    @staticmethod
+    def _create_llm(**kwargs):
+        return ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/qwen/qwen3-30b-a3b-fp8",
+            **kwargs,
+        )
+
+    def _payload(self, **kwargs):
+        """Build the body a REST send site would actually post."""
+        llm = self._create_llm(**kwargs)
+        return llm._rest_body(
+            llm._create_request_payload(
+                [{"role": "user", "content": "hi"}],
+                llm._translate_params_for_model(dict(llm._default_params)),
+            )
+        )
+
+    @pytest.mark.parametrize("endpoint_format", ["workers_ai", "openai_compatible"])
+    def test_option_emitted_when_set(self, endpoint_format):
+        """Both endpoint formats take a top-level options object."""
+        payload = self._payload(reject_if_busy=True, endpoint_format=endpoint_format)
+        assert payload["options"] == {"rejectIfBusy": True}
+
+    @pytest.mark.parametrize("endpoint_format", ["workers_ai", "openai_compatible"])
+    @pytest.mark.parametrize("value", [None, False])
+    def test_no_options_key_when_unset(self, endpoint_format, value):
+        """Leaving it off must not add an options key at all."""
+        payload = self._payload(reject_if_busy=value, endpoint_format=endpoint_format)
+        assert "options" not in payload
+
+    def test_default_is_off(self):
+        """The field defaults to off, so existing callers are unaffected."""
+        assert self._create_llm().reject_if_busy is None
+        assert "options" not in self._payload()
+
+    def test_merges_with_model_kwargs_options(self):
+        """A caller's own options dict survives; only rejectIfBusy is set.
+
+        model_kwargs is the documented passthrough that already worked for
+        REST, so setting both must not double-emit or drop the other keys.
+        """
+        payload = self._payload(
+            reject_if_busy=True,
+            model_kwargs={"options": {"someOtherOption": "keep-me"}},
+        )
+        assert payload["options"] == {
+            "someOtherOption": "keep-me",
+            "rejectIfBusy": True,
+        }
+
+    def test_model_kwargs_passthrough_still_works_alone(self):
+        """Without the field, the old passthrough is untouched."""
+        payload = self._payload(
+            model_kwargs={"options": {"rejectIfBusy": True}},
+        )
+        assert payload["options"] == {"rejectIfBusy": True}
+
+    def test_binding_options_receive_the_flag(self):
+        """The binding must get it in the run options, never in the input."""
+        from langchain_cloudflare.bindings import create_binding_run_options
+
+        llm = self._create_llm(reject_if_busy=True, ai_gateway="gw")
+        run_options = create_binding_run_options(
+            gateway_id=llm.ai_gateway,
+            session_id=llm.session_id,
+            reject_if_busy=llm.reject_if_busy,
+        )
+
+        assert run_options == {
+            "gateway": {"id": "gw"},
+            "rejectIfBusy": True,
+        }
+
+    def test_model_input_object_never_carries_options(self):
+        """The binding ignores rejectIfBusy in the input object, so keep it out.
+
+        _create_request_payload builds the object handed to binding.run() as
+        its second argument, so the option must only be added by the REST
+        senders via _rest_body().
+        """
+        llm = self._create_llm(reject_if_busy=True)
+
+        payload = llm._create_request_payload([{"role": "user", "content": "hi"}], {})
+        assert "options" not in payload
+
+        assert llm._rest_body(payload)["options"] == {"rejectIfBusy": True}
+
+    def test_streaming_body_carries_the_option(self):
+        """The streaming send sites must use _rest_body too.
+
+        _stream/_astream build the same input object as _generate, so moving
+        the option to the send sites has to cover all four, not just the two
+        non-streaming ones.
+        """
+        captured = {}
+
+        class _FakeStream:
+            def __enter__(self):
+                raise RuntimeError("stop after capturing the request body")
+
+            def __exit__(self, *exc):
+                return False
+
+        llm = self._create_llm(reject_if_busy=True)
+
+        def fake_stream(method, url, json=None, **kwargs):
+            captured["json"] = json
+            return _FakeStream()
+
+        llm.client.stream = fake_stream
+
+        with pytest.raises(RuntimeError, match="stop after capturing"):
+            list(llm.stream("hi"))
+
+        assert captured["json"]["options"] == {"rejectIfBusy": True}
+        assert captured["json"]["stream"] is True

@@ -42,6 +42,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from langchain_cloudflare import ChatCloudflareWorkersAI
+from langchain_cloudflare._options import apply_reject_if_busy
+from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
 # Agent imports
@@ -1961,3 +1963,138 @@ class TestDynamicRoutes:
             f"{type(result.content).__name__}"
         )
         assert reasoning, "No reasoning surfaced through the fallback route"
+
+
+# MARK: - Reject If Busy Tests
+
+
+class TestRejectIfBusy:
+    """Live coverage for the rejectIfBusy capacity option over REST.
+
+    A real rejection (HTTP 429 / code 3040) only happens when Workers AI is
+    actually at capacity, so it cannot be provoked on demand. These tests
+    assert the two things that are deterministic: the option is genuinely in
+    the request body, and a normal request still succeeds with it set.
+    """
+
+    def test_chat_option_reaches_both_endpoint_formats(
+        self, account_id, api_token, ai_gateway
+    ):
+        """Both REST body shapes carry a top-level options.rejectIfBusy."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        for endpoint_format in ("workers_ai", "openai_compatible"):
+            llm = create_llm(
+                "@cf/qwen/qwen3-30b-a3b-fp8",
+                account_id,
+                api_token,
+                ai_gateway,
+                endpoint_format=endpoint_format,
+                reject_if_busy=True,
+            )
+
+            body = llm._rest_body(
+                llm._create_request_payload(
+                    [{"role": "user", "content": "hi"}],
+                    llm._translate_params_for_model(dict(llm._default_params)),
+                )
+            )
+            assert body["options"] == {"rejectIfBusy": True}, endpoint_format
+
+            result = llm.invoke("Say 'Hello World' and nothing else.")
+            text = get_text_content(result.content)
+            print(f"\n[chat/{endpoint_format}] reject_if_busy: {text[:120]}")
+            assert text.strip(), f"Empty content for {endpoint_format}"
+
+    def test_chat_without_option_sends_no_options_key(
+        self, account_id, api_token, ai_gateway
+    ):
+        """Unset means the body is byte-for-byte what it was before."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(
+            "@cf/qwen/qwen3-30b-a3b-fp8", account_id, api_token, ai_gateway
+        )
+        body = llm._rest_body(
+            llm._create_request_payload(
+                [{"role": "user", "content": "hi"}],
+                llm._translate_params_for_model(dict(llm._default_params)),
+            )
+        )
+        assert "options" not in body
+
+    def test_chat_option_alongside_model_kwargs(
+        self, account_id, api_token, ai_gateway
+    ):
+        """The field and the model_kwargs passthrough must not conflict."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(
+            "@cf/qwen/qwen3-30b-a3b-fp8",
+            account_id,
+            api_token,
+            ai_gateway,
+            reject_if_busy=True,
+            model_kwargs={"options": {"rejectIfBusy": True}},
+        )
+
+        body = llm._rest_body(
+            llm._create_request_payload(
+                [{"role": "user", "content": "hi"}],
+                llm._translate_params_for_model(dict(llm._default_params)),
+            )
+        )
+        assert body["options"] == {"rejectIfBusy": True}
+
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+        assert get_text_content(result.content).strip()
+
+    def test_embeddings_option_accepted(self, account_id, api_token, ai_gateway):
+        """The embeddings endpoint accepts the options key and still embeds."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        embeddings = CloudflareWorkersAIEmbeddings(
+            account_id=account_id,
+            api_token=api_token,
+            ai_gateway=ai_gateway,
+            reject_if_busy=True,
+        )
+        assert embeddings._embed_payload(["hello"])["options"] == {"rejectIfBusy": True}
+
+        vector = embeddings.embed_query("Hello world")
+        print(f"\n[embeddings] reject_if_busy dims: {len(vector)}")
+        assert len(vector) > 0
+
+    def test_reranker_option_accepted(self, account_id, api_token, ai_gateway):
+        """The reranker endpoint accepts the options key and still ranks."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        reranker = CloudflareWorkersAIReranker(
+            model_name="@cf/baai/bge-reranker-base",
+            account_id=account_id,
+            api_token=api_token,
+            ai_gateway=ai_gateway,
+            reject_if_busy=True,
+        )
+
+        body = apply_reject_if_busy(
+            reranker._rerank_payload("q", [{"text": "d"}], None),
+            reranker.reject_if_busy,
+        )
+        assert body["options"] == {"rejectIfBusy": True}
+
+        results = reranker.rerank(
+            query="What is the capital of France?",
+            documents=[
+                "Paris is the capital and largest city of France.",
+                "Berlin is the capital of Germany.",
+            ],
+            top_k=2,
+        )
+        print(f"\n[reranker] reject_if_busy results: {len(results)}")
+        assert len(results) > 0

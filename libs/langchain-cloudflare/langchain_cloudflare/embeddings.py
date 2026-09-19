@@ -7,6 +7,7 @@ from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
 from ._errors import TokenErrors
+from ._options import apply_reject_if_busy
 
 # MARK: - Constants
 DEFAULT_MODEL_NAME = "@cf/baai/bge-base-en-v1.5"
@@ -119,6 +120,16 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
     )
     binding: Any = Field(default=None, exclude=True)
     """Workers AI binding (env.AI) for use in Python Workers."""
+    reject_if_busy: Optional[bool] = None
+    """Fail fast instead of queueing when Workers AI is at capacity.
+
+    When True, a request that would otherwise wait in the capacity queue is
+    rejected immediately with HTTP 429 and Cloudflare error code 3040
+    ("Capacity temporarily exceeded, please try again"). Works on both the
+    REST path (sent as ``options.rejectIfBusy`` in the request body) and the
+    Workers AI binding (sent in the options argument to ``env.AI.run()``,
+    which is the only place the binding reads it from).
+    """
 
     _inference_url: str = PrivateAttr()
 
@@ -154,6 +165,11 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
+    # MARK: - Request Payload
+    def _embed_payload(self, texts: List[str]) -> Dict[str, Any]:
+        """Build the request body for an embedding batch."""
+        return apply_reject_if_busy({"text": texts}, self.reject_if_busy)
+
     # MARK: - Embed Documents
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
         """Compute doc embeddings using Cloudflare Workers AI.
@@ -177,7 +193,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             response = requests.post(
                 url=self._inference_url,
                 headers=self.headers,
-                json={"text": batch},
+                json=self._embed_payload(batch),
             )
             response.raise_for_status()
             embeddings.extend(response.json()["result"]["data"])
@@ -214,7 +230,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
                 response = await client.post(
                     url=self._inference_url,
                     headers=self.headers,
-                    json={"text": batch},
+                    json=self._embed_payload(batch),
                 )
                 response.raise_for_status()
                 embeddings.extend(response.json()["result"]["data"])
@@ -231,7 +247,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         Returns:
             List of embeddings, one for each text.
         """
-        from .bindings import convert_payload_for_binding, create_gateway_options
+        from .bindings import convert_payload_for_binding, create_binding_run_options
 
         batches = [
             texts[i : i + self.batch_size]
@@ -240,17 +256,20 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
 
         embeddings = []
 
-        # Create AI Gateway options if configured
-        gateway_options = create_gateway_options(self.ai_gateway)
+        # Gateway and rejectIfBusy both belong in the run options argument --
+        # the binding ignores rejectIfBusy inside the model input object.
+        run_options = create_binding_run_options(
+            gateway_id=self.ai_gateway,
+            reject_if_busy=self.reject_if_busy,
+        )
 
         for batch in batches:
-            payload = {"text": batch}
-            js_payload = convert_payload_for_binding(payload)
+            js_payload = convert_payload_for_binding({"text": batch})
 
-            # Call the binding with optional gateway
-            if gateway_options is not None:
+            # Call the binding with optional options
+            if run_options is not None:
                 response = await self.binding.run(
-                    self.model_name, js_payload, gateway_options
+                    self.model_name, js_payload, run_options
                 )
             else:
                 response = await self.binding.run(self.model_name, js_payload)
@@ -281,7 +300,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         response = requests.post(
             url=self._inference_url,
             headers=self.headers,
-            json={"text": [text]},
+            json=self._embed_payload([text]),
         )
         response.raise_for_status()
         return response.json()["result"]["data"][0]
@@ -308,7 +327,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             response = await client.post(
                 url=self._inference_url,
                 headers=self.headers,
-                json={"text": [text]},
+                json=self._embed_payload([text]),
             )
             response.raise_for_status()
 
