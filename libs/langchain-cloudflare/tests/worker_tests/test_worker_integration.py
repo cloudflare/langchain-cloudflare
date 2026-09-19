@@ -20,6 +20,7 @@ Note: These tests require:
 """
 
 import base64
+import os
 import time
 import uuid
 
@@ -1447,3 +1448,287 @@ class TestWorkerSessionAffinity:
             assert response.status_code == 200
             data = response.json()
             assert len(data["response"]) > 0
+
+
+# MARK: - GLM Sampling Param Passthrough Tests
+
+
+# (model, param, value) combinations the GLM registry entries must now let
+# through. Each one used to be silently popped before the request was sent.
+GLM_PASSTHROUGH_PARAMS = [
+    ("@cf/zai-org/glm-5.2", "top_k", 20),
+    ("@cf/zai-org/glm-5.2", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-5.3-flash", "top_k", 20),
+    ("@cf/zai-org/glm-5.3-flash", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-4.7-flash", "top_k", 20),
+]
+
+
+class TestWorkerGlmSamplingParams:
+    """Test GLM sampling param passthrough over the Worker AI binding.
+
+    The /sampling-params endpoint echoes back which params survived
+    MODEL_BEHAVIORS translation, so these tests distinguish a param that was
+    actually sent to the binding from one the registry silently dropped.
+    """
+
+    @pytest.mark.parametrize(
+        ("model", "param", "value"),
+        GLM_PASSTHROUGH_PARAMS,
+        ids=[f"{m}-{p}" for m, p, _ in GLM_PASSTHROUGH_PARAMS],
+    )
+    def test_sampling_param_reaches_binding(self, dev_server, model, param, value):
+        """top_k / repetition_penalty should be sent and accepted."""
+        port = dev_server
+        response = requests.post(
+            f"http://localhost:{port}/sampling-params",
+            json={
+                "model": model,
+                "message": "Say 'Hello World' and nothing else.",
+                param: value,
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        print(f"  [{model}] {param}={value} sent: {data['sent_params']}")  # noqa: T201
+
+        assert data["sent_params"].get(param) == value, f"{param} stripped for {model}"
+        assert data["response"].strip(), f"Empty content for {model} with {param}"
+
+    def test_glm_4_7_flash_tool_choice_forces_tool_call(self, dev_server):
+        """tool_choice should be sent to glm-4.7-flash and force a tool call."""
+        port = dev_server
+        model = "@cf/zai-org/glm-4.7-flash"
+        response = requests.post(
+            f"http://localhost:{port}/sampling-params",
+            json={
+                "model": model,
+                "message": "What's the weather in San Francisco?",
+                "tool_choice": "get_weather",
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        print(f"  [{model}] tool_calls: {data['tool_calls']}")  # noqa: T201
+
+        assert data["tool_calls"], f"tool_choice did not force a tool call for {model}"
+        assert data["tool_calls"][0]["name"] == "get_weather"
+
+    @pytest.mark.parametrize(
+        ("param", "value"),
+        [("max_tokens", 64), ("repetition_penalty", 1.05)],
+    )
+    def test_glm_4_7_flash_still_strips_broken_params(self, dev_server, param, value):
+        """max_tokens (null content) and repetition_penalty (timeout) stay stripped."""
+        port = dev_server
+        model = "@cf/zai-org/glm-4.7-flash"
+        response = requests.post(
+            f"http://localhost:{port}/sampling-params",
+            json={
+                "model": model,
+                "message": "Say 'Hello World' and nothing else.",
+                param: value,
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=60,
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        print(f"  [{model}] {param}={value} sent: {data['sent_params']}")  # noqa: T201
+
+        assert param not in data["sent_params"], (
+            f"{param} should still be stripped for {model}"
+        )
+        assert data["response"].strip(), f"Empty content for {model} with {param}"
+
+
+# MARK: - AI Gateway Dynamic Route Tests
+
+
+def dynamic_route(env_var: str):
+    """Build a ``dynamic/<route>`` model string from a route-name env var."""
+    route = os.environ.get(env_var)
+    return f"dynamic/{route}" if route else None
+
+
+# Routes provisioned on the AI_GATEWAY gateway. rt-fallback is the load-bearing
+# one: its name contains no registry family substring, so before dynamic routes
+# were excluded from family matching it silently got the default behavior and
+# dropped reasoning. rt-qwen masks the bug because "qwen" matches a registry key.
+DYNAMIC_ROUTE_QWEN = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_QWEN")
+DYNAMIC_ROUTE_GLM = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_GLM")
+DYNAMIC_ROUTE_FALLBACK = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_FALLBACK")
+
+AI_GATEWAY = os.environ.get("AI_GATEWAY")
+
+
+@pytest.mark.skipif(not AI_GATEWAY, reason="AI_GATEWAY env var not set")
+class TestWorkerDynamicRoutes:
+    """Live coverage for AI Gateway dynamic routes over the AI binding.
+
+    The gateway id is required -- the binding raises ``AiGatewayError: 7003``
+    without it. Streaming is omitted because bindings do not stream.
+
+    rt-fallback rate-limits its primary node to 1 request / 60 s, which is
+    what exercises the fallback path. Its test makes a single call and accepts
+    either node's answer, since both Qwen and GLM are reasoning models.
+    """
+
+    @staticmethod
+    def _post(port, model, mode="invoke", **body):
+        response = requests.post(
+            f"http://localhost:{port}/dynamic-route",
+            json={"model": model, "gateway_id": AI_GATEWAY, "mode": mode, **body},
+            headers={"Content-Type": "application/json"},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_invoke(self, dev_server):
+        """A dynamic route should answer a plain invoke over the binding."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN)
+
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] invoke: {data['response'][:200]}")  # noqa: T201
+        assert "hello" in data["response"].lower()
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_GLM, reason="GLM route env var not set")
+    def test_dynamic_route_invoke_second_route(self, dev_server):
+        """A second route pointing at a different family should also work."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_GLM)
+
+        print(f"  [{DYNAMIC_ROUTE_GLM}] invoke: {data['response'][:200]}")  # noqa: T201
+        assert "hello" in data["response"].lower()
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_batch(self, dev_server):
+        """abatch() should work through a dynamic route."""
+        data = self._post(
+            dev_server,
+            DYNAMIC_ROUTE_QWEN,
+            mode="batch",
+            messages=["Say 'Hello' and nothing else.", "Say 'World' and nothing else."],
+        )
+
+        assert data["count"] == 2
+        for i, text in enumerate(data["results"]):
+            print(f"  [{DYNAMIC_ROUTE_QWEN}] batch {i}: {text[:100]}")  # noqa: T201
+            assert text.strip(), f"Empty content for batch result {i}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_tool_calling(self, dev_server):
+        """Tool calling should work through a dynamic route."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN, mode="tools")
+
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] tool_calls: {data['tool_calls']}")  # noqa: T201
+        assert data["tool_calls"], "No tool call made through dynamic route"
+        assert data["tool_calls"][0]["name"] == "get_weather"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_multi_turn_tool_calling(self, dev_server):
+        """Tool result history should round-trip through a dynamic route."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN, mode="multi-turn")
+
+        assert data["tool_calls"], "No tool call made on the first turn"
+        final = data.get("final_response", "")
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] multi-turn final: {final[:200]}")  # noqa: T201
+        assert final.strip(), "Empty final answer after tool result"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    @pytest.mark.parametrize("mode", ["structured", "structured-json-schema"])
+    def test_dynamic_route_structured_output(self, dev_server, mode):
+        """Structured output should work through a dynamic route."""
+        data = self._post(dev_server, DYNAMIC_ROUTE_QWEN, mode=mode)
+
+        print(f"  [{DYNAMIC_ROUTE_QWEN}] {mode}: {data['extracted']}")  # noqa: T201
+        assert data["extracted"] is not None
+        assert "announcements" in data["extracted"]
+
+    @pytest.mark.skipif(
+        not DYNAMIC_ROUTE_FALLBACK, reason="Fallback route env var not set"
+    )
+    def test_dynamic_route_surfaces_reasoning(self, dev_server):
+        """Reasoning must surface on a route whose name has no family substring.
+
+        This is the regression the issue describes: rt-fallback matched no
+        registry key, so the old registry gate suppressed reasoning entirely.
+        Both the primary (Qwen) and the fallback (GLM) are reasoning models,
+        so either node satisfies this -- a rate-limited fallback is a pass.
+        """
+        data = self._post(dev_server, DYNAMIC_ROUTE_FALLBACK, mode="reasoning")
+
+        reasoning = data.get("reasoning_content") or ""
+        print(f"  [{DYNAMIC_ROUTE_FALLBACK}] reasoning: {reasoning[:200]}")  # noqa: T201
+
+        assert data["has_reasoning_content"], (
+            "No reasoning surfaced through the fallback route "
+            f"(content_type={data['content_type']})"
+        )
+        assert reasoning.strip()
+
+
+# MARK: - Reject If Busy Tests
+
+
+class TestWorkerRejectIfBusy:
+    """Live coverage for the rejectIfBusy capacity option over the AI binding.
+
+    The binding reads rejectIfBusy only from the options argument of
+    env.AI.run() and silently ignores it inside the model input object, so
+    these tests assert on the options object the handler built. A real
+    rejection (429 / 3040) needs Workers AI to actually be at capacity and
+    cannot be provoked, so the second assertion is that the call still
+    succeeds with the option set.
+    """
+
+    @staticmethod
+    def _post(port, target, **body):
+        response = requests.post(
+            f"http://localhost:{port}/reject-if-busy",
+            json={"target": target, **body},
+            headers={"Content-Type": "application/json"},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def test_chat_option_reaches_run_options(self, dev_server):
+        """Chat: the flag lands in the third argument to env.AI.run()."""
+        data = self._post(dev_server, "chat")
+
+        print(f"  [chat] run_options: {data['run_options']}")  # noqa: T201
+        assert data["run_options"]["rejectIfBusy"] is True
+        assert data["response"].strip(), "Empty content with reject_if_busy set"
+
+    def test_embeddings_option_reaches_run_options(self, dev_server):
+        """Embeddings: same options object, and the call still embeds."""
+        data = self._post(dev_server, "embeddings")
+
+        print(f"  [embeddings] run_options: {data['run_options']}")  # noqa: T201
+        assert data["run_options"]["rejectIfBusy"] is True
+        assert data["dimensions"] > 0
+
+    def test_reranker_option_reaches_run_options(self, dev_server):
+        """Reranker: same options object, and the call still ranks."""
+        data = self._post(dev_server, "rerank")
+
+        print(f"  [rerank] run_options: {data['run_options']}")  # noqa: T201
+        assert data["run_options"]["rejectIfBusy"] is True
+        assert data["count"] > 0
+
+    @pytest.mark.parametrize("target", ["chat", "embeddings", "rerank"])
+    def test_option_absent_when_not_requested(self, dev_server, target):
+        """Unset must not put rejectIfBusy in the options object at all."""
+        data = self._post(dev_server, target, reject_if_busy=False)
+
+        run_options = data["run_options"]
+        print(f"  [{target}] run_options without flag: {run_options}")  # noqa: T201
+        assert run_options is None or "rejectIfBusy" not in run_options

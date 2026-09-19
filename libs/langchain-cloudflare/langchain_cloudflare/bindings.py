@@ -44,6 +44,9 @@ def create_gateway_options(gateway_id: Optional[str]) -> Any:
     When using Workers AI bindings with AI Gateway, you pass a third parameter:
     await env.AI.run(model, payload, { gateway: { id: "my-gateway" } })
 
+    Kept for backwards compatibility; it is a narrow special case of
+    :func:`create_binding_run_options`, which is what new code should use.
+
     Args:
         gateway_id: The AI Gateway ID (name) to route requests through
 
@@ -51,35 +54,28 @@ def create_gateway_options(gateway_id: Optional[str]) -> Any:
         JS-compatible options object in Pyodide, or Python dict otherwise.
         Returns None if gateway_id is not provided.
     """
-    if not gateway_id:
-        return None
-
-    options = {"gateway": {"id": gateway_id}}
-
-    try:
-        import json
-
-        from js import JSON  # type: ignore[import-not-found]
-
-        json_str = json.dumps(options)
-        return JSON.parse(json_str)
-    except ImportError:
-        return options
+    return create_binding_run_options(gateway_id=gateway_id)
 
 
 def create_binding_run_options(
     gateway_id: Optional[str] = None,
     session_id: Optional[str] = None,
+    reject_if_busy: Optional[bool] = None,
 ) -> Any:
     """Create the options object (third parameter) for env.AI.run().
 
-    Combines AI Gateway config and session affinity headers into a single
-    options object passed as the third parameter to the Workers AI binding.
+    Combines AI Gateway config, session affinity headers, and the
+    rejectIfBusy capacity option into a single options object passed as the
+    third parameter to the Workers AI binding.
 
     Args:
         gateway_id: Optional AI Gateway ID for routing requests.
         session_id: Optional session ID for prompt caching via
             x-session-affinity header.
+        reject_if_busy: When True, emits ``rejectIfBusy`` so Workers AI fails
+            the request instead of queueing it when capacity is unavailable.
+            Per Cloudflare's docs this belongs in this options object only --
+            it is ignored inside the model input object.
 
     Returns:
         JS-compatible options object in Pyodide, Python dict otherwise,
@@ -92,6 +88,9 @@ def create_binding_run_options(
 
     if session_id:
         options["headers"] = {"x-session-affinity": session_id}
+
+    if reject_if_busy:
+        options["rejectIfBusy"] = True
 
     if not options:
         return None

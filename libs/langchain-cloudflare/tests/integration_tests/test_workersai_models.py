@@ -42,6 +42,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
 from langchain_cloudflare import ChatCloudflareWorkersAI
+from langchain_cloudflare._options import apply_reject_if_busy
+from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
 # Agent imports
@@ -233,6 +235,7 @@ def create_llm(
     api_token: str,
     ai_gateway: Optional[str] = None,
     endpoint_format: str = "workers_ai",
+    **kwargs,
 ):
     """Create a ChatCloudflareWorkersAI instance."""
     return ChatCloudflareWorkersAI(
@@ -242,6 +245,7 @@ def create_llm(
         temperature=0.0,
         ai_gateway=ai_gateway,
         endpoint_format=endpoint_format,
+        **kwargs,
     )
 
 
@@ -259,6 +263,17 @@ def get_text_content(content):
         ]
         return " ".join(text_parts)
     return content or ""
+
+
+def extract_reasoning(content) -> str:
+    """Return the first thinking block's text, or '' when there is none."""
+    if isinstance(content, list):
+        blocks = [
+            b for b in content if isinstance(b, dict) and b.get("type") == "thinking"
+        ]
+        if blocks:
+            return blocks[0]["thinking"]
+    return ""
 
 
 class TestStructuredOutput:
@@ -831,6 +846,100 @@ class TestBasicInvoke:
             assert result.content, f"Empty content for result {i} for {model}"
 
 
+# MARK: - GLM Sampling Param Passthrough Tests
+
+
+# (model, param, value) combinations the GLM registry entries must now let
+# through. Each one used to be silently popped before the request was sent.
+GLM_PASSTHROUGH_PARAMS = [
+    ("@cf/zai-org/glm-5.2", "top_k", 20),
+    ("@cf/zai-org/glm-5.2", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-5.3-flash", "top_k", 20),
+    ("@cf/zai-org/glm-5.3-flash", "repetition_penalty", 1.05),
+    ("@cf/zai-org/glm-4.7-flash", "top_k", 20),
+]
+
+
+class TestGlmSamplingParams:
+    """Live coverage for the params GLM models actually accept.
+
+    The registry used to strip top_k / repetition_penalty from every GLM
+    model and tool_choice from glm-4.7-flash. Each test both asserts the
+    param survives request translation and confirms the live model accepts
+    it, so a regression in either the registry or the model is caught.
+    """
+
+    @pytest.mark.parametrize(
+        ("model", "param", "value"),
+        GLM_PASSTHROUGH_PARAMS,
+        ids=[f"{m}-{p}" for m, p, _ in GLM_PASSTHROUGH_PARAMS],
+    )
+    def test_sampling_param_reaches_model(
+        self, model, param, value, account_id, api_token, ai_gateway
+    ):
+        """top_k / repetition_penalty should be sent and accepted."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(model, account_id, api_token, ai_gateway, **{param: value})
+
+        translated = llm._translate_params_for_model(dict(llm._default_params))
+        assert translated.get(param) == value, f"{param} stripped for {model}"
+
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{model}] {param}={value}: {text[:200]}")
+        assert text.strip(), f"Empty content for {model} with {param}={value}"
+
+    def test_glm_4_7_flash_tool_choice_forces_tool_call(
+        self, account_id, api_token, ai_gateway
+    ):
+        """tool_choice should be sent to glm-4.7-flash and force a tool call."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        model = "@cf/zai-org/glm-4.7-flash"
+        llm = create_llm(model, account_id, api_token, ai_gateway)
+        llm_with_tools = llm.bind_tools([get_weather], tool_choice="get_weather")
+
+        assert llm_with_tools.kwargs["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "get_weather"},
+        }
+
+        result = llm_with_tools.invoke("What's the weather in San Francisco?")
+
+        print(f"\n[{model}] tool_choice tool_calls: {result.tool_calls}")
+        assert result.tool_calls, f"tool_choice did not force a tool call for {model}"
+        assert result.tool_calls[0]["name"] == "get_weather"
+
+    @pytest.mark.parametrize("param", ["max_tokens", "repetition_penalty"])
+    def test_glm_4_7_flash_still_strips_broken_params(
+        self, param, account_id, api_token, ai_gateway
+    ):
+        """max_tokens (null content) and repetition_penalty (timeout) stay stripped.
+
+        Setting either one live must still produce a normal response, which
+        only holds while the registry drops them before the request is sent.
+        """
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        model = "@cf/zai-org/glm-4.7-flash"
+        value = 64 if param == "max_tokens" else 1.05
+        llm = create_llm(model, account_id, api_token, ai_gateway, **{param: value})
+
+        translated = llm._translate_params_for_model(dict(llm._default_params))
+        assert param not in translated, f"{param} should still be stripped for {model}"
+
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{model}] {param}={value} (stripped): {text[:200]}")
+        assert text.strip(), f"Empty content for {model} with {param}={value}"
+
+
 # MARK: - Reasoning Content Tests
 
 
@@ -854,15 +963,8 @@ class TestReasoningContent:
 
     @staticmethod
     def _extract_reasoning(result):
-        """Extract reasoning from content blocks."""
-        if isinstance(result.content, list):
-            thinking_blocks = [
-                b
-                for b in result.content
-                if isinstance(b, dict) and b.get("type") == "thinking"
-            ]
-            return thinking_blocks[0]["thinking"] if thinking_blocks else ""
-        return ""
+        """Extract reasoning from a result's content blocks."""
+        return extract_reasoning(result.content)
 
     @pytest.mark.parametrize("model", REASONING_MODELS)
     def test_reasoning_content_sync(self, model, account_id, api_token, ai_gateway):
@@ -1667,3 +1769,332 @@ class TestAIGatewayHeaders:
         result = llm.invoke("Say hello.")
         text = get_text_content(result)
         assert text, "Empty response with combined headers"
+
+
+# MARK: - AI Gateway Dynamic Route Tests
+
+
+def dynamic_route(env_var: str) -> Optional[str]:
+    """Build a ``dynamic/<route>`` model string from a route-name env var."""
+    route = os.environ.get(env_var)
+    return f"dynamic/{route}" if route else None
+
+
+# Routes provisioned on the AI_GATEWAY gateway. rt-fallback is the load-bearing
+# one: its name contains no registry family substring, so before dynamic routes
+# were excluded from family matching it silently got the default behavior and
+# dropped reasoning. rt-qwen masks the bug because "qwen" matches a registry key.
+DYNAMIC_ROUTE_QWEN = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_QWEN")
+DYNAMIC_ROUTE_GLM = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_GLM")
+DYNAMIC_ROUTE_FALLBACK = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_FALLBACK")
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AI_GATEWAY"),
+    reason="AI_GATEWAY env var not set",
+)
+class TestDynamicRoutes:
+    """Live coverage for AI Gateway dynamic routes over REST.
+
+    A dynamic route resolves server-side, so the model string carries no
+    family information and ``get_model_behavior()`` must return defaults.
+    Reasoning therefore has to be detected from the response.
+
+    The gateway is required: without the ``cf-aig-gateway-id`` header the
+    endpoint rejects the route with ``7003 Dynamic route not found``.
+
+    Over REST, dynamic routes only resolve on the OpenAI-compatible endpoint
+    (``/ai/v1/chat/completions``). The Workers AI endpoint builds the model
+    into the path, and ``/ai/run/dynamic/<route>`` is rejected with
+    ``7000 No route for that URI``.
+
+    rt-fallback rate-limits its primary node to 1 request / 60 s, which is
+    what exercises the fallback path. Its tests make a single call each and
+    accept either node's answer, since both Qwen and GLM are reasoning models.
+    """
+
+    @pytest.fixture
+    def gateway(self):
+        return os.environ["AI_GATEWAY"]
+
+    def _llm(self, model, gateway, **kwargs):
+        return ChatCloudflareWorkersAI(
+            model=model,
+            ai_gateway=gateway,
+            temperature=0.0,
+            endpoint_format="openai_compatible",
+            **kwargs,
+        )
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_invoke(self, gateway):
+        """A dynamic route should answer a plain invoke."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] invoke: {text[:200]}")
+        assert "hello" in text.lower(), f"Unexpected response: {text[:200]}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_GLM, reason="GLM route env var not set")
+    def test_dynamic_route_invoke_second_route(self, gateway):
+        """A second route pointing at a different family should also work."""
+        llm = self._llm(DYNAMIC_ROUTE_GLM, gateway)
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+
+        text = get_text_content(result.content)
+        print(f"\n[{DYNAMIC_ROUTE_GLM}] invoke: {text[:200]}")
+        assert "hello" in text.lower(), f"Unexpected response: {text[:200]}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_stream(self, gateway):
+        """Streaming is REST-only and should work through a dynamic route."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+
+        chunks = list(llm.stream("Count from 1 to 5, separated by spaces."))
+        streamed = "".join(get_text_content(c.content) for c in chunks)
+
+        print(
+            f"\n[{DYNAMIC_ROUTE_QWEN}] stream ({len(chunks)} chunks): {streamed[:200]}"
+        )
+        assert len(chunks) > 1, "Expected more than one streamed chunk"
+        assert streamed.strip(), "Streamed content was empty"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_batch(self, gateway):
+        """batch() should work through a dynamic route."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+
+        results = llm.batch(
+            ["Say 'Hello' and nothing else.", "Say 'World' and nothing else."],
+            config={"max_concurrency": 2},
+        )
+
+        assert len(results) == 2
+        for i, result in enumerate(results):
+            text = get_text_content(result.content)
+            print(f"\n[{DYNAMIC_ROUTE_QWEN}] batch {i}: {text[:100]}")
+            assert text.strip(), f"Empty content for batch result {i}"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_tool_calling(self, gateway):
+        """Tool calling should work through a dynamic route."""
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        llm_with_tools = llm.bind_tools([get_weather, get_stock_price])
+
+        result = llm_with_tools.invoke("What's the weather in San Francisco?")
+
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] tool_calls: {result.tool_calls}")
+        assert result.tool_calls, "No tool call made through dynamic route"
+        assert result.tool_calls[0]["name"] == "get_weather"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    def test_dynamic_route_multi_turn_tool_calling(self, gateway):
+        """Tool result history should round-trip through a dynamic route."""
+        from langchain_core.messages import ToolMessage
+
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        llm_with_tools = llm.bind_tools([get_weather, get_stock_price])
+
+        messages = [HumanMessage(content="What's the weather in San Francisco?")]
+        response1 = llm_with_tools.invoke(messages)
+        assert response1.tool_calls, "No tool call made on the first turn"
+
+        tool_call = response1.tool_calls[0]
+        tool_result = get_weather.invoke(tool_call["args"])
+        messages.append(response1)
+        messages.append(
+            ToolMessage(
+                content=tool_result,
+                tool_call_id=tool_call["id"],
+                name=tool_call["name"],
+            )
+        )
+
+        response2 = llm_with_tools.invoke(messages)
+        text = get_text_content(response2.content)
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] multi-turn final: {text[:200]}")
+        assert text.strip(), "Empty final answer after tool result"
+
+    @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
+    @pytest.mark.parametrize("method", [None, "json_schema"])
+    def test_dynamic_route_structured_output(self, gateway, method):
+        """Structured output should work through a dynamic route.
+
+        method=None exercises the default tool-calling path; 'json_schema'
+        exercises the json_object path a default ModelBehavior selects.
+        """
+        llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
+        kwargs = {"method": method} if method else {}
+        structured_llm = llm.with_structured_output(Data, **kwargs)
+
+        result = structured_llm.invoke(
+            "Extract announcements from this text:\n\n"
+            "Acme Corp announced a strategic partnership with TechGiant Inc."
+        )
+
+        print(f"\n[{DYNAMIC_ROUTE_QWEN}] structured ({method or 'default'}): {result}")
+        assert result is not None
+        assert isinstance(result, (dict, Data))
+        if isinstance(result, dict):
+            assert "announcements" in result
+        else:
+            assert hasattr(result, "announcements")
+
+    @pytest.mark.skipif(
+        not DYNAMIC_ROUTE_FALLBACK, reason="Fallback route env var not set"
+    )
+    def test_dynamic_route_surfaces_reasoning(self, gateway):
+        """Reasoning must surface on a route whose name has no family substring.
+
+        This is the regression the issue describes: rt-fallback matched no
+        registry key, so the old registry gate suppressed reasoning entirely.
+        Both the primary (Qwen) and the fallback (GLM) are reasoning models,
+        so either node satisfies this -- a rate-limited fallback is a pass.
+        """
+        llm = self._llm(DYNAMIC_ROUTE_FALLBACK, gateway)
+        result = llm.invoke("What is 25 * 37? Think step by step.")
+
+        reasoning = extract_reasoning(result.content)
+        print(f"\n[{DYNAMIC_ROUTE_FALLBACK}] reasoning: {reasoning[:200]}")
+
+        assert isinstance(result.content, list), (
+            "Expected content blocks carrying reasoning, got "
+            f"{type(result.content).__name__}"
+        )
+        assert reasoning, "No reasoning surfaced through the fallback route"
+
+
+# MARK: - Reject If Busy Tests
+
+
+class TestRejectIfBusy:
+    """Live coverage for the rejectIfBusy capacity option over REST.
+
+    A real rejection (HTTP 429 / code 3040) only happens when Workers AI is
+    actually at capacity, so it cannot be provoked on demand. These tests
+    assert the two things that are deterministic: the option is genuinely in
+    the request body, and a normal request still succeeds with it set.
+    """
+
+    def test_chat_option_reaches_both_endpoint_formats(
+        self, account_id, api_token, ai_gateway
+    ):
+        """Both REST body shapes carry a top-level options.rejectIfBusy."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        for endpoint_format in ("workers_ai", "openai_compatible"):
+            llm = create_llm(
+                "@cf/qwen/qwen3-30b-a3b-fp8",
+                account_id,
+                api_token,
+                ai_gateway,
+                endpoint_format=endpoint_format,
+                reject_if_busy=True,
+            )
+
+            body = llm._rest_body(
+                llm._create_request_payload(
+                    [{"role": "user", "content": "hi"}],
+                    llm._translate_params_for_model(dict(llm._default_params)),
+                )
+            )
+            assert body["options"] == {"rejectIfBusy": True}, endpoint_format
+
+            result = llm.invoke("Say 'Hello World' and nothing else.")
+            text = get_text_content(result.content)
+            print(f"\n[chat/{endpoint_format}] reject_if_busy: {text[:120]}")
+            assert text.strip(), f"Empty content for {endpoint_format}"
+
+    def test_chat_without_option_sends_no_options_key(
+        self, account_id, api_token, ai_gateway
+    ):
+        """Unset means the body is byte-for-byte what it was before."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(
+            "@cf/qwen/qwen3-30b-a3b-fp8", account_id, api_token, ai_gateway
+        )
+        body = llm._rest_body(
+            llm._create_request_payload(
+                [{"role": "user", "content": "hi"}],
+                llm._translate_params_for_model(dict(llm._default_params)),
+            )
+        )
+        assert "options" not in body
+
+    def test_chat_option_alongside_model_kwargs(
+        self, account_id, api_token, ai_gateway
+    ):
+        """The field and the model_kwargs passthrough must not conflict."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        llm = create_llm(
+            "@cf/qwen/qwen3-30b-a3b-fp8",
+            account_id,
+            api_token,
+            ai_gateway,
+            reject_if_busy=True,
+            model_kwargs={"options": {"rejectIfBusy": True}},
+        )
+
+        body = llm._rest_body(
+            llm._create_request_payload(
+                [{"role": "user", "content": "hi"}],
+                llm._translate_params_for_model(dict(llm._default_params)),
+            )
+        )
+        assert body["options"] == {"rejectIfBusy": True}
+
+        result = llm.invoke("Say 'Hello World' and nothing else.")
+        assert get_text_content(result.content).strip()
+
+    def test_embeddings_option_accepted(self, account_id, api_token, ai_gateway):
+        """The embeddings endpoint accepts the options key and still embeds."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        embeddings = CloudflareWorkersAIEmbeddings(
+            account_id=account_id,
+            api_token=api_token,
+            ai_gateway=ai_gateway,
+            reject_if_busy=True,
+        )
+        assert embeddings._embed_payload(["hello"])["options"] == {"rejectIfBusy": True}
+
+        vector = embeddings.embed_query("Hello world")
+        print(f"\n[embeddings] reject_if_busy dims: {len(vector)}")
+        assert len(vector) > 0
+
+    def test_reranker_option_accepted(self, account_id, api_token, ai_gateway):
+        """The reranker endpoint accepts the options key and still ranks."""
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+
+        reranker = CloudflareWorkersAIReranker(
+            model_name="@cf/baai/bge-reranker-base",
+            account_id=account_id,
+            api_token=api_token,
+            ai_gateway=ai_gateway,
+            reject_if_busy=True,
+        )
+
+        body = apply_reject_if_busy(
+            reranker._rerank_payload("q", [{"text": "d"}], None),
+            reranker.reject_if_busy,
+        )
+        assert body["options"] == {"rejectIfBusy": True}
+
+        results = reranker.rerank(
+            query="What is the capital of France?",
+            documents=[
+                "Paris is the capital and largest city of France.",
+                "Berlin is the capital of Germany.",
+            ],
+            top_k=2,
+        )
+        print(f"\n[reranker] reject_if_busy results: {len(results)}")
+        assert len(results) > 0

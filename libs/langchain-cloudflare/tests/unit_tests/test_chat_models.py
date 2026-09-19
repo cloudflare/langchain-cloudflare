@@ -17,8 +17,11 @@ from langchain_tests.unit_tests import ChatModelUnitTests
 from pydantic import BaseModel as PydanticBaseModel
 
 from langchain_cloudflare.chat_models import (
+    DEFAULT_MODEL_BEHAVIOR,
+    MODEL_BEHAVIORS,
     ChatCloudflareWorkersAI,
     _convert_message_to_dict,
+    get_model_behavior,
 )
 
 
@@ -94,11 +97,20 @@ class TestReasoningContent:
     """Test reasoning_content extraction in _create_chat_result."""
 
     def _create_llm(self, model: str = "@cf/qwen/qwen3-30b-a3b-fp8"):
-        """Create a ChatCloudflareWorkersAI instance for testing."""
+        """Create a ChatCloudflareWorkersAI instance for testing.
+
+        Dynamic routes only construct on the OpenAI-compatible endpoint over
+        REST; the format is irrelevant to the response parsing under test.
+        """
+        kwargs = {}
+        if model.lower().startswith("dynamic/"):
+            kwargs["endpoint_format"] = "openai_compatible"
+
         return ChatCloudflareWorkersAI(
             account_id="test_account",
             api_token="test_token",
             model=model,
+            **kwargs,
         )
 
     def test_reasoning_content_extracted_for_qwen(self):
@@ -156,9 +168,23 @@ class TestReasoningContent:
         assert isinstance(msg.content, str)
         assert msg.content == "Hello!"
 
-    def test_no_reasoning_content_for_llama(self):
-        """Llama model should not extract reasoning_content even if present."""
-        llm = self._create_llm("@cf/meta/llama-3.3-70b-instruct-fp8-fast")
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            "@cf/acme/brand-new-model-with-no-registry-entry",
+            "dynamic/rt-fallback",
+        ],
+        ids=["registered-non-reasoning", "unregistered", "dynamic-route"],
+    )
+    @pytest.mark.parametrize("field", ["reasoning_content", "reasoning"])
+    def test_reasoning_detected_regardless_of_registry(self, model, field):
+        """Reasoning is read off the response, not gated on the registry.
+
+        A dynamic route resolves server-side and a newly released model has
+        no registry entry, so neither can be looked up ahead of the call.
+        """
+        llm = self._create_llm(model)
         response = {
             "result": {
                 "choices": [
@@ -166,7 +192,38 @@ class TestReasoningContent:
                         "message": {
                             "role": "assistant",
                             "content": "Hello!",
-                            "reasoning_content": "Some text",
+                            field: "Some reasoning",
+                        }
+                    }
+                ],
+            }
+        }
+
+        result = llm._create_chat_result(response)
+        msg = result.generations[0].message
+
+        assert isinstance(msg.content, list)
+        thinking_blocks = [b for b in msg.content if b["type"] == "thinking"]
+        assert len(thinking_blocks) == 1
+        assert thinking_blocks[0]["thinking"] == "Some reasoning"
+
+    def test_null_reasoning_key_stays_plain_string(self):
+        """A null `reasoning` key must not produce content blocks.
+
+        This is the live Mistral response shape: the key is always present
+        and always null (confirmed 3/3), which is why dropping the registry
+        gate is a no-op for it.
+        """
+        llm = self._create_llm("@cf/mistralai/mistral-small-3.1-24b-instruct")
+        response = {
+            "result": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Hello!",
+                            "reasoning": None,
+                            "reasoning_content": None,
                         }
                     }
                 ],
@@ -444,23 +501,27 @@ class TestReasoningContent:
         assert len(msg.tool_calls) == 1
         assert msg.tool_calls[0]["name"] == "get_weather"
 
-    def test_glm_unsupported_params_removed(self):
-        """GLM unsupported params should be removed."""
-        llm = self._create_llm("@cf/zai-org/glm-4.7-flash")
-        params = {
-            "max_tokens": 100,
-            "top_k": 50,
-            "repetition_penalty": 1.1,
-            "tool_choice": "required",
-            "temperature": 0.7,
-        }
+    SAMPLING_PARAMS = {
+        "max_tokens": 100,
+        "top_k": 50,
+        "repetition_penalty": 1.1,
+        "tool_choice": "required",
+        "temperature": 0.7,
+    }
 
-        translated = llm._translate_params_for_model(params)
+    def test_glm_unsupported_params_removed(self):
+        """glm-4.7-flash should only drop max_tokens and repetition_penalty.
+
+        top_k and tool_choice are accepted by the model and must survive.
+        """
+        llm = self._create_llm("@cf/zai-org/glm-4.7-flash")
+
+        translated = llm._translate_params_for_model(dict(self.SAMPLING_PARAMS))
 
         assert "max_tokens" not in translated
-        assert "top_k" not in translated
         assert "repetition_penalty" not in translated
-        assert "tool_choice" not in translated
+        assert translated["top_k"] == 50
+        assert translated["tool_choice"] == "required"
         assert translated["temperature"] == 0.7
 
     @pytest.mark.parametrize(
@@ -468,23 +529,85 @@ class TestReasoningContent:
         ["@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"],
     )
     def test_modern_glm_preserves_supported_params(self, model):
-        """Modern GLM models should keep parameters supported by their schemas."""
+        """Modern GLM models should keep every parameter their schemas accept."""
         llm = self._create_llm(model)
-        params = {
-            "max_tokens": 100,
-            "top_k": 50,
-            "repetition_penalty": 1.1,
-            "tool_choice": "required",
-            "temperature": 0.7,
-        }
 
-        translated = llm._translate_params_for_model(params)
+        translated = llm._translate_params_for_model(dict(self.SAMPLING_PARAMS))
 
-        assert translated["max_tokens"] == 100
-        assert "top_k" not in translated
-        assert "repetition_penalty" not in translated
-        assert translated["tool_choice"] == "required"
-        assert translated["temperature"] == 0.7
+        assert translated == self.SAMPLING_PARAMS
+
+    def test_modern_glm_does_not_fall_back_to_legacy_entry(self):
+        """glm-5.x keys must be matched before the legacy 'glm' entry.
+
+        get_model_behavior() returns the first substring match in insertion
+        order, so reordering MODEL_BEHAVIORS would silently route glm-5.x
+        through the glm-4.7-flash restrictions.
+        """
+        families = list(MODEL_BEHAVIORS)
+        assert families.index("glm-5.3-flash") < families.index("glm")
+        assert families.index("glm-5.2") < families.index("glm")
+
+        legacy = MODEL_BEHAVIORS["glm"]
+        assert legacy.unsupported_params == ("max_tokens", "repetition_penalty")
+
+        for model in ("@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"):
+            behavior = get_model_behavior(model)
+            assert behavior is not legacy
+            assert behavior.unsupported_params == ()
+
+        assert get_model_behavior("@cf/zai-org/glm-4.7-flash") is legacy
+
+
+# MARK: - Model Behavior Lookup Tests
+
+
+class TestGetModelBehavior:
+    """Test registry lookup, including AI Gateway dynamic routes."""
+
+    # One representative model id per registry family, so a family that stops
+    # resolving is caught here rather than in a live suite.
+    FAMILY_MODELS = {
+        "@cf/zai-org/glm-5.3-flash": "glm-5.3-flash",
+        "@cf/zai-org/glm-5.2": "glm-5.2",
+        "@cf/zai-org/glm-4.7-flash": "glm",
+        "@cf/google/gemma-4-26b-a4b-it": "gemma",
+        "@cf/openai/gpt-oss-120b": "gpt-oss",
+        "@cf/deepseek-ai/deepseek-v4-pro-0813": "deepseek",
+        "@cf/moonshotai/kimi-k2.6": "kimi",
+        "@cf/meta/llama-3.3-70b-instruct-fp8-fast": "llama",
+        "@cf/mistralai/mistral-small-3.1-24b-instruct": "mistral",
+        "@cf/nvidia/nemotron-3-120b-a12b": "nemotron",
+        "@cf/qwen/qwen3-30b-a3b-fp8": "qwen",
+    }
+
+    @pytest.mark.parametrize(("model", "family"), sorted(FAMILY_MODELS.items()))
+    def test_model_ids_resolve_to_their_family(self, model, family):
+        """Non-dynamic model ids keep resolving exactly as before."""
+        assert get_model_behavior(model) is MODEL_BEHAVIORS[family]
+
+    def test_unknown_model_falls_back_to_default(self):
+        """A model with no registry entry gets the default behavior."""
+        assert get_model_behavior("@cf/acme/brand-new-model") is DEFAULT_MODEL_BEHAVIOR
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "dynamic/rt-fallback",
+            "dynamic/rt-qwen",
+            "dynamic/rt-glm",
+            "dynamic/mistral-backup",
+            "dynamic/my-llama-route",
+            "DYNAMIC/My-Gemma-Route",
+        ],
+    )
+    def test_dynamic_routes_never_family_match(self, model):
+        """Route names are user-chosen, so a family substring means nothing.
+
+        An AI Gateway dynamic route resolves server-side and can fall back to
+        a different provider between calls, so no family can be inferred
+        before the request is sent.
+        """
+        assert get_model_behavior(model) is DEFAULT_MODEL_BEHAVIOR
 
 
 # MARK: - GPT-OSS Model Tests
@@ -1254,3 +1377,200 @@ class TestStreamingSafeUsage:
             "completion_tokens": 1,
             "total_tokens": 40,
         }
+
+
+# MARK: - Reject If Busy Tests
+
+
+class TestRejectIfBusy:
+    """Test the reject_if_busy field reaches the REST body and binding options."""
+
+    @staticmethod
+    def _create_llm(**kwargs):
+        return ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="@cf/qwen/qwen3-30b-a3b-fp8",
+            **kwargs,
+        )
+
+    def _payload(self, **kwargs):
+        """Build the body a REST send site would actually post."""
+        llm = self._create_llm(**kwargs)
+        return llm._rest_body(
+            llm._create_request_payload(
+                [{"role": "user", "content": "hi"}],
+                llm._translate_params_for_model(dict(llm._default_params)),
+            )
+        )
+
+    @pytest.mark.parametrize("endpoint_format", ["workers_ai", "openai_compatible"])
+    def test_option_emitted_when_set(self, endpoint_format):
+        """Both endpoint formats take a top-level options object."""
+        payload = self._payload(reject_if_busy=True, endpoint_format=endpoint_format)
+        assert payload["options"] == {"rejectIfBusy": True}
+
+    @pytest.mark.parametrize("endpoint_format", ["workers_ai", "openai_compatible"])
+    @pytest.mark.parametrize("value", [None, False])
+    def test_no_options_key_when_unset(self, endpoint_format, value):
+        """Leaving it off must not add an options key at all."""
+        payload = self._payload(reject_if_busy=value, endpoint_format=endpoint_format)
+        assert "options" not in payload
+
+    def test_default_is_off(self):
+        """The field defaults to off, so existing callers are unaffected."""
+        assert self._create_llm().reject_if_busy is None
+        assert "options" not in self._payload()
+
+    def test_merges_with_model_kwargs_options(self):
+        """A caller's own options dict survives; only rejectIfBusy is set.
+
+        model_kwargs is the documented passthrough that already worked for
+        REST, so setting both must not double-emit or drop the other keys.
+        """
+        payload = self._payload(
+            reject_if_busy=True,
+            model_kwargs={"options": {"someOtherOption": "keep-me"}},
+        )
+        assert payload["options"] == {
+            "someOtherOption": "keep-me",
+            "rejectIfBusy": True,
+        }
+
+    def test_model_kwargs_passthrough_still_works_alone(self):
+        """Without the field, the old passthrough is untouched."""
+        payload = self._payload(
+            model_kwargs={"options": {"rejectIfBusy": True}},
+        )
+        assert payload["options"] == {"rejectIfBusy": True}
+
+    def test_binding_options_receive_the_flag(self):
+        """The binding must get it in the run options, never in the input."""
+        from langchain_cloudflare.bindings import create_binding_run_options
+
+        llm = self._create_llm(reject_if_busy=True, ai_gateway="gw")
+        run_options = create_binding_run_options(
+            gateway_id=llm.ai_gateway,
+            session_id=llm.session_id,
+            reject_if_busy=llm.reject_if_busy,
+        )
+
+        assert run_options == {
+            "gateway": {"id": "gw"},
+            "rejectIfBusy": True,
+        }
+
+    def test_model_input_object_never_carries_options(self):
+        """The binding ignores rejectIfBusy in the input object, so keep it out.
+
+        _create_request_payload builds the object handed to binding.run() as
+        its second argument, so the option must only be added by the REST
+        senders via _rest_body().
+        """
+        llm = self._create_llm(reject_if_busy=True)
+
+        payload = llm._create_request_payload([{"role": "user", "content": "hi"}], {})
+        assert "options" not in payload
+
+        assert llm._rest_body(payload)["options"] == {"rejectIfBusy": True}
+
+    def test_streaming_body_carries_the_option(self):
+        """The streaming send sites must use _rest_body too.
+
+        _stream/_astream build the same input object as _generate, so moving
+        the option to the send sites has to cover all four, not just the two
+        non-streaming ones.
+        """
+        captured = {}
+
+        class _FakeStream:
+            def __enter__(self):
+                raise RuntimeError("stop after capturing the request body")
+
+            def __exit__(self, *exc):
+                return False
+
+        llm = self._create_llm(reject_if_busy=True)
+
+        def fake_stream(method, url, json=None, **kwargs):
+            captured["json"] = json
+            return _FakeStream()
+
+        llm.client.stream = fake_stream
+
+        with pytest.raises(RuntimeError, match="stop after capturing"):
+            list(llm.stream("hi"))
+
+        assert captured["json"]["options"] == {"rejectIfBusy": True}
+        assert captured["json"]["stream"] is True
+
+
+# MARK: - Dynamic Route Endpoint Format Validation Tests
+
+
+class TestDynamicRouteEndpointFormatValidation:
+    """A dynamic route over REST needs the OpenAI-compatible endpoint.
+
+    The native endpoint builds the model into the URL, so /ai/run/dynamic/<r>
+    is a 400 code 7000. The guard turns that into a construction-time error
+    naming the fix, and must fire only when all three conditions hold.
+    """
+
+    MESSAGE = "openai_compatible"
+
+    @staticmethod
+    def _create_llm(**kwargs):
+        defaults = {
+            "account_id": "test_account",
+            "api_token": "test_token",
+            "model": "dynamic/rt-qwen",
+        }
+        return ChatCloudflareWorkersAI(**{**defaults, **kwargs})
+
+    @pytest.mark.parametrize(
+        "model",
+        ["dynamic/rt-qwen", "dynamic/rt-fallback", "DYNAMIC/RT-Qwen", "Dynamic/mixed"],
+        ids=["lower", "no-family-substring", "upper", "mixed-case"],
+    )
+    def test_raises_for_dynamic_route_on_default_format(self, model):
+        """All three conditions met: dynamic route, workers_ai, no binding."""
+        with pytest.raises(ValueError, match=self.MESSAGE):
+            self._create_llm(model=model)
+
+    def test_message_is_actionable(self):
+        """The message must name the model, the fix, and why it fails."""
+        with pytest.raises(ValueError) as excinfo:
+            self._create_llm(model="dynamic/rt-qwen")
+
+        message = str(excinfo.value)
+        assert "dynamic/rt-qwen" in message
+        assert "endpoint_format='openai_compatible'" in message
+        assert "7000" in message
+
+    def test_no_raise_with_openai_compatible(self):
+        """The documented fix must construct cleanly."""
+        llm = self._create_llm(endpoint_format="openai_compatible")
+        assert llm.model == "dynamic/rt-qwen"
+
+    def test_no_raise_with_binding(self):
+        """Bindings involve no URL, so the route is fine there.
+
+        Bindings also reject openai_compatible outright, so raising here
+        would leave a dynamic route with no valid configuration at all.
+        """
+        llm = ChatCloudflareWorkersAI(model="dynamic/rt-qwen", binding=object())
+        assert llm.endpoint_format == "workers_ai"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "@cf/qwen/qwen3-30b-a3b-fp8",
+            "@cf/zai-org/glm-5.2",
+            "@cf/my-org/dynamic-sounding-model",
+        ],
+        ids=["qwen", "glm", "dynamic-substring-not-prefix"],
+    )
+    def test_no_raise_for_normal_models(self, model):
+        """Only the dynamic/ prefix counts, not the substring anywhere."""
+        llm = self._create_llm(model=model)
+        assert llm.endpoint_format == "workers_ai"

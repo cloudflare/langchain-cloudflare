@@ -80,6 +80,8 @@ from pydantic import (
 )
 from typing_extensions import Self
 
+from ._options import apply_reject_if_busy
+
 # MARK: - Model Behavior Registry
 
 
@@ -216,18 +218,21 @@ _REASONING_BEHAVIOR = ModelBehavior(
     embed_tool_calls_in_content=False,
     supports_reasoning_content=True,
 )
-_MODERN_GLM_BEHAVIOR = ModelBehavior(
-    embed_tool_calls_in_content=False,
-    unsupported_params=("top_k", "repetition_penalty"),
-    supports_reasoning_content=True,
-)
 
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
-    "glm-5.3-flash": _MODERN_GLM_BEHAVIOR,
-    "glm-5.2": _MODERN_GLM_BEHAVIOR,
+    # GLM 5.x accepts every sampling param the legacy "glm" entry strips
+    # (top_k and repetition_penalty both verified live, 3/3), so these keys
+    # need no unsupported_params of their own. They must stay ahead of the
+    # "glm" key: get_model_behavior() returns the first substring match in
+    # insertion order, and "glm" matches the 5.x model names too.
+    "glm-5.3-flash": _REASONING_BEHAVIOR,
+    "glm-5.2": _REASONING_BEHAVIOR,
+    # glm-4.7-flash only. Verified live, 3/3 each: max_tokens returns null
+    # content and repetition_penalty times out, while top_k and tool_choice
+    # both work and so are passed through.
     "glm": ModelBehavior(
         embed_tool_calls_in_content=False,
-        unsupported_params=("max_tokens", "top_k", "repetition_penalty", "tool_choice"),
+        unsupported_params=("max_tokens", "repetition_penalty"),
         supports_reasoning_content=True,
     ),
     "gemma": ModelBehavior(
@@ -275,12 +280,24 @@ DEFAULT_MODEL_BEHAVIOR = ModelBehavior()
 # noticeable in testing; 4096 leaves more headroom without being unbounded.
 _REASONING_STRUCTURED_OUTPUT_MIN_MAX_TOKENS = 4096
 
+# AI Gateway dynamic routes are addressed as "dynamic/<route name>". The route
+# name is chosen by the user, so it carries no information about the model.
+_DYNAMIC_ROUTE_PREFIX = "dynamic/"
+
 
 def get_model_behavior(model_name: str) -> ModelBehavior:
     """Get the behavior configuration for a model.
 
     Matches model name against known model families and returns
     the appropriate behavior config. Falls back to default for unknown models.
+
+    AI Gateway dynamic routes (``dynamic/<route name>``) never family-match:
+    the route resolves server-side, possibly to a different provider between
+    calls, so any family inferred from the route name would be a coincidence
+    of naming. ``dynamic/mistral-backup`` is not necessarily Mistral. Note
+    that returning defaults also means a route never receives the reasoning
+    structured-output ``max_tokens`` floor applied in
+    :meth:`ChatCloudflareWorkersAI.with_structured_output`.
 
     Args:
         model_name: The full model identifier
@@ -290,6 +307,8 @@ def get_model_behavior(model_name: str) -> ModelBehavior:
         ModelBehavior configuration for this model family
     """
     model_lower = model_name.lower()
+    if model_lower.startswith(_DYNAMIC_ROUTE_PREFIX):
+        return DEFAULT_MODEL_BEHAVIOR
     for family, behavior in MODEL_BEHAVIORS.items():
         if family in model_lower:
             return behavior
@@ -445,6 +464,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         alias="cloudflare_ai_gateway",
         default_factory=from_env("AI_GATEWAY", default=None),
     )
+    reject_if_busy: Optional[bool] = None
+    """Fail fast instead of queueing when Workers AI is at capacity.
+
+    When True, a request that would otherwise wait in the capacity queue is
+    rejected immediately with HTTP 429 and Cloudflare error code 3040
+    ("Capacity temporarily exceeded, please try again"). Works on both the
+    REST paths (sent as ``options.rejectIfBusy`` in the request body) and the
+    Workers AI binding (sent in the options argument to ``env.AI.run()``,
+    which is the only place the binding reads it from).
+    """
     endpoint_format: Literal["workers_ai", "openai_compatible"] = "workers_ai"
     """REST endpoint format to use.
 
@@ -459,6 +488,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
     ``api.cloudflare.com``, routed through the gateway via a
     ``cf-aig-gateway-id`` header rather than a separate
     ``gateway.ai.cloudflare.com`` host/path.
+
+    AI Gateway dynamic routes (``model="dynamic/<route name>"``) resolve over
+    REST only with ``"openai_compatible"``, because ``/ai/run/{model}``
+    rejects ``dynamic/<route>`` with ``7000 No route for that URI``. Pairing a
+    dynamic route with ``"workers_ai"`` over REST raises a ValueError at
+    construction rather than failing on the first request.
     """
     request_timeout: Union[float, Tuple[float, float], Any, None] = Field(
         default=None, alias="timeout"
@@ -549,6 +584,21 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 )
             # When using binding, we don't need api_token or account_id
             return self
+
+        if (
+            self.model.lower().startswith(_DYNAMIC_ROUTE_PREFIX)
+            and self.endpoint_format == "workers_ai"
+        ):
+            raise ValueError(
+                f"model={self.model!r} is an AI Gateway dynamic route, which "
+                "over REST resolves only with "
+                "endpoint_format='openai_compatible'. The default "
+                "'workers_ai' format builds the model into the request URL, "
+                "and /ai/run/{model} rejects a route name with "
+                "400 code 7000 'No route for that URI'. Pass "
+                "endpoint_format='openai_compatible', which sends the model "
+                "in the request body instead."
+            )
 
         if not self.api_token:
             raise ValueError(
@@ -879,7 +929,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         message_dicts: List[Dict[str, Any]],
         params: Dict[str, Any],
     ) -> Dict[str, Any]:
-        """Build the REST request payload for the configured endpoint format."""
+        """Build the model input object for the configured endpoint format.
+
+        Deliberately carries no ``options`` key: this same object is handed to
+        the binding as the model input, where Cloudflare's docs are explicit
+        that rejectIfBusy is ignored and must travel in the run options
+        argument instead. REST senders add it with :meth:`_rest_body`.
+        """
         if self.endpoint_format == "openai_compatible":
             return {
                 **params,
@@ -888,6 +944,15 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             }
 
         return {"messages": message_dicts, **params}
+
+    def _rest_body(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Wrap a model input object as a REST request body.
+
+        Both endpoint formats take a top-level ``options`` object, so this is
+        the single place the REST paths (sync, async, and both streaming
+        variants) add it.
+        """
+        return apply_reject_if_busy(payload, self.reject_if_busy)
 
     @staticmethod
     def _streaming_safe_usage(usage: Dict[str, Any]) -> Dict[str, Any]:
@@ -961,7 +1026,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             api_url = self._get_api_url()
 
             # Make the API request
-            response = self.client.post(api_url, json=payload)
+            response = self.client.post(api_url, json=self._rest_body(payload))
             response.raise_for_status()
             response_data = response.json()
 
@@ -991,7 +1056,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             api_url = self._get_api_url()
 
             # Make the API request
-            response = await self.async_client.post(api_url, json=payload)
+            response = await self.async_client.post(
+                api_url, json=self._rest_body(payload)
+            )
             response.raise_for_status()
             response_data = response.json()
 
@@ -1023,7 +1090,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         payload = self._create_request_payload(message_dicts, params)
 
         # Make the streaming API request
-        with self.client.stream("POST", api_url, json=payload) as response:
+        with self.client.stream(
+            "POST", api_url, json=self._rest_body(payload)
+        ) as response:
             response.raise_for_status()
             accumulated_content = ""
             tool_calls_detected = False
@@ -1199,7 +1268,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         payload = self._create_request_payload(message_dicts, params)
 
         # Make the streaming API request
-        async with self.async_client.stream("POST", api_url, json=payload) as response:
+        async with self.async_client.stream(
+            "POST", api_url, json=self._rest_body(payload)
+        ) as response:
             response.raise_for_status()
 
             accumulated_content = ""
@@ -1383,10 +1454,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         # Convert payload to JS-compatible format for Pyodide
         js_payload = convert_payload_for_binding(payload)
 
-        # Create options for the binding (gateway + session affinity)
+        # Create options for the binding (gateway + session affinity +
+        # rejectIfBusy, which the binding only reads from this argument)
         run_options = create_binding_run_options(
             gateway_id=self.ai_gateway,
             session_id=self.session_id,
+            reject_if_busy=self.reject_if_busy,
         )
 
         # Call the binding with optional options
@@ -1565,15 +1638,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 # Not JSON, treat as regular content
                 pass
 
-        # Extract reasoning_content if model supports it
+        # Extract reasoning from the response rather than the registry.
         # Models use different field names: "reasoning_content" (Qwen, GLM,
-        # GPT-OSS, Kimi) or "reasoning" (Nemotron)
-        behavior = self._model_behavior
-        reasoning_content = None
-        if behavior.supports_reasoning_content:
-            reasoning_content = message_data.get(
-                "reasoning_content"
-            ) or message_data.get("reasoning")
+        # GPT-OSS, Kimi) or "reasoning" (Nemotron). Detection beats a registry
+        # gate here: a dynamic/* route resolves server-side, so there is no
+        # model family to look up, and newly released models have no entry
+        # yet. Non-reasoning models either omit the key or send it as null
+        # (Mistral), so an absent/empty value falls through unchanged.
+        reasoning_content = message_data.get("reasoning_content") or message_data.get(
+            "reasoning"
+        )
 
         # MARK: - Create the AI message
         if tool_calls and reasoning_content:
@@ -1907,6 +1981,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             # parse). Confirmed empirically: gpt-oss-20b failed intermittently
             # with the platform default and passed reliably (3/3) at 2048.
             # Only applied when the caller hasn't already set max_tokens.
+            #
+            # This consumer stays registry-gated on purpose: it shapes the
+            # request, so unlike reasoning extraction there is no response to
+            # detect from at this point. The consequence is that dynamic/*
+            # never gets the floor -- get_model_behavior() returns defaults for
+            # routes -- so callers routing to a reasoning model should set
+            # max_tokens explicitly.
             extra_bind_kwargs: Dict[str, Any] = {}
             if (
                 self.max_tokens is None

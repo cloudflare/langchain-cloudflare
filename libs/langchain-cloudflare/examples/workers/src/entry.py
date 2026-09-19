@@ -158,6 +158,15 @@ class Default(WorkerEntrypoint):
             # Session affinity (prompt caching) endpoint
             elif path == "session-affinity":
                 return await self.handle_session_affinity(request)
+            # Sampling parameter passthrough endpoint
+            elif path == "sampling-params":
+                return await self.handle_sampling_params(request)
+            # AI Gateway dynamic route endpoint
+            elif path == "dynamic-route":
+                return await self.handle_dynamic_route(request)
+            # rejectIfBusy capacity option endpoint
+            elif path == "reject-if-busy":
+                return await self.handle_reject_if_busy(request)
             else:
                 return await self.handle_index()
 
@@ -222,6 +231,19 @@ class Default(WorkerEntrypoint):
                     "/d1-query": "Query D1 table",
                     "/d1-drop-table": "Drop a D1 table",
                     "/multi-modal": "Multi-modal image input test",
+                    "/sampling-params": (
+                        "Chat with sampling params (top_k, repetition_penalty, "
+                        "max_tokens, tool_choice) to check registry passthrough"
+                    ),
+                    "/dynamic-route": (
+                        "Exercise an AI Gateway dynamic route over the AI "
+                        "binding (invoke/batch/tools/multi-turn/structured/"
+                        "structured-json-schema/reasoning)"
+                    ),
+                    "/reject-if-busy": (
+                        "Run chat/embeddings/rerank over the AI binding with "
+                        "the rejectIfBusy capacity option"
+                    ),
                 },
             }
         )
@@ -1626,3 +1648,285 @@ Return JSON with an "announcements" array. Each announcement should have:
                 "session_id": session_id,
             }
         )
+
+    # MARK: - Sampling Params Handler
+
+    async def handle_sampling_params(self, request):
+        """Handle chat with explicit sampling params via the binding.
+
+        Reports which params survived MODEL_BEHAVIORS translation alongside
+        the model's answer, so tests can tell a param that was actually sent
+        from one the registry silently dropped.
+
+        Request body:
+            - model: Workers AI model name (optional, defaults to DEFAULT_MODEL)
+            - message: User message text
+            - top_k / repetition_penalty / max_tokens: sampling params (optional)
+            - tool_choice: tool name or "required" to force a tool call (optional)
+        """
+        data = await request.json()
+        model = data.get("model", DEFAULT_MODEL)
+        message = data.get("message", "Say 'Hello World' and nothing else.")
+        tool_choice = data.get("tool_choice")
+
+        sampling_params = {
+            name: data[name]
+            for name in ("top_k", "repetition_penalty", "max_tokens")
+            if data.get(name) is not None
+        }
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+            **sampling_params,
+        )
+
+        # Private, but it is the only way to observe what the registry left in
+        # the request body -- the stripping it verifies is silent by design.
+        sent_params = llm._translate_params_for_model(dict(llm._default_params))
+
+        runnable = llm
+        if tool_choice:
+            runnable = llm.bind_tools([get_weather], tool_choice=tool_choice)
+
+        response = await runnable.ainvoke(message)
+
+        content = response.content
+        if isinstance(content, list):
+            text_parts = [
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            content = " ".join(text_parts)
+
+        return Response.json(
+            {
+                "model": model,
+                "response": content,
+                "requested_params": sampling_params,
+                "sent_params": {
+                    name: sent_params[name]
+                    for name in sampling_params
+                    if name in sent_params
+                },
+                "tool_calls": [
+                    {"name": tc["name"], "args": tc["args"]}
+                    for tc in (response.tool_calls or [])
+                ],
+            }
+        )
+
+    # MARK: - Dynamic Route Handler
+
+    @staticmethod
+    def _split_content(content):
+        """Split an AIMessage content into (text, reasoning).
+
+        Reasoning models return content blocks; everything else returns a
+        plain string.
+        """
+        if not isinstance(content, list):
+            return content, None
+
+        text_parts = [
+            b.get("text", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "text"
+        ]
+        thinking_parts = [
+            b.get("thinking", "")
+            for b in content
+            if isinstance(b, dict) and b.get("type") == "thinking"
+        ]
+        return (
+            " ".join(text_parts),
+            thinking_parts[0] if thinking_parts else None,
+        )
+
+    async def handle_dynamic_route(self, request):
+        """Exercise an AI Gateway dynamic route over the AI binding.
+
+        The route resolves server-side, so the model string is
+        ``dynamic/<route name>`` and the gateway id is required -- without it
+        the binding raises ``AiGatewayError: 7003``. Streaming is omitted
+        because bindings do not support it.
+
+        Request body:
+            - model: ``dynamic/<route name>``
+            - gateway_id: AI Gateway id the route lives on
+            - mode: invoke (default), batch, tools, multi-turn, structured,
+              structured-json-schema, or reasoning
+            - message / text / messages: input for the selected mode
+        """
+        data = await request.json()
+        model = data.get("model", DEFAULT_MODEL)
+        gateway_id = data.get("gateway_id")
+        mode = data.get("mode", "invoke")
+
+        llm = ChatCloudflareWorkersAI(
+            model_name=model,
+            binding=self.env.AI,
+            temperature=0.0,
+            ai_gateway=gateway_id,
+        )
+
+        result = {"model": model, "gateway_id": gateway_id, "mode": mode}
+
+        if mode == "batch":
+            messages = data.get("messages", ["Say 'Hello'", "Say 'World'"])
+            responses = await llm.abatch(messages)
+            result["results"] = [self._split_content(r.content)[0] for r in responses]
+            result["count"] = len(responses)
+            return Response.json(result)
+
+        if mode in ("structured", "structured-json-schema"):
+            text = data.get(
+                "text", "Acme Corp announced a partnership with TechGiant Inc."
+            )
+            kwargs = {"method": "json_schema"} if mode.endswith("json-schema") else {}
+            structured_llm = llm.with_structured_output(Data, **kwargs)
+            extracted = await structured_llm.ainvoke(
+                f"Extract announcements from this text:\n\n{text}"
+            )
+            if isinstance(extracted, Data):
+                extracted = extracted.model_dump()
+            result["extracted"] = extracted
+            return Response.json(result)
+
+        if mode in ("tools", "multi-turn"):
+            message = data.get("message", "What's the weather in San Francisco?")
+            llm_with_tools = llm.bind_tools(ALL_TOOLS)
+            messages = [HumanMessage(content=message)]
+            first = await llm_with_tools.ainvoke(messages)
+            result["tool_calls"] = [
+                {"name": tc["name"], "args": tc["args"]}
+                for tc in (first.tool_calls or [])
+            ]
+
+            if mode == "tools" or not first.tool_calls:
+                return Response.json(result)
+
+            tool_call = first.tool_calls[0]
+            tool_result = (
+                get_weather.invoke(tool_call["args"])
+                if tool_call["name"] == "get_weather"
+                else get_stock_price.invoke(tool_call["args"])
+            )
+            messages.append(first)
+            messages.append(
+                ToolMessage(
+                    content=tool_result,
+                    tool_call_id=tool_call.get("id", "unknown"),
+                    name=tool_call["name"],
+                )
+            )
+            final = await llm_with_tools.ainvoke(messages)
+            result["tool_result"] = tool_result
+            result["final_response"] = self._split_content(final.content)[0]
+            return Response.json(result)
+
+        # invoke / reasoning: same call, the reasoning mode just asks for a
+        # prompt that makes the model think and reports the thinking block.
+        default_message = (
+            "What is 25 * 37? Think step by step."
+            if mode == "reasoning"
+            else "Say 'Hello World' and nothing else."
+        )
+        response = await llm.ainvoke(data.get("message", default_message))
+        text, reasoning = self._split_content(response.content)
+        result["response"] = text
+        result["reasoning_content"] = reasoning
+        result["has_reasoning_content"] = reasoning is not None
+        result["content_type"] = type(response.content).__name__
+        return Response.json(result)
+
+    # MARK: - Reject If Busy Handler
+
+    async def handle_reject_if_busy(self, request):
+        """Run a binding call with the rejectIfBusy capacity option.
+
+        The binding only reads rejectIfBusy from the options argument of
+        ``env.AI.run()`` -- it is ignored inside the model input object -- so
+        the response echoes the options object the client actually built,
+        letting tests assert the flag reached the third argument rather than
+        waiting for a 429/3040 that is not reproducible on demand.
+
+        Request body:
+            - target: chat (default), embeddings, or rerank
+            - model: Workers AI model name (chat only)
+            - reject_if_busy: bool, defaults to True
+            - message / text / query / documents: input for the target
+        """
+        from langchain_cloudflare.bindings import create_binding_run_options
+
+        data = await request.json()
+        target = data.get("target", "chat")
+        reject_if_busy = data.get("reject_if_busy", True)
+
+        result = {"target": target, "reject_if_busy": reject_if_busy}
+
+        if target == "embeddings":
+            embeddings = CloudflareWorkersAIEmbeddings(
+                model_name=EMBEDDING_MODEL,
+                binding=self.env.AI,
+                reject_if_busy=reject_if_busy,
+            )
+            vector = await embeddings.aembed_query(data.get("text", "Hello world"))
+            result["model"] = EMBEDDING_MODEL
+            result["dimensions"] = len(vector)
+            run_options = create_binding_run_options(
+                gateway_id=embeddings.ai_gateway,
+                reject_if_busy=embeddings.reject_if_busy,
+            )
+
+        elif target == "rerank":
+            reranker = CloudflareWorkersAIReranker(
+                model_name=RERANKER_MODEL,
+                binding=self.env.AI,
+                reject_if_busy=reject_if_busy,
+            )
+            ranked = await reranker.arerank(
+                query=data.get("query", "What is the capital of France?"),
+                documents=data.get(
+                    "documents",
+                    [
+                        "Paris is the capital of France.",
+                        "Berlin is the capital of Germany.",
+                    ],
+                ),
+            )
+            result["model"] = RERANKER_MODEL
+            result["count"] = len(ranked)
+            run_options = create_binding_run_options(
+                gateway_id=reranker.ai_gateway,
+                reject_if_busy=reranker.reject_if_busy,
+            )
+
+        else:
+            model = data.get("model", DEFAULT_MODEL)
+            llm = ChatCloudflareWorkersAI(
+                model_name=model,
+                binding=self.env.AI,
+                temperature=0.0,
+                reject_if_busy=reject_if_busy,
+            )
+            response = await llm.ainvoke(
+                data.get("message", "Say 'Hello World' and nothing else.")
+            )
+            content, _ = self._split_content(response.content)
+            result["model"] = model
+            result["response"] = content
+            run_options = create_binding_run_options(
+                gateway_id=llm.ai_gateway,
+                session_id=llm.session_id,
+                reject_if_busy=llm.reject_if_busy,
+            )
+
+        # Normalize the JS proxy back to a plain dict for the JSON response.
+        if run_options is not None and hasattr(run_options, "to_py"):
+            run_options = run_options.to_py()
+        result["run_options"] = run_options
+
+        return Response.json(result)

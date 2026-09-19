@@ -1,8 +1,8 @@
 ---
-codex_session_id: "01a0448b-978b-7992-84d8-dbecb9f8497c"
+codex_session_id: "ee6d6c90-ac29-4b80-8c06-e5b061ecdba6"
 repo: "cloudflare/langchain-cloudflare"
-branch: "feat/add-glm-5-3-flash"
-last_updated: "2026-08-27"
+branch: "feat/reject-if-busy-and-dynamic-routing"
+last_updated: "2026-09-18"
 ---
 
 # Changelog
@@ -14,6 +14,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## langchain-cloudflare
+
+### [0.3.10]
+
+#### Added
+
+- **`reject_if_busy`**: New field on `ChatCloudflareWorkersAI`,
+  `CloudflareWorkersAIEmbeddings`, and `CloudflareWorkersAIReranker` for
+  [Workers AI's reject-if-busy option](https://developers.cloudflare.com/workers-ai/features/reject-if-busy/),
+  which fails a request with HTTP 429 and error code 3040 instead of queueing
+  it when capacity is unavailable. Emitted as `options.rejectIfBusy` in the
+  REST body on both the native and OpenAI-compatible endpoints, and in the
+  options argument to `env.AI.run()` on the Workers AI binding — the only
+  place the binding reads it from. Setting it alongside an existing
+  `model_kwargs={"options": {...}}` merges rather than replaces.
+- **Dynamic route test coverage**: AI Gateway dynamic routes
+  (`model="dynamic/<route name>"`) are now covered live on both REST and the
+  Worker binding across invoke, streaming, batch, tool calling, multi-turn
+  tool calling, structured output, and reasoning content.
+
+#### Fixed
+
+- **Model behavior is no longer inferred from dynamic route names**: a
+  dynamic route's model string is a user-chosen route name, so substring
+  matching it against the model-family registry applied whichever family the
+  name happened to contain — a route named `mistral-backup` picked up
+  Mistral's `guided_json` regardless of what it resolved to, and a route
+  matching nothing lost its reasoning content. Dynamic routes now always use
+  the default behavior.
+- **Reasoning content is detected from the response** rather than gated on a
+  registry entry, so it is surfaced for dynamic routes and for newly released
+  models that have no entry yet. No change for models that do not return it.
+- **Stale GLM `unsupported_params`**: `top_k` and `repetition_penalty` are no
+  longer stripped from GLM 5.x requests, and `top_k` and `tool_choice` are no
+  longer stripped from `glm-4.7-flash`. All four are accepted by the models
+  today, and the stripping was silent. `max_tokens` and `repetition_penalty`
+  are still stripped for `glm-4.7-flash`, which does not handle them.
+
+#### Changed
+
+- **`create_gateway_options` is now a thin wrapper** around
+  `create_binding_run_options`, which is what new code should use. Behavior is
+  unchanged. The embeddings and reranker binding paths were migrated to the
+  general helper so all three classes share one options builder.
+
+- **Dynamic routes no longer fail opaquely on the default endpoint format**:
+  they resolve over REST only with `endpoint_format="openai_compatible"`,
+  because the native `/ai/run/{model}` endpoint builds the model into the path
+  and rejects a route name with `400 7000 No route for that URI`. That pairing
+  now raises a `ValueError` at construction naming the fix, instead of failing
+  on the first request with an error that mentions neither dynamic routes nor
+  `endpoint_format`. The Worker binding is unaffected — no URL is involved.
+
+---
 
 ### [0.3.9]
 
