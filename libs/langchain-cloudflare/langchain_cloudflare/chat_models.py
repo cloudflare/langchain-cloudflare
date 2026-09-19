@@ -491,7 +491,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
     AI Gateway dynamic routes (``model="dynamic/<route name>"``) resolve over
     REST only with ``"openai_compatible"``, because ``/ai/run/{model}``
-    rejects ``dynamic/<route>`` with ``7000 No route for that URI``.
+    rejects ``dynamic/<route>`` with ``7000 No route for that URI``. Pairing a
+    dynamic route with ``"workers_ai"`` over REST raises a ValueError at
+    construction rather than failing on the first request.
     """
     request_timeout: Union[float, Tuple[float, float], Any, None] = Field(
         default=None, alias="timeout"
@@ -582,6 +584,21 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 )
             # When using binding, we don't need api_token or account_id
             return self
+
+        if (
+            self.model.lower().startswith(_DYNAMIC_ROUTE_PREFIX)
+            and self.endpoint_format == "workers_ai"
+        ):
+            raise ValueError(
+                f"model={self.model!r} is an AI Gateway dynamic route, which "
+                "over REST resolves only with "
+                "endpoint_format='openai_compatible'. The default "
+                "'workers_ai' format builds the model into the request URL, "
+                "and /ai/run/{model} rejects a route name with "
+                "400 code 7000 'No route for that URI'. Pass "
+                "endpoint_format='openai_compatible', which sends the model "
+                "in the request body instead."
+            )
 
         if not self.api_token:
             raise ValueError(

@@ -58,12 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unchanged. The embeddings and reranker binding paths were migrated to the
   general helper so all three classes share one options builder.
 
-#### Notes
-
-- AI Gateway dynamic routes resolve over REST only with
-  `endpoint_format="openai_compatible"`; the native `/ai/run/{model}` endpoint
-  builds the model into the path and rejects `dynamic/<route>`. The Worker
-  binding is unaffected.
+- **Dynamic routes no longer fail opaquely on the default endpoint format**:
+  they resolve over REST only with `endpoint_format="openai_compatible"`,
+  because the native `/ai/run/{model}` endpoint builds the model into the path
+  and rejects a route name with `400 7000 No route for that URI`. That pairing
+  now raises a `ValueError` at construction naming the fix, instead of failing
+  on the first request with an error that mentions neither dynamic routes nor
+  `endpoint_format`. The Worker binding is unaffected — no URL is involved.
 
 ---
 

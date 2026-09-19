@@ -97,11 +97,20 @@ class TestReasoningContent:
     """Test reasoning_content extraction in _create_chat_result."""
 
     def _create_llm(self, model: str = "@cf/qwen/qwen3-30b-a3b-fp8"):
-        """Create a ChatCloudflareWorkersAI instance for testing."""
+        """Create a ChatCloudflareWorkersAI instance for testing.
+
+        Dynamic routes only construct on the OpenAI-compatible endpoint over
+        REST; the format is irrelevant to the response parsing under test.
+        """
+        kwargs = {}
+        if model.lower().startswith("dynamic/"):
+            kwargs["endpoint_format"] = "openai_compatible"
+
         return ChatCloudflareWorkersAI(
             account_id="test_account",
             api_token="test_token",
             model=model,
+            **kwargs,
         )
 
     def test_reasoning_content_extracted_for_qwen(self):
@@ -1494,3 +1503,74 @@ class TestRejectIfBusy:
 
         assert captured["json"]["options"] == {"rejectIfBusy": True}
         assert captured["json"]["stream"] is True
+
+
+# MARK: - Dynamic Route Endpoint Format Validation Tests
+
+
+class TestDynamicRouteEndpointFormatValidation:
+    """A dynamic route over REST needs the OpenAI-compatible endpoint.
+
+    The native endpoint builds the model into the URL, so /ai/run/dynamic/<r>
+    is a 400 code 7000. The guard turns that into a construction-time error
+    naming the fix, and must fire only when all three conditions hold.
+    """
+
+    MESSAGE = "openai_compatible"
+
+    @staticmethod
+    def _create_llm(**kwargs):
+        defaults = {
+            "account_id": "test_account",
+            "api_token": "test_token",
+            "model": "dynamic/rt-qwen",
+        }
+        return ChatCloudflareWorkersAI(**{**defaults, **kwargs})
+
+    @pytest.mark.parametrize(
+        "model",
+        ["dynamic/rt-qwen", "dynamic/rt-fallback", "DYNAMIC/RT-Qwen", "Dynamic/mixed"],
+        ids=["lower", "no-family-substring", "upper", "mixed-case"],
+    )
+    def test_raises_for_dynamic_route_on_default_format(self, model):
+        """All three conditions met: dynamic route, workers_ai, no binding."""
+        with pytest.raises(ValueError, match=self.MESSAGE):
+            self._create_llm(model=model)
+
+    def test_message_is_actionable(self):
+        """The message must name the model, the fix, and why it fails."""
+        with pytest.raises(ValueError) as excinfo:
+            self._create_llm(model="dynamic/rt-qwen")
+
+        message = str(excinfo.value)
+        assert "dynamic/rt-qwen" in message
+        assert "endpoint_format='openai_compatible'" in message
+        assert "7000" in message
+
+    def test_no_raise_with_openai_compatible(self):
+        """The documented fix must construct cleanly."""
+        llm = self._create_llm(endpoint_format="openai_compatible")
+        assert llm.model == "dynamic/rt-qwen"
+
+    def test_no_raise_with_binding(self):
+        """Bindings involve no URL, so the route is fine there.
+
+        Bindings also reject openai_compatible outright, so raising here
+        would leave a dynamic route with no valid configuration at all.
+        """
+        llm = ChatCloudflareWorkersAI(model="dynamic/rt-qwen", binding=object())
+        assert llm.endpoint_format == "workers_ai"
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "@cf/qwen/qwen3-30b-a3b-fp8",
+            "@cf/zai-org/glm-5.2",
+            "@cf/my-org/dynamic-sounding-model",
+        ],
+        ids=["qwen", "glm", "dynamic-substring-not-prefix"],
+    )
+    def test_no_raise_for_normal_models(self, model):
+        """Only the dynamic/ prefix counts, not the substring anywhere."""
+        llm = self._create_llm(model=model)
+        assert llm.endpoint_format == "workers_ai"
