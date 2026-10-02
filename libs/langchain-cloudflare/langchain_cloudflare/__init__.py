@@ -20,6 +20,7 @@ from langchain_cloudflare.bindings import (
     convert_vectors_for_binding,
 )
 from langchain_cloudflare.chat_models import ChatCloudflareWorkersAI
+from langchain_cloudflare.decision_models import CloudflareWorkersAIDecisionModel
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.loaders import (
     CloudflareBrowserRunLoader,
@@ -44,6 +45,7 @@ __all__ = [
     "CloudflareBrowserRunTool",
     "CloudflareVectorize",
     "CloudflareWorkersAIEmbeddings",
+    "CloudflareWorkersAIDecisionModel",
     "CloudflareWorkersAIReranker",
     "RerankResult",
     # Workers AI binding utilities

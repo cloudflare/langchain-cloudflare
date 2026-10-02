@@ -28,7 +28,9 @@ from langchain_cloudflare import (
     CloudflareBrowserRunLoader,
     CloudflareBrowserRunTool,
     CloudflareVectorize,
+    CloudflareWorkersAIDecisionModel,
 )
+from langchain_cloudflare.decision_models import DECISION_MODELS
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
@@ -133,6 +135,8 @@ class Default(WorkerEntrypoint):
             # Reranker endpoint
             elif path == "rerank":
                 return await self.handle_rerank(request)
+            elif path == "decision":
+                return await self.handle_decision(request)
             # Browser Run endpoint (quickAction() binding)
             elif path == "browser-run":
                 return await self.handle_browser_run(request)
@@ -195,6 +199,7 @@ class Default(WorkerEntrypoint):
                 "d1_available": d1_available,
                 "browser_available": browser_available,
                 "supported_models": SUPPORTED_MODELS,
+                "decision_models": DECISION_MODELS,
                 "default_model": DEFAULT_MODEL,
                 "embedding_model": EMBEDDING_MODEL,
                 "endpoints": {
@@ -215,6 +220,7 @@ class Default(WorkerEntrypoint):
                     "/vectorize-info": "Get Vectorize index info",
                     "/ai-search": "Search AI Search via binding",
                     "/rerank": "Rerank documents by query relevance",
+                    "/decision": "Clef decisions with per-option probabilities",
                     "/browser-run": (
                         "Run a Browser Run Quick Action via the browser "
                         "binding (markdown/json/links/screenshot/pdf/"
@@ -1147,6 +1153,24 @@ Return JSON with an "announcements" array. Each announcement should have:
             }
         )
 
+    # MARK: - Decision Handler
+
+    async def handle_decision(self, request):
+        """Evaluate Clef's native state/questions input through the AI binding."""
+        data = await request.json()
+        model = CloudflareWorkersAIDecisionModel(
+            model_name=data.get("model", DECISION_MODELS[0]),
+            binding=self.env.AI,
+            ai_gateway=data.get("ai_gateway"),
+            reject_if_busy=data.get("reject_if_busy"),
+        )
+        result = await model.aevaluate(
+            state=data["state"],
+            questions=data["questions"],
+            images=data.get("images"),
+        )
+        return Response.json(result)
+
     # MARK: - Reranker Handler
 
     async def handle_rerank(self, request):
@@ -1778,6 +1802,7 @@ Return JSON with an "announcements" array. Each announcement should have:
             messages = data.get("messages", ["Say 'Hello'", "Say 'World'"])
             responses = await llm.abatch(messages)
             result["results"] = [self._split_content(r.content)[0] for r in responses]
+            result["results_metadata"] = [r.response_metadata for r in responses]
             result["count"] = len(responses)
             return Response.json(result)
 
@@ -1786,10 +1811,16 @@ Return JSON with an "announcements" array. Each announcement should have:
                 "text", "Acme Corp announced a partnership with TechGiant Inc."
             )
             kwargs = {"method": "json_schema"} if mode.endswith("json-schema") else {}
-            structured_llm = llm.with_structured_output(Data, **kwargs)
+            structured_llm = llm.with_structured_output(
+                Data, include_raw=True, **kwargs
+            )
             extracted = await structured_llm.ainvoke(
                 f"Extract announcements from this text:\n\n{text}"
             )
+            result["response_metadata"] = extracted["raw"].response_metadata
+            if extracted["parsing_error"] is not None:
+                raise extracted["parsing_error"]
+            extracted = extracted["parsed"]
             if isinstance(extracted, Data):
                 extracted = extracted.model_dump()
             result["extracted"] = extracted
@@ -1800,6 +1831,7 @@ Return JSON with an "announcements" array. Each announcement should have:
             llm_with_tools = llm.bind_tools(ALL_TOOLS)
             messages = [HumanMessage(content=message)]
             first = await llm_with_tools.ainvoke(messages)
+            result["response_metadata"] = first.response_metadata
             result["tool_calls"] = [
                 {"name": tc["name"], "args": tc["args"]}
                 for tc in (first.tool_calls or [])
@@ -1823,6 +1855,7 @@ Return JSON with an "announcements" array. Each announcement should have:
                 )
             )
             final = await llm_with_tools.ainvoke(messages)
+            result["response_metadata"] = final.response_metadata
             result["tool_result"] = tool_result
             result["final_response"] = self._split_content(final.content)[0]
             return Response.json(result)
@@ -1836,6 +1869,7 @@ Return JSON with an "announcements" array. Each announcement should have:
         )
         response = await llm.ainvoke(data.get("message", default_message))
         text, reasoning = self._split_content(response.content)
+        result["response_metadata"] = response.response_metadata
         result["response"] = text
         result["reasoning_content"] = reasoning
         result["has_reasoning_content"] = reasoning is not None

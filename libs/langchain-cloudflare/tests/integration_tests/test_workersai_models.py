@@ -41,10 +41,16 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from langchain_cloudflare import ChatCloudflareWorkersAI
+from langchain_cloudflare import (
+    ChatCloudflareWorkersAI,
+    CloudflareWorkersAIDecisionModel,
+)
 from langchain_cloudflare._options import apply_reject_if_busy
+from langchain_cloudflare.decision_models import DECISION_MODELS
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
+from tests.decision_helpers import assert_decision_result
+from tests.press_release_examples import PRESS_RELEASE_TEXTS
 
 # Agent imports
 try:
@@ -279,12 +285,7 @@ def extract_reasoning(content) -> str:
 class TestStructuredOutput:
     """Test structured output across Workers AI models."""
 
-    SAMPLE_TEXT = """
-    Acme Corp (NYSE: ACME) today announced a strategic partnership with
-    TechGiant Inc to jointly develop next-generation AI solutions.
-    The partnership will combine Acme's expertise in cloud infrastructure
-    with TechGiant's machine learning capabilities.
-    """
+    SAMPLE_TEXT = PRESS_RELEASE_TEXTS[0]
 
     @pytest.mark.parametrize("model", MODELS)
     def test_structured_output_invoke(self, model, account_id, api_token, ai_gateway):
@@ -326,8 +327,8 @@ class TestStructuredOutput:
         structured_llm = llm.with_structured_output(Data)
 
         texts = [
-            f"Extract announcements from this text:\n\n{self.SAMPLE_TEXT}",
-            "Extract announcements from this text:\n\nApple Inc announced record Q4 earnings, beating analyst expectations.",
+            f"Extract announcements from this text:\n\n{text}"
+            for text in PRESS_RELEASE_TEXTS
         ]
 
         results = structured_llm.batch(texts, config={"max_concurrency": 2})
@@ -727,6 +728,63 @@ class TestToolStrategyJsonSchema:
         if isinstance(result, dict):
             structured = result.get("structured_response", result)
             assert structured is not None
+
+
+# MARK: - Decision Model Tests
+
+
+class TestDecisionModels:
+    """Clef's native decision contract through synchronous and async REST."""
+
+    @pytest.mark.parametrize("model", DECISION_MODELS)
+    @pytest.mark.parametrize(
+        "reject_if_busy", [None, True], ids=["default", "reject_busy"]
+    )
+    def test_evaluate(
+        self,
+        model,
+        account_id,
+        api_token,
+        decision_request,
+        decision_expected,
+        reject_if_busy,
+    ):
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+        decision_model = CloudflareWorkersAIDecisionModel(
+            model_name=model,
+            account_id=account_id,
+            api_token=api_token,
+            ai_gateway=None,
+            reject_if_busy=reject_if_busy,
+        )
+        result = decision_model.evaluate(**decision_request)
+        assert_decision_result(result, model, decision_request, decision_expected)
+
+    @pytest.mark.parametrize("model", DECISION_MODELS)
+    @pytest.mark.parametrize(
+        "reject_if_busy", [None, True], ids=["default", "reject_busy"]
+    )
+    async def test_aevaluate(
+        self,
+        model,
+        account_id,
+        api_token,
+        decision_request,
+        decision_expected,
+        reject_if_busy,
+    ):
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+        decision_model = CloudflareWorkersAIDecisionModel(
+            model_name=model,
+            account_id=account_id,
+            api_token=api_token,
+            ai_gateway=None,
+            reject_if_busy=reject_if_busy,
+        )
+        result = await decision_model.aevaluate(**decision_request)
+        assert_decision_result(result, model, decision_request, decision_expected)
 
 
 # MARK: - Reranker Tests
@@ -1832,6 +1890,9 @@ class TestDynamicRoutes:
         llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
         result = llm.invoke("Say 'Hello World' and nothing else.")
 
+        assert result.response_metadata["model_name"]
+        assert not result.response_metadata["model_name"].startswith("dynamic/")
+        assert result.response_metadata["requested_model"] == llm.model
         text = get_text_content(result.content)
         print(f"\n[{DYNAMIC_ROUTE_QWEN}] invoke: {text[:200]}")
         assert "hello" in text.lower(), f"Unexpected response: {text[:200]}"
@@ -1842,6 +1903,9 @@ class TestDynamicRoutes:
         llm = self._llm(DYNAMIC_ROUTE_GLM, gateway)
         result = llm.invoke("Say 'Hello World' and nothing else.")
 
+        assert result.response_metadata["model_name"]
+        assert not result.response_metadata["model_name"].startswith("dynamic/")
+        assert result.response_metadata["requested_model"] == llm.model
         text = get_text_content(result.content)
         print(f"\n[{DYNAMIC_ROUTE_GLM}] invoke: {text[:200]}")
         assert "hello" in text.lower(), f"Unexpected response: {text[:200]}"
@@ -1852,6 +1916,12 @@ class TestDynamicRoutes:
         llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
 
         chunks = list(llm.stream("Count from 1 to 5, separated by spaces."))
+        combined = chunks[0]
+        for chunk in chunks[1:]:
+            combined += chunk
+        assert combined.response_metadata["model_name"]
+        assert not combined.response_metadata["model_name"].startswith("dynamic/")
+        assert combined.response_metadata["requested_model"] == DYNAMIC_ROUTE_QWEN
         streamed = "".join(get_text_content(c.content) for c in chunks)
 
         print(
@@ -1872,6 +1942,9 @@ class TestDynamicRoutes:
 
         assert len(results) == 2
         for i, result in enumerate(results):
+            assert result.response_metadata["model_name"]
+            assert not result.response_metadata["model_name"].startswith("dynamic/")
+            assert result.response_metadata["requested_model"] == llm.model
             text = get_text_content(result.content)
             print(f"\n[{DYNAMIC_ROUTE_QWEN}] batch {i}: {text[:100]}")
             assert text.strip(), f"Empty content for batch result {i}"
@@ -1884,6 +1957,9 @@ class TestDynamicRoutes:
 
         result = llm_with_tools.invoke("What's the weather in San Francisco?")
 
+        assert result.response_metadata["model_name"]
+        assert not result.response_metadata["model_name"].startswith("dynamic/")
+        assert result.response_metadata["requested_model"] == DYNAMIC_ROUTE_QWEN
         print(f"\n[{DYNAMIC_ROUTE_QWEN}] tool_calls: {result.tool_calls}")
         assert result.tool_calls, "No tool call made through dynamic route"
         assert result.tool_calls[0]["name"] == "get_weather"
@@ -1898,6 +1974,9 @@ class TestDynamicRoutes:
 
         messages = [HumanMessage(content="What's the weather in San Francisco?")]
         response1 = llm_with_tools.invoke(messages)
+        assert response1.response_metadata["model_name"]
+        assert not response1.response_metadata["model_name"].startswith("dynamic/")
+        assert response1.response_metadata["requested_model"] == DYNAMIC_ROUTE_QWEN
         assert response1.tool_calls, "No tool call made on the first turn"
 
         tool_call = response1.tool_calls[0]
@@ -1912,6 +1991,9 @@ class TestDynamicRoutes:
         )
 
         response2 = llm_with_tools.invoke(messages)
+        assert response2.response_metadata["model_name"]
+        assert not response2.response_metadata["model_name"].startswith("dynamic/")
+        assert response2.response_metadata["requested_model"] == DYNAMIC_ROUTE_QWEN
         text = get_text_content(response2.content)
         print(f"\n[{DYNAMIC_ROUTE_QWEN}] multi-turn final: {text[:200]}")
         assert text.strip(), "Empty final answer after tool result"
@@ -1926,13 +2008,19 @@ class TestDynamicRoutes:
         """
         llm = self._llm(DYNAMIC_ROUTE_QWEN, gateway)
         kwargs = {"method": method} if method else {}
-        structured_llm = llm.with_structured_output(Data, **kwargs)
+        structured_llm = llm.with_structured_output(Data, include_raw=True, **kwargs)
 
         result = structured_llm.invoke(
             "Extract announcements from this text:\n\n"
             "Acme Corp announced a strategic partnership with TechGiant Inc."
         )
 
+        raw = result["raw"]
+        assert raw.response_metadata["model_name"]
+        assert not raw.response_metadata["model_name"].startswith("dynamic/")
+        assert raw.response_metadata["requested_model"] == DYNAMIC_ROUTE_QWEN
+        assert result["parsing_error"] is None
+        result = result["parsed"]
         print(f"\n[{DYNAMIC_ROUTE_QWEN}] structured ({method or 'default'}): {result}")
         assert result is not None
         assert isinstance(result, (dict, Data))
@@ -1955,6 +2043,9 @@ class TestDynamicRoutes:
         llm = self._llm(DYNAMIC_ROUTE_FALLBACK, gateway)
         result = llm.invoke("What is 25 * 37? Think step by step.")
 
+        assert result.response_metadata["model_name"]
+        assert not result.response_metadata["model_name"].startswith("dynamic/")
+        assert result.response_metadata["requested_model"] == DYNAMIC_ROUTE_FALLBACK
         reasoning = extract_reasoning(result.content)
         print(f"\n[{DYNAMIC_ROUTE_FALLBACK}] reasoning: {reasoning[:200]}")
 

@@ -16,6 +16,8 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
+from tests.press_release_examples import PRESS_RELEASE_EXAMPLES
+
 # MARK: - Collection Hooks
 
 _STRUCTURED_OUTPUT_STREAMING_TESTS = {
@@ -63,6 +65,142 @@ else:
     _integration_env = Path(__file__).parent / "integration_tests" / ".env"
     if _integration_env.exists():
         load_dotenv(_integration_env)
+
+# MARK: - Decision Fixtures
+
+
+@pytest.fixture(
+    params=["text", "json", "image_data_url", "image_base64", *PRESS_RELEASE_EXAMPLES]
+)
+def decision_case(request):
+    """Native Clef inputs shared by REST and real Worker binding tests."""
+    payload = {
+        "state": "Checkout has been failing for every customer for the last hour.",
+        "questions": {
+            "urgent": {"type": "noul", "instructions": "Is this request urgent?"},
+            "team": {
+                "type": "choice",
+                "instructions": "Which team should handle this request?",
+                "criteria": {
+                    "billing": "Payments, invoices, and refunds",
+                    "technical": "Outages, errors, and configuration",
+                    "sales": "Plans and upgrades",
+                },
+            },
+            "severity": {
+                "type": "score",
+                "instructions": "How severe is the customer impact?",
+                "criteria": ["No impact", "Minor", "Major", "Critical"],
+            },
+        },
+    }
+    expected = {"urgent": True, "team": "technical"}
+    if request.param == "json":
+        payload["state"] = {"service": "checkout", "failing": True, "affected": "all"}
+    elif request.param.startswith("image"):
+        # Fixed 16x16 solid-red PNG, with no image library dependency.
+        image = (
+            "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BA"
+            "EiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII="
+        )
+        payload = {
+            "state": "Evaluate the attached image.",
+            "questions": {
+                "red": {"type": "noul", "instructions": "Is the image red?"},
+                "color": {
+                    "type": "choice",
+                    "instructions": "What is the dominant image color?",
+                    "criteria": {"red": "Red", "green": "Green", "blue": "Blue"},
+                },
+            },
+            "images": [
+                f"data:image/png;base64,{image}"
+                if request.param == "image_data_url"
+                else {"content_type": "image/png", "base64": image}
+            ],
+        }
+        expected = {"red": True, "color": "red"}
+    elif request.param in PRESS_RELEASE_EXAMPLES:
+        example = PRESS_RELEASE_EXAMPLES[request.param]
+        eligibility = (
+            "Eligible announcements are new partnerships, investments, regulatory "
+            "approvals, milestones, events, or mergers/acquisitions. Routine "
+            "financial results alone are not an eligible announcement."
+        )
+        questions = {
+            "is_announcement": {
+                "type": "noul",
+                "instructions": (
+                    f"Does this release contain an eligible announcement? {eligibility}"
+                ),
+            },
+            "announcement_type": {
+                "type": "choice",
+                "instructions": f"Classify the primary announcement. {eligibility}",
+                "criteria": {
+                    "partnership": "Companies agree to collaborate or jointly develop",
+                    "investment": "Equity funding or a capital investment",
+                    "regulatory": "An approval or license granted by a regulator",
+                    "milestone": "A substantial internal accomplishment",
+                    "event": "Hosting or participating in an event",
+                    "m&a": "Acquiring, merging, or selling a business",
+                    "none": "No eligible announcement, including routine earnings",
+                },
+            },
+            "context": {
+                "type": "choice",
+                "instructions": (
+                    f"Select the source sentence stating the primary eligible "
+                    f"announcement, rather than supporting detail. {eligibility} "
+                    "Choose none when there is no eligible announcement."
+                ),
+                "criteria": {
+                    **{f"S{i}": text for i, text in enumerate(example["sentences"])},
+                    "none": "No eligible announcement context",
+                },
+            },
+        }
+        expected = {
+            "is_announcement": example["announcement"],
+            "announcement_type": example["type"],
+            "context": example["context"],
+        }
+        for i, name in enumerate(example["roles"]):
+            questions[f"role_{i}"] = {
+                "type": "choice",
+                "instructions": (
+                    f"What role does {name} play in the eligible announcement? "
+                    f"{eligibility} Choose None if no eligible announcement exists."
+                ),
+                "criteria": {
+                    "Partner": "A participant in the collaborative agreement",
+                    "Company": "The company whose internal milestone is announced",
+                    "None": "No active role in an eligible announcement",
+                },
+            }
+            questions[f"ticker_{i}"] = {
+                "type": "choice",
+                "instructions": (
+                    f"Which ticker is explicitly written for {name} in this release? "
+                    "Choose none if absent. Do not infer a ticker from prior knowledge."
+                ),
+                "criteria": {"ACME": "ACME", "AAPL": "AAPL", "none": "Not stated"},
+            }
+            expected[f"role_{i}"] = example["roles"][name]
+            expected[f"ticker_{i}"] = example["tickers"][name]
+        payload = {"state": {"press_release": example["text"]}, "questions": questions}
+    return payload, expected
+
+
+@pytest.fixture
+def decision_request(decision_case):
+    return decision_case[0]
+
+
+@pytest.fixture
+def decision_expected(decision_case):
+    return decision_case[1]
+
 
 # MARK: - Helper Functions
 

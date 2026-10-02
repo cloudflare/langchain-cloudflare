@@ -62,6 +62,65 @@ When `ai_gateway` is configured, OpenAI-compatible mode routes through the
 Workers AI chat completions path on AI Gateway. This option is REST-only; Worker
 bindings use `env.AI.run()` and do not expose a chat completions route.
 
+For chat dynamic routes (`model="dynamic/<route name>"`), message
+`response_metadata["model_name"]` identifies the model reported by the provider.
+`response_metadata["requested_model"]` retains the requested route. If the
+provider does not report a model, `model_name` is `None`. Each message preserves
+its model identity when a batch uses different fallback models.
+
+## Decision Models (Clef)
+
+`CloudflareWorkersAIDecisionModel` supports
+[`@cf/cloudflare/clef`](https://developers.cloudflare.com/workers-ai/models/clef/)
+and [`@cf/cloudflare/clef-flash`](https://developers.cloudflare.com/workers-ai/models/clef-flash/).
+They evaluate text or JSON state against typed questions and return probabilities.
+Question types are `noul` (yes/no probability), `choice` (an option with its
+probability distribution), and `score` (a probability-weighted ordered rubric).
+
+```python
+from langchain_cloudflare import CloudflareWorkersAIDecisionModel
+
+model = CloudflareWorkersAIDecisionModel(model_name="@cf/cloudflare/clef-flash")
+questions = {
+    "urgent": {"type": "noul", "instructions": "Is this request urgent?"},
+    "team": {
+        "type": "choice",
+        "instructions": "Which team should handle this request?",
+        "criteria": {
+            "billing": "Invoices and refunds",
+            "technical": "Outages and errors",
+        },
+    },
+    "severity": {
+        "type": "score",
+        "instructions": "How severe is the impact?",
+        "criteria": ["No impact", "Minor", "Major", "Critical"],
+    },
+}
+result = model.evaluate(
+    state="Checkout is failing for every customer.", questions=questions
+)
+print(result["answers"])  # Includes probabilities, confidence, and scores.
+
+# Async REST uses the same input and result shape.
+result = await model.aevaluate(
+    state={"service": "checkout", "status": "down"}, questions=questions
+)
+
+# In a Python Worker, authentication comes from the existing AI binding.
+model = CloudflareWorkersAIDecisionModel(binding=self.env.AI)
+result = await model.aevaluate(state="Checkout is down.", questions=questions)
+```
+
+REST credentials use `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`. Configure
+`ai_gateway` to use an AI Gateway. `reject_if_busy=True` passes live Clef Worker
+binding tests; Clef's REST validator currently rejects the documented `options`
+field with HTTP 422. Clef and Clef Flash are not currently supported through
+dynamic routing. Results preserve `model`, `answers`,
+and `usage` fields. Pass optional `images` as embedded PNG/JPEG/WebP data URLs or
+`{"content_type": "image/png", "base64": "..."}` objects (up to four images).
+The Worker example exposes this operation at `/decision`.
+
 ## Embeddings
 
 `CloudflareWorkersAIEmbeddings` class exposes embeddings from [CloudflareWorkersAI](https://developers.cloudflare.com/workers-ai/).
