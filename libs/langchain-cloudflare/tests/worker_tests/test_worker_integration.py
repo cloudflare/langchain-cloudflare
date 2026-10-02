@@ -27,6 +27,33 @@ import uuid
 import pytest
 import requests
 
+from langchain_cloudflare.decision_models import DECISION_MODELS
+from tests.decision_helpers import assert_decision_result
+from tests.press_release_examples import PRESS_RELEASE_TEXTS
+
+
+# MARK: - Decision Model Tests
+class TestWorkerDecisionModels:
+    """Clef decisions through the production adapter and real AI binding."""
+
+    @pytest.mark.parametrize("model", DECISION_MODELS)
+    @pytest.mark.parametrize(
+        "reject_if_busy", [None, True], ids=["default", "reject_busy"]
+    )
+    def test_evaluate(
+        self, dev_server, model, decision_request, decision_expected, reject_if_busy
+    ):
+        response = requests.post(
+            f"http://localhost:{dev_server}/decision",
+            json={"model": model, "reject_if_busy": reject_if_busy, **decision_request},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_decision_result(
+            response.json(), model, decision_request, decision_expected
+        )
+
+
 # MARK: - Model Flakiness Handling
 #
 # Two categories of test failure:
@@ -223,7 +250,7 @@ class TestWorkerStructuredOutput:
         response = requests.post(
             f"http://localhost:{port}/structured",
             json={
-                "text": "Acme Corp announced a partnership with TechGiant Inc.",
+                "text": PRESS_RELEASE_TEXTS[0],
                 "model": model,
             },
             headers={"Content-Type": "application/json"},
@@ -247,7 +274,7 @@ class TestWorkerStructuredOutputJsonSchema:
         response = requests.post(
             f"http://localhost:{port}/structured-json-schema",
             json={
-                "text": "Acme Corp announced a partnership with TechGiant Inc.",
+                "text": PRESS_RELEASE_TEXTS[0],
                 "model": model,
             },
             headers={"Content-Type": "application/json"},
@@ -272,10 +299,7 @@ class TestWorkerStructuredOutputBatch:
         response = requests.post(
             f"http://localhost:{port}/structured-batch",
             json={
-                "texts": [
-                    "Acme Corp announced a partnership with TechGiant.",
-                    "Apple Inc announced record Q4 earnings.",
-                ],
+                "texts": list(PRESS_RELEASE_TEXTS),
                 "model": model,
             },
             headers={"Content-Type": "application/json"},
@@ -1590,7 +1614,19 @@ class TestWorkerDynamicRoutes:
             timeout=90,
         )
         assert response.status_code == 200, response.text
-        return response.json()
+        data = response.json()
+        if mode != "batch":
+            metadata = data["response_metadata"]
+            assert metadata["model_name"]
+            assert not metadata["model_name"].startswith("dynamic/")
+            assert metadata["requested_model"] == model
+        if mode == "batch":
+            assert len(data["results_metadata"]) == data["count"]
+        for metadata in data.get("results_metadata", []):
+            assert metadata["model_name"]
+            assert not metadata["model_name"].startswith("dynamic/")
+            assert metadata["requested_model"] == model
+        return data
 
     @pytest.mark.skipif(not DYNAMIC_ROUTE_QWEN, reason="Qwen route env var not set")
     def test_dynamic_route_invoke(self, dev_server):

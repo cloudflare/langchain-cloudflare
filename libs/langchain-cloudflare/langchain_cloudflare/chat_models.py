@@ -968,14 +968,45 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         """
         return {k: v for k, v in usage.items() if k != "neurons"}
 
+    def _response_model_metadata(self, response: Dict[str, Any]) -> Dict[str, Any]:
+        """Keep resolved model identity separate from the requested route.
+
+        A route with no reported model has unknown identity; its name must not
+        be presented as the model that served the request.
+        """
+        model = response.get("model")
+        if not isinstance(model, str) or not model or model.startswith("dynamic/"):
+            model = None if self.model.startswith("dynamic/") else self.model
+        metadata = {"model_name": model}
+        if self.model.startswith("dynamic/"):
+            metadata["requested_model"] = self.model
+        return metadata
+
     def _create_openai_stream_chunk(
         self,
         chunk: Dict[str, Any],
+        *,
+        include_model_metadata: bool = True,
     ) -> Optional[ChatGenerationChunk]:
         """Convert an OpenAI-compatible SSE chunk to a LangChain chunk."""
+        metadata = {}
+        model = chunk.get("model")
+        if (
+            include_model_metadata
+            and isinstance(model, str)
+            and model
+            and not model.startswith("dynamic/")
+        ):
+            metadata = self._response_model_metadata(chunk)
         choices = chunk.get("choices") or []
         if not choices:
-            return None
+            return (
+                ChatGenerationChunk(
+                    message=AIMessageChunk(content="", response_metadata=metadata)
+                )
+                if metadata
+                else None
+            )
 
         choice = choices[0]
         delta = choice.get("delta") or choice.get("message") or {}
@@ -986,7 +1017,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             generation_info["usage"] = self._streaming_safe_usage(chunk["usage"])
 
         return ChatGenerationChunk(
-            message=AIMessageChunk(content=response_text),
+            message=AIMessageChunk(content=response_text, response_metadata=metadata),
             generation_info=generation_info or None,
         )
 
@@ -1095,6 +1126,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         ) as response:
             response.raise_for_status()
             accumulated_content = ""
+            model_metadata_sent = False
             tool_calls_detected = False
 
             for line in response.iter_lines():
@@ -1117,9 +1149,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     continue
 
                 if "choices" in chunk:
-                    generation_chunk = self._create_openai_stream_chunk(chunk)
+                    generation_chunk = self._create_openai_stream_chunk(
+                        chunk, include_model_metadata=not model_metadata_sent
+                    )
                     if generation_chunk is None:
                         continue
+                    if generation_chunk.message.response_metadata:
+                        model_metadata_sent = True
 
                     if run_manager:
                         run_manager.on_llm_new_token(
@@ -1243,6 +1279,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
                     yield generation_chunk
 
+        if not model_metadata_sent:
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="", response_metadata=self._response_model_metadata({})
+                )
+            )
+
     async def _astream(
         self,
         messages: List[BaseMessage],
@@ -1274,6 +1317,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             response.raise_for_status()
 
             accumulated_content = ""
+            model_metadata_sent = False
 
             async for line in response.aiter_lines():
                 # Handle both string and bytes cases
@@ -1295,9 +1339,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     continue
 
                 if "choices" in chunk:
-                    generation_chunk = self._create_openai_stream_chunk(chunk)
+                    generation_chunk = self._create_openai_stream_chunk(
+                        chunk, include_model_metadata=not model_metadata_sent
+                    )
                     if generation_chunk is None:
                         continue
+                    if generation_chunk.message.response_metadata:
+                        model_metadata_sent = True
 
                     if run_manager:
                         await run_manager.on_llm_new_token(
@@ -1434,6 +1482,13 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                         )
 
                     yield generation_chunk
+
+        if not model_metadata_sent:
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="", response_metadata=self._response_model_metadata({})
+                )
+            )
 
     # MARK: - Internal Methods
     async def _call_binding(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -1691,6 +1746,10 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 ),
             }
 
+        # Preserve identity on each message, including batches with fallback.
+        model_metadata = self._response_model_metadata(response_result)
+        message.response_metadata.update(model_metadata)
+
         # Create generation and return result
         generation_info = {}  # type: ignore
         gen = ChatGeneration(
@@ -1701,7 +1760,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         llm_output = {
             "token_usage": token_usage,
-            "model_name": self.model,
+            **model_metadata,
         }
 
         return ChatResult(generations=generations, llm_output=llm_output)
@@ -1837,15 +1896,28 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
     def _combine_llm_outputs(self, llm_outputs: List[Optional[dict]]) -> dict:
         overall_token_usage: dict = {}
+        model_names = []
         for output in llm_outputs:
-            token_usage = output["token_usage"]  # type: ignore
+            if output is None:
+                continue
+            model_names.append(output.get("model_name"))
+            token_usage = output.get("token_usage")
             if token_usage is not None:
                 for k, v in token_usage.items():
                     if k in overall_token_usage and v is not None:
                         overall_token_usage[k] += v
                     else:
                         overall_token_usage[k] = v
-        combined = {"token_usage": overall_token_usage, "model_name": self.model}
+        # A batch can take different fallback legs. Do not label it with one
+        # model unless every response reports the same identity.
+        combined = {
+            "token_usage": overall_token_usage,
+            "model_name": model_names[0]
+            if model_names and all(name == model_names[0] for name in model_names)
+            else None,
+        }
+        if self.model.startswith("dynamic/"):
+            combined["requested_model"] = self.model
         return combined
 
     # MARK: - Tool Binding & Structured Output

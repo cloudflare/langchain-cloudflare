@@ -1080,7 +1080,7 @@ wheels = [
 
 [[package]]
 name = "langchain-cloudflare"
-version = "0.3.10"
+version = "0.4.0"
 source = { editable = "libs/langchain-cloudflare" }
 dependencies = [
     { name = "httpx" },

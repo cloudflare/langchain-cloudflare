@@ -1,10 +1,3 @@
----
-codex_session_id: "ee6d6c90-ac29-4b80-8c06-e5b061ecdba6"
-repo: "cloudflare/langchain-cloudflare"
-branch: "feat/reject-if-busy-and-dynamic-routing"
-last_updated: "2026-09-18"
----
-
 # Changelog
 
 All notable changes to the Langchain Cloudflare packages will be documented in this file.
@@ -14,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ## langchain-cloudflare
+
+### [0.4.0] - 2026-10-01
+
+#### Added
+
+- **Clef and Clef Flash**: `CloudflareWorkersAIDecisionModel` supports
+  `@cf/cloudflare/clef` and `@cf/cloudflare/clef-flash` through synchronous REST,
+  asynchronous REST, and Python Workers AI bindings. These decision models
+  evaluate text or JSON state with native `noul`, `choice`, and `score` questions
+  and preserve answers, probabilities, and token usage.
+- **Vision inputs**: Both decision models accept embedded PNG/JPEG/WebP images
+  as data URLs or base64 objects. Added a `/decision` Worker example endpoint
+  and shared REST/Worker integration coverage for text, JSON, and both image
+  formats.
+- **Shared structured-output examples**: Clef decision tests reuse the chat
+  matrix's public press-release inputs and check announcement classification,
+  source context, entity roles, and explicitly stated tickers through REST and
+  Python Workers.
+- **Worker busy option**: Live decision-model tests cover `reject_if_busy=True`
+  through the Workers AI binding's run options.
+
+#### Fixed
+
+- **Actual model identity in chat response metadata**: Dynamic chat routes
+  report the provider's resolved model in `model_name` and preserve the route
+  in `requested_model`. Missing model identity is reported as `None`. Streaming
+  and batch results preserve each response's identity, including fallback models.
+
+#### Known limitations
+
+- Clef's native REST validator rejects the documented `options.rejectIfBusy`
+  field with HTTP 422. REST busy-option integration cases expose this failure;
+  normal direct REST calls and Worker busy-option calls pass.
+- Clef decision models are not supported through dynamic routing in this release.
+
+---
 
 ### [0.3.10]
 
