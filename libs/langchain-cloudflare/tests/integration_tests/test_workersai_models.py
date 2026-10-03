@@ -36,6 +36,7 @@ import os
 import uuid
 from typing import List, Optional
 
+import httpx
 import pytest
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
@@ -1827,6 +1828,118 @@ class TestAIGatewayHeaders:
         result = llm.invoke("Say hello.")
         text = get_text_content(result)
         assert text, "Empty response with combined headers"
+
+
+# MARK: - AI Gateway Auto Router Tests
+
+
+AUTO_ROUTER_WORKERS_AI_MODELS = [
+    "@cf/qwen/qwen3.8-27b",
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+]
+
+
+@pytest.fixture
+def auto_router_llm(account_id, api_token, ai_gateway):
+    if not account_id or not api_token or not ai_gateway:
+        pytest.skip("Auto Router requires account, token, and AI_GATEWAY")
+    return ChatCloudflareWorkersAI(
+        model="cloudflare/auto",
+        account_id=account_id,
+        api_token=api_token,
+        ai_gateway=ai_gateway,
+        endpoint_format="openai_compatible",
+        aig_allowed_models=AUTO_ROUTER_WORKERS_AI_MODELS,
+    )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("AI_GATEWAY"), reason="AI_GATEWAY env var not set"
+)
+def test_auto_router_workers_ai_metadata(auto_router_llm):
+    """Auto Router selects an allowed Workers AI model on the production REST path."""
+    message = auto_router_llm.invoke("Say hello briefly.")
+
+    assert get_text_content(message.content).strip()
+    assert message.response_metadata["model_name"] in AUTO_ROUTER_WORKERS_AI_MODELS
+    gateway_metadata = message.response_metadata["ai_gateway"]
+    assert message.response_metadata["requested_model"] == "cloudflare/auto"
+    assert gateway_metadata["routing_reason"]
+    assert gateway_metadata["routing_decision_id"]
+    assert gateway_metadata["request_id"]
+
+
+def test_auto_router_session_turn_headers(account_id, api_token, ai_gateway):
+    """Auto Router accepts session and turn IDs on the production REST path."""
+    if not account_id or not api_token or not ai_gateway:
+        pytest.skip("Auto Router requires account, token, and AI_GATEWAY")
+    session_id = f"test-auto-router-{uuid.uuid4().hex}"
+    llm = ChatCloudflareWorkersAI(
+        model="cloudflare/auto",
+        account_id=account_id,
+        api_token=api_token,
+        ai_gateway=ai_gateway,
+        endpoint_format="openai_compatible",
+        aig_allowed_models=AUTO_ROUTER_WORKERS_AI_MODELS,
+        aig_session_id=session_id,
+        aig_turn_id=f"{session_id}-turn",
+    )
+    message = llm.invoke("Say hello briefly.")
+
+    assert get_text_content(message.content).strip()
+    assert message.response_metadata["model_name"] in AUTO_ROUTER_WORKERS_AI_MODELS
+    assert message.response_metadata["ai_gateway"]["routing_reason"]
+
+
+def test_auto_router_structured_output(auto_router_llm):
+    """Structured output keeps using the production chat model and parser."""
+    structured_llm = auto_router_llm.with_structured_output(Data)
+    result = structured_llm.invoke(
+        "Extract announcements from this text: Acme Corp announced a partnership with TechGiant Inc."
+    )
+    assert isinstance(result, Data)
+    assert result.announcements
+
+
+def test_auto_router_tool_calling(auto_router_llm):
+    """Tool definitions and calls pass through the selected Workers AI model."""
+    llm_with_tools = auto_router_llm.bind_tools([get_weather], tool_choice="required")
+    message = llm_with_tools.invoke(
+        "Use get_weather to check the weather in San Francisco."
+    )
+    assert message.tool_calls
+    assert message.tool_calls[0]["name"] == "get_weather"
+    assert message.response_metadata["model_name"] in AUTO_ROUTER_WORKERS_AI_MODELS
+
+
+def test_auto_router_vision(account_id, api_token, ai_gateway):
+    """An image request works when only a vision-capable candidate is allowed."""
+    if not account_id or not api_token or not ai_gateway:
+        pytest.skip("Auto Router requires account, token, and AI_GATEWAY")
+    llm = ChatCloudflareWorkersAI(
+        model="cloudflare/auto",
+        account_id=account_id,
+        api_token=api_token,
+        ai_gateway=ai_gateway,
+        endpoint_format="openai_compatible",
+        aig_allowed_models=["@cf/qwen/qwen3.8-27b"],
+    )
+    image_b64 = create_test_image_base64()
+    message = HumanMessage(
+        content=[
+            {"type": "text", "text": "Describe this image briefly."},
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{image_b64}"},
+            },
+        ]
+    )
+    try:
+        response = llm.invoke([message])
+    except httpx.HTTPStatusError as exc:
+        pytest.fail(f"Auto Router vision HTTP error: {exc.response.text}")
+    assert get_text_content(response.content).strip()
+    assert response.response_metadata["model_name"] == "@cf/qwen/qwen3.8-27b"
 
 
 # MARK: - AI Gateway Dynamic Route Tests

@@ -90,12 +90,12 @@ class TestCreateBindingRunOptions:
         """Only gateway_id should produce gateway options."""
         result = create_binding_run_options(gateway_id="my-gateway")
         assert result == {"gateway": {"id": "my-gateway"}}
-        assert "headers" not in result
+        assert "extraHeaders" not in result
 
     def test_session_id_only(self):
         """Only session_id should produce headers options."""
         result = create_binding_run_options(session_id="sess-123")
-        assert result == {"headers": {"x-session-affinity": "sess-123"}}
+        assert result == {"extraHeaders": {"x-session-affinity": "sess-123"}}
         assert "gateway" not in result
 
     def test_gateway_and_session_id(self):
@@ -105,7 +105,46 @@ class TestCreateBindingRunOptions:
         )
         assert result == {
             "gateway": {"id": "my-gateway"},
-            "headers": {"x-session-affinity": "sess-123"},
+            "extraHeaders": {"x-session-affinity": "sess-123"},
+        }
+
+    def test_auto_router_candidates_share_extra_headers_with_session(self):
+        result = create_binding_run_options(
+            gateway_id="my-gateway",
+            session_id="sess-123",
+            aig_allowed_models=[
+                "@cf/qwen/qwen3.8-27b",
+                "@cf/deepseek-ai/deepseek-v4-flash-0731",
+            ],
+        )
+        assert result == {
+            "gateway": {"id": "my-gateway"},
+            "extraHeaders": {
+                "x-session-affinity": "sess-123",
+                "cf-aig-allowed-models": (
+                    "@cf/qwen/qwen3.8-27b,@cf/deepseek-ai/deepseek-v4-flash-0731"
+                ),
+            },
+        }
+
+    def test_auto_router_session_turn_and_raw_response_options(self):
+        result = create_binding_run_options(
+            gateway_id="my-gateway",
+            session_id="workers-session",
+            aig_session_id="conversation-1",
+            aig_turn_id="turn-2",
+            aig_no_session_affinity=True,
+            return_raw_response=True,
+        )
+        assert result == {
+            "gateway": {"id": "my-gateway"},
+            "extraHeaders": {
+                "x-session-affinity": "workers-session",
+                "cf-aig-session-id": "conversation-1",
+                "cf-aig-turn-id": "turn-2",
+                "cf-aig-no-session-affinity": "true",
+            },
+            "returnRawResponse": True,
         }
 
     def test_reject_if_busy_only(self):
@@ -122,7 +161,7 @@ class TestCreateBindingRunOptions:
         assert create_binding_run_options(reject_if_busy=None) is None
 
     def test_reject_if_busy_combines_with_gateway_and_session(self):
-        """rejectIfBusy sits alongside gateway and headers, not inside them."""
+        """rejectIfBusy sits alongside gateway and extraHeaders."""
         result = create_binding_run_options(
             gateway_id="my-gateway",
             session_id="sess-123",
@@ -130,7 +169,7 @@ class TestCreateBindingRunOptions:
         )
         assert result == {
             "gateway": {"id": "my-gateway"},
-            "headers": {"x-session-affinity": "sess-123"},
+            "extraHeaders": {"x-session-affinity": "sess-123"},
             "rejectIfBusy": True,
         }
 
