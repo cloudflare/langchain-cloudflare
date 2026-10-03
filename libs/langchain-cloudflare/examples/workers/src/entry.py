@@ -1770,7 +1770,7 @@ Return JSON with an "announcements" array. Each announcement should have:
         )
 
     async def handle_dynamic_route(self, request):
-        """Exercise an AI Gateway dynamic route over the AI binding.
+        """Exercise an AI Gateway route over the AI binding.
 
         The route resolves server-side, so the model string is
         ``dynamic/<route name>`` and the gateway id is required -- without it
@@ -1781,8 +1781,9 @@ Return JSON with an "announcements" array. Each announcement should have:
             - model: ``dynamic/<route name>``
             - gateway_id: AI Gateway id the route lives on
             - mode: invoke (default), batch, tools, multi-turn, structured,
-              structured-json-schema, or reasoning
+              structured-json-schema, vision, or reasoning
             - message / text / messages: input for the selected mode
+            - allowed_models: optional Auto Router candidate model list
         """
         data = await request.json()
         model = data.get("model", DEFAULT_MODEL)
@@ -1794,6 +1795,10 @@ Return JSON with an "announcements" array. Each announcement should have:
             binding=self.env.AI,
             temperature=0.0,
             ai_gateway=gateway_id,
+            aig_allowed_models=data.get("allowed_models"),
+            aig_session_id=data.get("aig_session_id"),
+            aig_turn_id=data.get("aig_turn_id"),
+            aig_no_session_affinity=data.get("aig_no_session_affinity", False),
         )
 
         result = {"model": model, "gateway_id": gateway_id, "mode": mode}
@@ -1828,7 +1833,9 @@ Return JSON with an "announcements" array. Each announcement should have:
 
         if mode in ("tools", "multi-turn"):
             message = data.get("message", "What's the weather in San Francisco?")
-            llm_with_tools = llm.bind_tools(ALL_TOOLS)
+            llm_with_tools = llm.bind_tools(
+                ALL_TOOLS, tool_choice=data.get("tool_choice")
+            )
             messages = [HumanMessage(content=message)]
             first = await llm_with_tools.ainvoke(messages)
             result["response_metadata"] = first.response_metadata
@@ -1860,6 +1867,25 @@ Return JSON with an "announcements" array. Each announcement should have:
             result["final_response"] = self._split_content(final.content)[0]
             return Response.json(result)
 
+        if mode == "vision":
+            image_base64 = data["image_base64"]
+            message = HumanMessage(
+                content=[
+                    {
+                        "type": "text",
+                        "text": data.get("message", "Describe this image briefly."),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{image_base64}"},
+                    },
+                ]
+            )
+            response = await llm.ainvoke([message])
+            result["response"] = self._split_content(response.content)[0]
+            result["response_metadata"] = response.response_metadata
+            return Response.json(result)
+
         # invoke / reasoning: same call, the reasoning mode just asks for a
         # prompt that makes the model think and reports the thinking block.
         default_message = (
@@ -1874,6 +1900,8 @@ Return JSON with an "announcements" array. Each announcement should have:
         result["reasoning_content"] = reasoning
         result["has_reasoning_content"] = reasoning is not None
         result["content_type"] = type(response.content).__name__
+        if model == "cloudflare/auto":
+            result["response_metadata"] = response.response_metadata
         return Response.json(result)
 
     # MARK: - Reject If Busy Handler

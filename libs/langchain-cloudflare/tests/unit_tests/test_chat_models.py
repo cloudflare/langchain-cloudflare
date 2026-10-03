@@ -908,6 +908,102 @@ class TestAIGatewayHeaders:
         assert llm.client.headers["x-session-affinity"] == "session-456"
         assert llm.client.headers["cf-aig-request-timeout"] == "5000"
 
+    def test_auto_router_allowlist_header(self):
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="cloudflare/auto",
+            ai_gateway="my-gateway",
+            endpoint_format="openai_compatible",
+            aig_allowed_models=[
+                "@cf/qwen/qwen3.8-27b",
+                "@cf/deepseek-ai/deepseek-v4-flash-0731",
+            ],
+        )
+        assert llm.client.headers["cf-aig-allowed-models"] == (
+            "@cf/qwen/qwen3.8-27b,@cf/deepseek-ai/deepseek-v4-flash-0731"
+        )
+
+
+class TestAutoRouterMetadata:
+    def test_session_turn_controls_require_auto_router(self):
+        with pytest.raises(ValueError, match="require model='cloudflare/auto'"):
+            ChatCloudflareWorkersAI(
+                model="@cf/qwen/qwen3.8-27b",
+                binding=object(),
+                aig_turn_id="turn-2",
+            )
+
+    def test_auto_router_session_turn_headers(self):
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="cloudflare/auto",
+            ai_gateway="my-gateway",
+            endpoint_format="openai_compatible",
+            aig_allowed_models=["@cf/qwen/qwen3.8-27b"],
+            session_id="workers-session",
+            aig_session_id="conversation-1",
+            aig_turn_id="turn-2",
+            aig_no_session_affinity=True,
+        )
+        assert llm.client.headers["cf-aig-session-id"] == "conversation-1"
+        assert llm.client.headers["cf-aig-turn-id"] == "turn-2"
+        assert llm.client.headers["cf-aig-no-session-affinity"] == "true"
+        assert llm.client.headers["x-session-affinity"] == "workers-session"
+
+    @pytest.mark.parametrize("allowed_models", [None, [], ["openai/gpt-5"]])
+    def test_requires_workers_ai_candidate_list(self, allowed_models):
+        with pytest.raises(ValueError, match="only Workers AI model IDs"):
+            ChatCloudflareWorkersAI(
+                account_id="test_account",
+                api_token="test_token",
+                model="cloudflare/auto",
+                ai_gateway="my-gateway",
+                endpoint_format="openai_compatible",
+                aig_allowed_models=allowed_models,
+            )
+
+    def test_selected_model_and_routing_headers_reach_message(self):
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account",
+            api_token="test_token",
+            model="cloudflare/auto",
+            ai_gateway="my-gateway",
+            endpoint_format="openai_compatible",
+            aig_allowed_models=["@cf/qwen/qwen3.8-27b"],
+        )
+        response = {
+            "model": "@cf/qwen/qwen3.8-27b",
+            "choices": [{"message": {"content": "Hello"}}],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        }
+        headers = {
+            "cf-aig-routed-model": "@cf/qwen/qwen3.8-27b",
+            "cf-aig-routing-reason": "cost_optimal_within_pool",
+            "cf-aig-routing-decision-id": "decision-123",
+            "cf-aig-request-id": "request-123",
+        }
+
+        result = llm._create_chat_result(response, response_headers=headers)
+        message = result.generations[0].message
+
+        assert result.llm_output["model_name"] == "@cf/qwen/qwen3.8-27b"
+        assert message.response_metadata == {
+            "model_name": "@cf/qwen/qwen3.8-27b",
+            "requested_model": "cloudflare/auto",
+            "ai_gateway": {
+                "routing_reason": "cost_optimal_within_pool",
+                "routing_decision_id": "decision-123",
+                "request_id": "request-123",
+            },
+        }
+        assert message.usage_metadata == {
+            "input_tokens": 2,
+            "output_tokens": 1,
+            "total_tokens": 3,
+        }
+
 
 # MARK: - Endpoint Format Tests
 class TestEndpointFormat:

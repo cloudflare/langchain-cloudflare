@@ -283,6 +283,7 @@ _REASONING_STRUCTURED_OUTPUT_MIN_MAX_TOKENS = 4096
 # AI Gateway dynamic routes are addressed as "dynamic/<route name>". The route
 # name is chosen by the user, so it carries no information about the model.
 _DYNAMIC_ROUTE_PREFIX = "dynamic/"
+_AUTO_ROUTER_MODEL = "cloudflare/auto"
 
 
 def get_model_behavior(model_name: str) -> ModelBehavior:
@@ -291,12 +292,11 @@ def get_model_behavior(model_name: str) -> ModelBehavior:
     Matches model name against known model families and returns
     the appropriate behavior config. Falls back to default for unknown models.
 
-    AI Gateway dynamic routes (``dynamic/<route name>``) never family-match:
-    the route resolves server-side, possibly to a different provider between
-    calls, so any family inferred from the route name would be a coincidence
-    of naming. ``dynamic/mistral-backup`` is not necessarily Mistral. Note
-    that returning defaults also means a route never receives the reasoning
-    structured-output ``max_tokens`` floor applied in
+    AI Gateway dynamic routes (``dynamic/<route name>``) and Auto Router
+    (``cloudflare/auto``) never family-match: the serving model resolves
+    server-side and may change between calls. ``dynamic/mistral-backup`` is
+    not necessarily Mistral. Returning defaults also means these routes
+    never receive the reasoning structured-output ``max_tokens`` floor in
     :meth:`ChatCloudflareWorkersAI.with_structured_output`.
 
     Args:
@@ -307,7 +307,10 @@ def get_model_behavior(model_name: str) -> ModelBehavior:
         ModelBehavior configuration for this model family
     """
     model_lower = model_name.lower()
-    if model_lower.startswith(_DYNAMIC_ROUTE_PREFIX):
+    if (
+        model_lower.startswith(_DYNAMIC_ROUTE_PREFIX)
+        or model_lower == _AUTO_ROUTER_MODEL
+    ):
         return DEFAULT_MODEL_BEHAVIOR
     for family, behavior in MODEL_BEHAVIORS.items():
         if family in model_lower:
@@ -464,6 +467,21 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         alias="cloudflare_ai_gateway",
         default_factory=from_env("AI_GATEWAY", default=None),
     )
+    aig_allowed_models: Optional[List[str]] = None
+    """Explicit Auto Router candidate models on AI Gateway.
+
+    Sent as ``cf-aig-allowed-models`` for REST calls when ``ai_gateway`` is set.
+    Required for ``model="cloudflare/auto"`` to keep candidates on Workers AI.
+    Choose candidates that support the input types and features used by calls.
+    For an AI binding, sent in the third argument to ``env.AI.run()`` as an
+    ``extraHeaders`` entry.
+    """
+    aig_session_id: Optional[str] = None
+    """Auto Router conversation ID (``cf-aig-session-id``)."""
+    aig_turn_id: Optional[str] = None
+    """Auto Router turn ID (``cf-aig-turn-id``), shared by follow-up calls."""
+    aig_no_session_affinity: bool = False
+    """Disable Auto Router model affinity (``cf-aig-no-session-affinity``)."""
     reject_if_busy: Optional[bool] = None
     """Fail fast instead of queueing when Workers AI is at capacity.
 
@@ -574,6 +592,24 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         if self.temperature == 0:
             self.temperature = 1e-8
 
+        if self.model.lower() != _AUTO_ROUTER_MODEL and (
+            self.aig_session_id or self.aig_turn_id or self.aig_no_session_affinity
+        ):
+            raise ValueError(
+                "Auto Router session and turn controls require model='cloudflare/auto'."
+            )
+
+        if self.model.lower() == _AUTO_ROUTER_MODEL:
+            if not self.ai_gateway:
+                raise ValueError("Auto Router requires ai_gateway.")
+            if not self.aig_allowed_models or any(
+                not model.startswith("@cf/") for model in self.aig_allowed_models
+            ):
+                raise ValueError(
+                    "Auto Router requires aig_allowed_models containing only "
+                    "Workers AI model IDs (@cf/...)."
+                )
+
         # If binding is provided, skip REST API setup
         if self.binding is not None:
             if self.endpoint_format != "workers_ai":
@@ -598,6 +634,15 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 "400 code 7000 'No route for that URI'. Pass "
                 "endpoint_format='openai_compatible', which sends the model "
                 "in the request body instead."
+            )
+
+        if (
+            self.model.lower() == _AUTO_ROUTER_MODEL
+            and self.endpoint_format == "workers_ai"
+        ):
+            raise ValueError(
+                "Auto Router requires endpoint_format='openai_compatible' "
+                "for REST calls."
             )
 
         if not self.api_token:
@@ -641,6 +686,15 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             # AI Gateway routing and request handling headers
             if self.ai_gateway:
                 headers["cf-aig-gateway-id"] = self.ai_gateway
+                if self.aig_allowed_models:
+                    headers["cf-aig-allowed-models"] = ",".join(self.aig_allowed_models)
+                if self.model.lower() == _AUTO_ROUTER_MODEL:
+                    if self.aig_session_id:
+                        headers["cf-aig-session-id"] = self.aig_session_id
+                    if self.aig_turn_id:
+                        headers["cf-aig-turn-id"] = self.aig_turn_id
+                    if self.aig_no_session_affinity:
+                        headers["cf-aig-no-session-affinity"] = "true"
                 if self.aig_request_timeout is not None:
                     headers["cf-aig-request-timeout"] = str(self.aig_request_timeout)
                 if self.aig_max_attempts is not None:
@@ -954,6 +1008,33 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         """
         return apply_reject_if_busy(payload, self.reject_if_busy)
 
+    def _auto_router_response_metadata(
+        self,
+        response_headers: Optional[Mapping[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Add Auto Router's HTTP routing details to standard model metadata."""
+        if self.model.lower() != _AUTO_ROUTER_MODEL:
+            return {}
+
+        headers = response_headers or {}
+        metadata: Dict[str, Any] = {"requested_model": self.model}
+        routed_model = headers.get("cf-aig-routed-model")
+        if routed_model and routed_model != self.model:
+            metadata["model_name"] = routed_model
+
+        gateway_metadata = {}
+        for header, key in (
+            ("cf-aig-routing-reason", "routing_reason"),
+            ("cf-aig-routing-decision-id", "routing_decision_id"),
+            ("cf-aig-request-id", "request_id"),
+        ):
+            if value := headers.get(header):
+                gateway_metadata[key] = value
+
+        if gateway_metadata:
+            metadata["ai_gateway"] = gateway_metadata
+        return metadata
+
     @staticmethod
     def _streaming_safe_usage(usage: Dict[str, Any]) -> Dict[str, Any]:
         """Drop usage fields that can't survive per-chunk merging.
@@ -974,11 +1055,19 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         A route with no reported model has unknown identity; its name must not
         be presented as the model that served the request.
         """
+        is_route = self.model.startswith(_DYNAMIC_ROUTE_PREFIX) or (
+            self.model.lower() == _AUTO_ROUTER_MODEL
+        )
         model = response.get("model")
-        if not isinstance(model, str) or not model or model.startswith("dynamic/"):
-            model = None if self.model.startswith("dynamic/") else self.model
+        if (
+            not isinstance(model, str)
+            or not model
+            or model.startswith(_DYNAMIC_ROUTE_PREFIX)
+            or model.lower() == _AUTO_ROUTER_MODEL
+        ):
+            model = None if is_route else self.model
         metadata = {"model_name": model}
-        if self.model.startswith("dynamic/"):
+        if is_route:
             metadata["requested_model"] = self.model
         return metadata
 
@@ -1051,7 +1140,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
 
-            response_data = loop.run_until_complete(self._call_binding(payload))
+            response_data, binding_headers = loop.run_until_complete(
+                self._call_binding(payload)
+            )
         else:
             # Use REST API (httpx client)
             api_url = self._get_api_url()
@@ -1061,7 +1152,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             response.raise_for_status()
             response_data = response.json()
 
-        return self._create_chat_result(response_data)
+        return self._create_chat_result(
+            response_data,
+            response_headers=(
+                response.headers if self.binding is None else binding_headers
+            ),
+        )
 
     async def _agenerate(  # type: ignore
         self,
@@ -1081,7 +1177,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         # Use binding if available (for Python Workers)
         if self.binding is not None:
-            response_data = await self._call_binding(payload)
+            response_data, binding_headers = await self._call_binding(payload)
         else:
             # Use REST API (httpx async client)
             api_url = self._get_api_url()
@@ -1093,7 +1189,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             response.raise_for_status()
             response_data = response.json()
 
-        return self._create_chat_result(response_data)
+        return self._create_chat_result(
+            response_data,
+            response_headers=(
+                response.headers if self.binding is None else binding_headers
+            ),
+        )
 
     # MARK: - Streaming
     def _stream(
@@ -1125,6 +1226,10 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             "POST", api_url, json=self._rest_body(payload)
         ) as response:
             response.raise_for_status()
+            router_metadata = self._auto_router_response_metadata(
+                response_headers=response.headers
+            )
+            router_metadata_sent = False
             accumulated_content = ""
             model_metadata_sent = False
             tool_calls_detected = False
@@ -1154,7 +1259,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     )
                     if generation_chunk is None:
                         continue
-                    if generation_chunk.message.response_metadata:
+                    if not router_metadata_sent and router_metadata:
+                        generation_chunk.message.response_metadata.update(
+                            router_metadata
+                        )
+                        router_metadata_sent = True
+                    if generation_chunk.message.response_metadata.get("model_name"):
                         model_metadata_sent = True
 
                     if run_manager:
@@ -1280,10 +1390,11 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     yield generation_chunk
 
         if not model_metadata_sent:
+            metadata = self._response_model_metadata({})
+            if not router_metadata_sent:
+                metadata.update(router_metadata)
             yield ChatGenerationChunk(
-                message=AIMessageChunk(
-                    content="", response_metadata=self._response_model_metadata({})
-                )
+                message=AIMessageChunk(content="", response_metadata=metadata)
             )
 
     async def _astream(
@@ -1315,6 +1426,10 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             "POST", api_url, json=self._rest_body(payload)
         ) as response:
             response.raise_for_status()
+            router_metadata = self._auto_router_response_metadata(
+                response_headers=response.headers
+            )
+            router_metadata_sent = False
 
             accumulated_content = ""
             model_metadata_sent = False
@@ -1344,7 +1459,12 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     )
                     if generation_chunk is None:
                         continue
-                    if generation_chunk.message.response_metadata:
+                    if not router_metadata_sent and router_metadata:
+                        generation_chunk.message.response_metadata.update(
+                            router_metadata
+                        )
+                        router_metadata_sent = True
+                    if generation_chunk.message.response_metadata.get("model_name"):
                         model_metadata_sent = True
 
                     if run_manager:
@@ -1484,21 +1604,24 @@ class ChatCloudflareWorkersAI(BaseChatModel):
                     yield generation_chunk
 
         if not model_metadata_sent:
+            metadata = self._response_model_metadata({})
+            if not router_metadata_sent:
+                metadata.update(router_metadata)
             yield ChatGenerationChunk(
-                message=AIMessageChunk(
-                    content="", response_metadata=self._response_model_metadata({})
-                )
+                message=AIMessageChunk(content="", response_metadata=metadata)
             )
 
     # MARK: - Internal Methods
-    async def _call_binding(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_binding(
+        self, payload: Dict[str, Any]
+    ) -> Tuple[Dict[str, Any], Optional[Dict[str, str]]]:
         """Call the Workers AI binding with the given payload.
 
         Args:
             payload: The request payload (messages, parameters, etc.)
 
         Returns:
-            Response data in REST API format
+            Response data in REST API format and Auto Router response headers.
         """
         from .bindings import (
             convert_binding_response_to_rest_format,
@@ -1511,10 +1634,16 @@ class ChatCloudflareWorkersAI(BaseChatModel):
 
         # Create options for the binding (gateway + session affinity +
         # rejectIfBusy, which the binding only reads from this argument)
+        is_auto_router = self.model.lower() == _AUTO_ROUTER_MODEL
         run_options = create_binding_run_options(
             gateway_id=self.ai_gateway,
             session_id=self.session_id,
             reject_if_busy=self.reject_if_busy,
+            aig_allowed_models=self.aig_allowed_models,
+            aig_session_id=self.aig_session_id if is_auto_router else None,
+            aig_turn_id=self.aig_turn_id if is_auto_router else None,
+            aig_no_session_affinity=self.aig_no_session_affinity and is_auto_router,
+            return_raw_response=is_auto_router,
         )
 
         # Call the binding with optional options
@@ -1523,8 +1652,29 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         else:
             response = await self.binding.run(self.model, js_payload)
 
+        response_headers = None
+        if is_auto_router:
+            if not response.ok:
+                raise RuntimeError(
+                    f"Workers AI binding request failed with HTTP {response.status}"
+                )
+            response_headers = {
+                header: value
+                for header in (
+                    "cf-aig-routed-model",
+                    "cf-aig-routing-reason",
+                    "cf-aig-routing-decision-id",
+                    "cf-aig-request-id",
+                )
+                if (value := response.headers.get(header))
+            }
+            response = await response.json()
+
         # Convert to REST API format that _create_chat_result expects
-        return convert_binding_response_to_rest_format(response, self.model)
+        return (
+            convert_binding_response_to_rest_format(response, self.model),
+            response_headers,
+        )
 
     @property
     def _default_params(self) -> Dict[str, Any]:
@@ -1548,8 +1698,15 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             params["presence_penalty"] = self.presence_penalty
         return params
 
-    def _create_chat_result(self, response: Dict[str, Any]) -> ChatResult:
+    def _create_chat_result(
+        self,
+        response: Dict[str, Any],
+        response_headers: Optional[Mapping[str, str]] = None,
+    ) -> ChatResult:
         generations = []
+        router_metadata = self._auto_router_response_metadata(
+            response_headers=response_headers,
+        )
 
         # Extract the response data
         if "result" in response:  # type: ignore
@@ -1749,6 +1906,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
         # Preserve identity on each message, including batches with fallback.
         model_metadata = self._response_model_metadata(response_result)
         message.response_metadata.update(model_metadata)
+        message.response_metadata.update(router_metadata)
 
         # Create generation and return result
         generation_info = {}  # type: ignore
@@ -1762,6 +1920,8 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             "token_usage": token_usage,
             **model_metadata,
         }
+        if "model_name" in router_metadata:
+            llm_output["model_name"] = router_metadata["model_name"]
 
         return ChatResult(generations=generations, llm_output=llm_output)
 
@@ -1916,7 +2076,9 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             if model_names and all(name == model_names[0] for name in model_names)
             else None,
         }
-        if self.model.startswith("dynamic/"):
+        if self.model.startswith(_DYNAMIC_ROUTE_PREFIX) or (
+            self.model.lower() == _AUTO_ROUTER_MODEL
+        ):
             combined["requested_model"] = self.model
         return combined
 

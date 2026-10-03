@@ -1592,6 +1592,101 @@ DYNAMIC_ROUTE_FALLBACK = dynamic_route("AI_GATEWAY_DYNAMIC_ROUTE_FALLBACK")
 
 AI_GATEWAY = os.environ.get("AI_GATEWAY")
 
+# MARK: - AI Gateway Auto Router Tests
+
+AUTO_ROUTER_WORKERS_AI_MODELS = [
+    "@cf/qwen/qwen3.8-27b",
+    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+]
+
+
+@pytest.mark.skipif(not AI_GATEWAY, reason="AI_GATEWAY env var not set")
+def test_auto_router_binding_metadata(dev_server):
+    """Auto Router uses allowed Workers AI models through the Python AI binding."""
+    session_id = f"test-auto-router-{uuid.uuid4().hex}"
+    response = requests.post(
+        f"http://localhost:{dev_server}/dynamic-route",
+        json={
+            "model": "cloudflare/auto",
+            "gateway_id": AI_GATEWAY,
+            "allowed_models": AUTO_ROUTER_WORKERS_AI_MODELS,
+            "message": "Say hello briefly.",
+            "aig_session_id": session_id,
+            "aig_turn_id": f"{session_id}-turn",
+        },
+        timeout=90,
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["response"].strip()
+    metadata = result["response_metadata"]
+    assert metadata["model_name"] in AUTO_ROUTER_WORKERS_AI_MODELS
+    assert metadata["requested_model"] == "cloudflare/auto"
+    assert metadata["ai_gateway"]["routing_reason"]
+    assert metadata["ai_gateway"]["routing_decision_id"]
+    assert metadata["ai_gateway"]["request_id"]
+
+
+@pytest.mark.skipif(not AI_GATEWAY, reason="AI_GATEWAY env var not set")
+def test_auto_router_binding_structured_output(dev_server):
+    """Auto Router keeps the existing Worker structured-output path working."""
+    response = requests.post(
+        f"http://localhost:{dev_server}/dynamic-route",
+        json={
+            "model": "cloudflare/auto",
+            "gateway_id": AI_GATEWAY,
+            "allowed_models": AUTO_ROUTER_WORKERS_AI_MODELS,
+            "mode": "structured",
+            "text": "Acme Corp announced a partnership with TechGiant Inc.",
+        },
+        timeout=90,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["extracted"]["announcements"]
+
+
+@pytest.mark.skipif(not AI_GATEWAY, reason="AI_GATEWAY env var not set")
+def test_auto_router_binding_tool_calling(dev_server):
+    """Auto Router passes tool definitions through the Python AI binding."""
+    response = requests.post(
+        f"http://localhost:{dev_server}/dynamic-route",
+        json={
+            "model": "cloudflare/auto",
+            "gateway_id": AI_GATEWAY,
+            "allowed_models": AUTO_ROUTER_WORKERS_AI_MODELS,
+            "mode": "tools",
+            "tool_choice": "required",
+            "message": "Use get_weather to check the weather in San Francisco.",
+        },
+        timeout=90,
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["tool_calls"][0]["name"] == "get_weather"
+
+
+@pytest.mark.skipif(not AI_GATEWAY, reason="AI_GATEWAY env var not set")
+def test_auto_router_binding_vision(dev_server):
+    """An image request works when only a vision-capable candidate is allowed."""
+    response = requests.post(
+        f"http://localhost:{dev_server}/dynamic-route",
+        json={
+            "model": "cloudflare/auto",
+            "gateway_id": AI_GATEWAY,
+            "allowed_models": ["@cf/qwen/qwen3.8-27b"],
+            "mode": "vision",
+            "image_base64": create_test_image_base64(),
+        },
+        timeout=90,
+    )
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["response"].strip()
+    assert result["response_metadata"]["model_name"] == "@cf/qwen/qwen3.8-27b"
+
+
+# MARK: - AI Gateway Dynamic Route Tests
+
 
 @pytest.mark.skipif(not AI_GATEWAY, reason="AI_GATEWAY env var not set")
 class TestWorkerDynamicRoutes:

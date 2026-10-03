@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.4.1] - 2026-10-03
+
+#### Added
+
+- **AI Gateway Auto Router**: `ChatCloudflareWorkersAI` supports
+  `model="cloudflare/auto"` with an explicit `aig_allowed_models` list of
+  Workers AI candidates. REST calls send the list through
+  `cf-aig-allowed-models`; Python Worker binding calls use `extraHeaders`.
+  REST calls require `endpoint_format="openai_compatible"`. Optional
+  `aig_session_id`, `aig_turn_id`, and `aig_no_session_affinity` fields send
+  Auto Router's documented session and turn controls.
+- **Selected-model metadata**: Auto Router responses report the serving model
+  in `response_metadata.model_name` and the requested route in
+  `response_metadata.requested_model`. REST and Python Worker responses also
+  include routing reason and request identifiers when AI Gateway returns those
+  headers. The Worker binding uses `returnRawResponse` to read them.
+  Focused REST and Python Worker tests cover chat, structured output, tool
+  calling, and vision. For image requests, choose candidates that support
+  vision; the tested vision candidate is `@cf/qwen/qwen3.8-27b`.
+
+#### Fixed
+
+- **Python Worker AI binding request headers**: Session affinity and Auto
+  Router candidate headers now use the binding's documented `extraHeaders`
+  option. The existing `x-session-affinity` header was verified through the
+  Worker binding.
+
+---
+
 ### [0.4.0] - 2026-10-01
 
 #### Added

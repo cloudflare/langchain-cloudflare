@@ -61,10 +61,15 @@ def create_binding_run_options(
     gateway_id: Optional[str] = None,
     session_id: Optional[str] = None,
     reject_if_busy: Optional[bool] = None,
+    aig_allowed_models: Optional[List[str]] = None,
+    aig_session_id: Optional[str] = None,
+    aig_turn_id: Optional[str] = None,
+    aig_no_session_affinity: bool = False,
+    return_raw_response: bool = False,
 ) -> Any:
     """Create the options object (third parameter) for env.AI.run().
 
-    Combines AI Gateway config, session affinity headers, and the
+    Combines AI Gateway config, request headers, and the
     rejectIfBusy capacity option into a single options object passed as the
     third parameter to the Workers AI binding.
 
@@ -76,6 +81,11 @@ def create_binding_run_options(
             the request instead of queueing it when capacity is unavailable.
             Per Cloudflare's docs this belongs in this options object only --
             it is ignored inside the model input object.
+        aig_allowed_models: Workers AI candidates for Auto Router.
+        aig_session_id: Auto Router conversation ID.
+        aig_turn_id: Auto Router turn ID.
+        aig_no_session_affinity: Disable Auto Router model affinity.
+        return_raw_response: Return a Response object so callers can inspect headers.
 
     Returns:
         JS-compatible options object in Pyodide, Python dict otherwise,
@@ -86,11 +96,25 @@ def create_binding_run_options(
     if gateway_id:
         options["gateway"] = {"id": gateway_id}
 
+    extra_headers: Dict[str, str] = {}
     if session_id:
-        options["headers"] = {"x-session-affinity": session_id}
+        extra_headers["x-session-affinity"] = session_id
+    if aig_allowed_models:
+        extra_headers["cf-aig-allowed-models"] = ",".join(aig_allowed_models)
+    if aig_session_id:
+        extra_headers["cf-aig-session-id"] = aig_session_id
+    if aig_turn_id:
+        extra_headers["cf-aig-turn-id"] = aig_turn_id
+    if aig_no_session_affinity:
+        extra_headers["cf-aig-no-session-affinity"] = "true"
+    if extra_headers:
+        options["extraHeaders"] = extra_headers
 
     if reject_if_busy:
         options["rejectIfBusy"] = True
+
+    if return_raw_response:
+        options["returnRawResponse"] = True
 
     if not options:
         return None
