@@ -34,7 +34,7 @@ from tests.press_release_examples import PRESS_RELEASE_TEXTS
 
 # MARK: - Decision Model Tests
 class TestWorkerDecisionModels:
-    """Clef decisions through the production adapter and real AI binding."""
+    """Clef decisions, including Omni audio/video, through the AI binding."""
 
     @pytest.mark.parametrize("model", DECISION_MODELS)
     @pytest.mark.parametrize(

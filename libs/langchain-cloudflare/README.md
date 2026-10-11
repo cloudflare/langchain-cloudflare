@@ -71,8 +71,9 @@ its model identity when a batch uses different fallback models.
 ## Decision Models (Clef)
 
 `CloudflareWorkersAIDecisionModel` supports
-[`@cf/cloudflare/clef`](https://developers.cloudflare.com/workers-ai/models/clef/)
-and [`@cf/cloudflare/clef-flash`](https://developers.cloudflare.com/workers-ai/models/clef-flash/).
+[`@cf/cloudflare/clef`](https://developers.cloudflare.com/workers-ai/models/clef/),
+[`@cf/cloudflare/clef-flash`](https://developers.cloudflare.com/workers-ai/models/clef-flash/),
+and [`@cf/cloudflare/clef-omni`](https://developers.cloudflare.com/workers-ai/models/clef-omni/).
 They evaluate text or JSON state against typed questions and return probabilities.
 Question types are `noul` (yes/no probability), `choice` (an option with its
 probability distribution), and `score` (a probability-weighted ordered rubric).
@@ -120,6 +121,44 @@ dynamic routing. Results preserve `model`, `answers`,
 and `usage` fields. Pass optional `images` as embedded PNG/JPEG/WebP data URLs or
 `{"content_type": "image/png", "base64": "..."}` objects (up to four images).
 The Worker example exposes this operation at `/decision`.
+
+### Clef Omni audio and video
+
+Clef Omni accepts audio and video alongside text, JSON, and images. It returns
+the same decision probabilities and usage as the other Clef models.
+
+```python
+import base64
+from pathlib import Path
+
+from langchain_cloudflare import CloudflareWorkersAIDecisionModel
+
+model = CloudflareWorkersAIDecisionModel(model_name="@cf/cloudflare/clef-omni")
+audio = base64.b64encode(Path("recording.wav").read_bytes()).decode("ascii")
+result = model.evaluate(
+    state="Evaluate the attached recording.",
+    questions={
+        "speech": {
+            "type": "noul",
+            "instructions": "Does the recording contain human speech?",
+        }
+    },
+    audio=[f"data:audio/wav;base64,{audio}"],
+)
+```
+
+Both `evaluate()` and `aevaluate()` accept optional `audio` and `videos` lists.
+Each item is a base64 data URL or a `{"content_type": "...", "base64": "..."}`
+object. Supported formats are WAV/MP3 audio and MP4/WebM video; remote URLs
+are unsupported. Audio and video arguments require Clef Omni. In a Python
+Worker, construct the model with `binding=self.env.AI` and use `aevaluate()`.
+
+- Audio: up to four clips, each at most 8 MiB and 300 seconds.
+- Video: up to two clips, each at most 16 MiB and 60 seconds, sampled at two
+  frames per second. Video soundtracks are used when every supplied video has one.
+- Combined decoded audio and video: at most 16 MiB per request.
+- Media and questions consume the 64,000-token context window. If they exceed
+  it, the request fails; otherwise, text state is truncated to the remaining space.
 
 ## Embeddings
 

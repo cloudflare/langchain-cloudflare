@@ -1,4 +1,4 @@
-"""Cloudflare Workers AI decision models (Clef and Clef Flash)."""
+"""Cloudflare Workers AI decision models (Clef, Clef Flash, and Clef Omni)."""
 
 # MARK: - IMPORTS
 from typing import Any, Dict, List, Literal, Optional, Union
@@ -16,7 +16,11 @@ from .bindings import (
 )
 
 # MARK: - MODELS
-DECISION_MODELS = ("@cf/cloudflare/clef", "@cf/cloudflare/clef-flash")
+DECISION_MODELS = (
+    "@cf/cloudflare/clef",
+    "@cf/cloudflare/clef-flash",
+    "@cf/cloudflare/clef-omni",
+)
 
 
 # MARK: - DECISION MODEL
@@ -49,9 +53,9 @@ class CloudflareWorkersAIDecisionModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
-    model_name: Literal["@cf/cloudflare/clef", "@cf/cloudflare/clef-flash"] = (
-        "@cf/cloudflare/clef"
-    )
+    model_name: Literal[
+        "@cf/cloudflare/clef", "@cf/cloudflare/clef-flash", "@cf/cloudflare/clef-omni"
+    ] = "@cf/cloudflare/clef"
     api_base_url: str = "https://api.cloudflare.com/client/v4/accounts"
     account_id: str = Field(default_factory=from_env("CF_ACCOUNT_ID", default=""))
     api_token: SecretStr = Field(
@@ -91,15 +95,22 @@ class CloudflareWorkersAIDecisionModel(BaseModel):
         state: Any,
         questions: Dict[str, Any],
         images: Optional[List[Union[str, Dict[str, str]]]],
+        audio: Optional[List[Union[str, Dict[str, str]]]],
+        videos: Optional[List[Union[str, Dict[str, str]]]],
     ) -> Dict[str, Any]:
         """Derive the required body selector from the endpoint model ID."""
+        if (audio is not None or videos is not None) and self.model_name != (
+            "@cf/cloudflare/clef-omni"
+        ):
+            raise ValueError("Audio and video inputs require @cf/cloudflare/clef-omni")
         payload: Dict[str, Any] = {
             "model": self.model_name.rsplit("/", 1)[-1],
             "state": state,
             "questions": questions,
         }
-        if images is not None:
-            payload["images"] = images
+        for field, media in (("images", images), ("audio", audio), ("videos", videos)):
+            if media is not None:
+                payload[field] = media
         return payload
 
     # MARK: - EVALUATION
@@ -109,16 +120,20 @@ class CloudflareWorkersAIDecisionModel(BaseModel):
         state: Any,
         questions: Dict[str, Any],
         images: Optional[List[Union[str, Dict[str, str]]]] = None,
+        audio: Optional[List[Union[str, Dict[str, str]]]] = None,
+        videos: Optional[List[Union[str, Dict[str, str]]]] = None,
     ) -> Dict[str, Any]:
         """Evaluate text or JSON state through REST.
 
         ``questions`` maps 1–64 IDs to native question objects. Optional images
         are embedded PNG/JPEG/WebP data URLs or ``{content_type, base64}``
-        objects; remote URLs are unsupported. Use :meth:`aevaluate` in Workers.
+        objects; remote URLs are unsupported. Clef Omni also accepts ``audio``
+        (WAV/MP3) and ``videos`` (MP4/WebM) in the same embedded formats.
+        Use :meth:`aevaluate` in Workers.
         """
         if self.binding is not None:
             raise ValueError("Use aevaluate() with a Workers AI binding")
-        payload = self._prepare_payload(state, questions, images)
+        payload = self._prepare_payload(state, questions, images, audio, videos)
         response = requests.post(
             url=self._inference_url,
             headers=self.headers,
@@ -134,13 +149,15 @@ class CloudflareWorkersAIDecisionModel(BaseModel):
         state: Any,
         questions: Dict[str, Any],
         images: Optional[List[Union[str, Dict[str, str]]]] = None,
+        audio: Optional[List[Union[str, Dict[str, str]]]] = None,
+        videos: Optional[List[Union[str, Dict[str, str]]]] = None,
     ) -> Dict[str, Any]:
         """Evaluate the same native input through async REST or ``env.AI.run``.
 
         Returns the same dictionary as :meth:`evaluate`, including each
         question's probabilities, confidence where applicable, and token usage.
         """
-        payload = self._prepare_payload(state, questions, images)
+        payload = self._prepare_payload(state, questions, images, audio, videos)
         if self.binding is not None:
             js_payload = convert_payload_for_binding(payload)
             options = create_binding_run_options(

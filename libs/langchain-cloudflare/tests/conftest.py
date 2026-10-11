@@ -16,6 +16,11 @@ import pytest
 import requests
 from dotenv import load_dotenv
 
+from tests.decision_helpers import (
+    OMNI_MEDIA_CASES,
+    RED_IMAGE,
+    decision_media_case,
+)
 from tests.press_release_examples import PRESS_RELEASE_EXAMPLES
 
 # MARK: - Collection Hooks
@@ -70,10 +75,21 @@ else:
 
 
 @pytest.fixture(
-    params=["text", "json", "image_data_url", "image_base64", *PRESS_RELEASE_EXAMPLES]
+    params=[
+        "text",
+        "json",
+        "image_data_url",
+        "image_base64",
+        *PRESS_RELEASE_EXAMPLES,
+        *OMNI_MEDIA_CASES,
+    ]
 )
 def decision_case(request):
-    """Native Clef inputs shared by REST and real Worker binding tests."""
+    """Native Clef inputs shared by REST and Worker binding tests."""
+    if request.param in OMNI_MEDIA_CASES:
+        if request.getfixturevalue("model") != "@cf/cloudflare/clef-omni":
+            pytest.skip("Audio and video inputs require Clef Omni")
+        return decision_media_case(request.param)
     payload = {
         "state": "Checkout has been failing for every customer for the last hour.",
         "questions": {
@@ -99,10 +115,7 @@ def decision_case(request):
         payload["state"] = {"service": "checkout", "failing": True, "affected": "all"}
     elif request.param.startswith("image"):
         # Fixed 16x16 solid-red PNG, with no image library dependency.
-        image = (
-            "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BA"
-            "EiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII="
-        )
+        image = RED_IMAGE
         payload = {
             "state": "Evaluate the attached image.",
             "questions": {

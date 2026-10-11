@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.4.2] - 2026-10-11
+
+#### Added
+
+- **Clef Omni**: `CloudflareWorkersAIDecisionModel` supports
+  `@cf/cloudflare/clef-omni` through synchronous REST, asynchronous REST, and
+  Python Workers AI bindings, preserving native answers, probabilities, and
+  token usage.
+- **Audio and video inputs**: Clef Omni accepts optional `audio` (WAV/MP3) and
+  `videos` (MP4/WebM) lists as embedded data URLs or `content_type`/`base64`
+  objects alongside text, JSON, and images. The `/decision` Worker example
+  forwards these inputs. Older Clef models reject audio and video arguments
+  before calling the provider.
+- **Multimodal integration coverage**: Shared synthetic fixtures test
+  square/circle videos, open/closed speech recordings, video soundtracks, and
+  mixed image/audio/video requests in both encodings through REST and Python
+  Worker bindings.
+
+---
+
 ### [0.4.1] - 2026-10-03
 
 #### Added

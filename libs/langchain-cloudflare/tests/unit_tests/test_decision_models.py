@@ -23,10 +23,24 @@ RESULT = {
 }
 
 
+@pytest.fixture(params=["data_url", "base64"])
+def decision_input(request, model):
+    payload = {**INPUT}
+    if model == "@cf/cloudflare/clef-omni":
+        for field, content_type in (("audio", "audio/wav"), ("videos", "video/mp4")):
+            encoded = f"encoded-{field}"
+            payload[field] = [
+                f"data:{content_type};base64,{encoded}"
+                if request.param == "data_url"
+                else {"content_type": content_type, "base64": encoded}
+            ]
+    return payload
+
+
 # MARK: - REST CONTRACT
 @pytest.mark.parametrize("model", DECISION_MODELS)
 @pytest.mark.parametrize("asynchronous", [False, True])
-async def test_rest_transport(model, asynchronous):
+async def test_rest_transport(model, asynchronous, decision_input):
     """Both transports send native inputs and unwrap only the REST envelope."""
     decision_model = CloudflareWorkersAIDecisionModel(
         model_name=model,
@@ -42,14 +56,14 @@ async def test_rest_transport(model, asynchronous):
         with patch("httpx.AsyncClient") as client_type:
             client = client_type.return_value.__aenter__.return_value
             client.post = AsyncMock(return_value=response)
-            result = await decision_model.aevaluate(**INPUT)
+            result = await decision_model.aevaluate(**decision_input)
             kwargs = client.post.call_args.kwargs
             assert client_type.call_args.kwargs["timeout"] == 45
     else:
         with patch(
             "langchain_cloudflare.decision_models.requests.post", return_value=response
         ) as post:
-            result = decision_model.evaluate(**INPUT)
+            result = decision_model.evaluate(**decision_input)
             kwargs = post.call_args.kwargs
             assert kwargs["timeout"] == 45
     assert result == RESULT
@@ -62,7 +76,7 @@ async def test_rest_transport(model, asynchronous):
         "cf-aig-gateway-id": "gateway",
     }
     assert kwargs["json"] == {
-        **INPUT,
+        **decision_input,
         "model": model.rsplit("/", 1)[-1],
         "options": {"rejectIfBusy": True},
     }
@@ -71,7 +85,7 @@ async def test_rest_transport(model, asynchronous):
 # MARK: - BINDING CONTRACT
 @pytest.mark.parametrize("model", DECISION_MODELS)
 @pytest.mark.parametrize("with_options", [False, True])
-async def test_binding_transport(model, with_options):
+async def test_binding_transport(model, with_options, decision_input):
     """Record the actual binding call, including native payload and run options."""
     binding = MagicMock()
     binding.run = AsyncMock(return_value=RESULT)
@@ -83,8 +97,8 @@ async def test_binding_transport(model, with_options):
         ai_gateway="gateway" if with_options else None,
         reject_if_busy=with_options,
     )
-    assert await decision_model.aevaluate(**INPUT) == RESULT
-    payload = {**INPUT, "model": model.rsplit("/", 1)[-1]}
+    assert await decision_model.aevaluate(**decision_input) == RESULT
+    payload = {**decision_input, "model": model.rsplit("/", 1)[-1]}
     if with_options:
         binding.run.assert_awaited_once_with(
             model, payload, {"gateway": {"id": "gateway"}, "rejectIfBusy": True}
@@ -93,12 +107,15 @@ async def test_binding_transport(model, with_options):
         binding.run.assert_awaited_once_with(model, payload)
 
 
-async def test_binding_js_response_preserves_answers_and_usage():
+@pytest.mark.parametrize("model", DECISION_MODELS)
+async def test_binding_js_response_preserves_answers_and_usage(model):
     response = MagicMock()
     response.to_py.return_value = RESULT
     binding = MagicMock()
     binding.run = AsyncMock(return_value=response)
-    decision_model = CloudflareWorkersAIDecisionModel(binding=binding, ai_gateway=None)
+    decision_model = CloudflareWorkersAIDecisionModel(
+        model_name=model, binding=binding, ai_gateway=None
+    )
     assert (
         await decision_model.aevaluate(
             state=INPUT["state"], questions=INPUT["questions"]
@@ -107,10 +124,39 @@ async def test_binding_js_response_preserves_answers_and_usage():
     )
     payload = binding.run.call_args.args[1]
     assert "images" not in payload
+    assert "audio" not in payload
+    assert "videos" not in payload
     assert "options" not in payload
 
 
 # MARK: - ERRORS
+@pytest.mark.parametrize("model", DECISION_MODELS[:2])
+@pytest.mark.parametrize("field", ["audio", "videos"])
+@pytest.mark.parametrize("transport", ["sync", "async", "binding"])
+async def test_media_rejected_before_transport(model, field, transport):
+    binding = MagicMock()
+    binding.run = AsyncMock()
+    decision_model = CloudflareWorkersAIDecisionModel(
+        model_name=model,
+        account_id="account",
+        api_token="token",
+        binding=binding if transport == "binding" else None,
+        ai_gateway=None,
+    )
+    with (
+        patch("langchain_cloudflare.decision_models.requests.post") as post,
+        patch("httpx.AsyncClient") as client,
+    ):
+        with pytest.raises(ValueError, match="require @cf/cloudflare/clef-omni"):
+            if transport == "sync":
+                decision_model.evaluate(**INPUT, **{field: []})
+            else:
+                await decision_model.aevaluate(**INPUT, **{field: []})
+        post.assert_not_called()
+        client.assert_not_called()
+        binding.run.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "account_id,api_token,message",
     [("", "token", "account ID"), ("account", "", "API token")],
