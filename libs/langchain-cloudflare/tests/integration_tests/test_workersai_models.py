@@ -735,7 +735,7 @@ class TestToolStrategyJsonSchema:
 
 
 class TestDecisionModels:
-    """Clef's native decision contract through synchronous and async REST."""
+    """Clef decisions, including Omni audio/video, through sync and async REST."""
 
     @pytest.mark.parametrize("model", DECISION_MODELS)
     @pytest.mark.parametrize(

@@ -1168,6 +1168,8 @@ Return JSON with an "announcements" array. Each announcement should have:
             state=data["state"],
             questions=data["questions"],
             images=data.get("images"),
+            audio=data.get("audio"),
+            videos=data.get("videos"),
         )
         return Response.json(result)
 
