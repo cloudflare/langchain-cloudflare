@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Added
 
+- **Native Pydantic structured output**: Clef and Clairic expose
+  `with_structured_output()` with LangChain Runnable sync/async/batch methods.
+  Supported ordinary Pydantic schemas map extraction fields to Clairic and
+  booleans/Enum/Literal choices to Clef; mixed schemas use an explicit companion
+  model. Fixed nested models, aliases, validators, and raw native evidence are
+  supported. Unsupported shapes are rejected before inference. Shared REST and
+  Python Worker examples cover invoice facts, decisions, and mixed schemas.
 - **Clairic extraction**: `CloudflareWorkersAIExtractionModel` supports
   `@cf/cloudflare/clairic` through synchronous REST, asynchronous REST, and
   Python Workers AI bindings. It accepts native field definitions, reference

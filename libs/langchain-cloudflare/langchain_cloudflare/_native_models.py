@@ -1,9 +1,10 @@
 """Shared transport for native Workers AI decision and extraction models."""
 
 # MARK: - IMPORTS
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Type
 
 import requests
+from langchain_core.runnables import Runnable
 from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
@@ -14,6 +15,10 @@ from .bindings import (
     convert_payload_for_binding,
     create_binding_run_options,
 )
+
+if TYPE_CHECKING:
+    from .decision_models import CloudflareWorkersAIDecisionModel
+    from .extraction_models import CloudflareWorkersAIExtractionModel
 
 
 # MARK: - NATIVE MODEL TRANSPORT
@@ -38,6 +43,45 @@ class WorkersAINativeModel(BaseModel):
 
     _inference_url: str = PrivateAttr(default="")
 
+    # MARK: - STRUCTURED OUTPUT
+    def with_structured_output(
+        self,
+        schema: Type[BaseModel],
+        *,
+        include_raw: bool = False,
+        extraction_model: Optional["CloudflareWorkersAIExtractionModel"] = None,
+        decision_model: Optional["CloudflareWorkersAIDecisionModel"] = None,
+        boolean_threshold: float = 0.5,
+    ) -> Runnable[Any, Any]:
+        """Return validated Pydantic output through native model operations.
+
+        Clairic handles strings, numbers, dates/times and lists of strings;
+        Clef handles booleans and Enum/Literal choices. Supply the other
+        model explicitly for mixed schemas. Fixed nested models are supported;
+        object lists, dynamic dictionaries and optional objects are rejected.
+        Field descriptions become instructions, and Pydantic validates all
+        returned values and constraints. Native nulls are not replaced by defaults.
+
+        The Runnable accepts text or a native input dictionary (state, images,
+        reference_date/options for extraction, audio/videos for decision-only
+        schemas). Use ainvoke/abatch with bindings. Booleans use probability
+        strictly greater than boolean_threshold; optional booleans use a
+        three-way choice including absence. include_raw returns raw stage
+        results, parsed, and parsing_error; HTTP failures still propagate.
+        This wrapper does not implement create_agent(response_format=...).
+        """
+        from ._structured_output import native_structured_output
+
+        return native_structured_output(
+            self,
+            schema,
+            extraction_model=extraction_model,
+            decision_model=decision_model,
+            include_raw=include_raw,
+            boolean_threshold=boolean_threshold,
+        )
+
+    # MARK: - INITIALIZATION
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         if self.binding is not None:

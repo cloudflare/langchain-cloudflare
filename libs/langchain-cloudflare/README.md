@@ -167,6 +167,76 @@ It does not implement arbitrary Pydantic-schema conversion, multi-event grouping
 or generated summaries. The earlier standalone extraction failures remain
 separate checks of Clairic's native answers.
 
+### Pydantic structured output for Clairic and Clef
+
+Both native model classes expose `with_structured_output()` using ordinary
+Pydantic v2 `BaseModel` classes. Clairic supplies extracted values; Clef supplies
+boolean and categorical decisions. Supply the other model explicitly when a
+schema needs both. The wrapper calls the existing native adapters and returns a
+LangChain Runnable with `invoke`, `ainvoke`, `batch`, and `abatch`.
+
+```python
+from pydantic import BaseModel, Field
+from langchain_cloudflare import (
+    CloudflareWorkersAIDecisionModel,
+    CloudflareWorkersAIExtractionModel,
+)
+
+
+class InvoiceReview(BaseModel):
+    invoice_number: str = Field(description="Invoice number")
+    total: float = Field(description="Amount due including shipping, in USD")
+    paid: bool = Field(
+        description="Does the source explicitly say payment is completed?"
+    )
+
+
+clairic = CloudflareWorkersAIExtractionModel()
+clef = CloudflareWorkersAIDecisionModel()
+structured = clairic.with_structured_output(InvoiceReview, decision_model=clef)
+review = structured.invoke("Invoice INV-2291 totals $1080. Payment is pending.")
+print(review.model_dump())
+
+# The same schema works from the decision-model side.
+structured = clef.with_structured_output(InvoiceReview, extraction_model=clairic)
+review = await structured.ainvoke("Invoice INV-2291 totals $1080. Payment is pending.")
+```
+
+Extraction-only schemas need only Clairic; boolean/Enum/Literal-only schemas need
+only Clef. Field names, paths, and `Field(description=...)` supply instructions.
+Supported extraction fields are `str`, `int`, `float`, `date`, `time`, `datetime`,
+and `list[str]`, including nullable scalar fields. Enum/Literal choices require
+at least two scalar alternatives. Fixed nested models are flattened into native
+fields and rebuilt before Pydantic validation; aliases, constraints, and custom
+validators apply to the result. Missing native values remain `None`, so an
+incompatible field fails validation even if it declares a default.
+
+Non-nullable booleans use Clef's yes/no probability strictly greater than
+`boolean_threshold` (default `0.5`). Nullable booleans and nullable choices add an
+explicit absence choice. This is a conversion policy, not a guarantee of model
+accuracy. No automatic inference retries, output repair, or chat-model fallback
+are added.
+
+Pass text directly, or a dictionary containing native inputs such as
+`{"state": "", "images": [...]}` for image-only extraction. Extraction fields
+also accept `reference_date` and native `options`; audio/video inputs are
+supported for decision-only schemas with an appropriate Clef model. Worker
+instances use their existing bindings and require `ainvoke` or `abatch`.
+
+`include_raw=True` returns `{"raw": {"extraction": ..., "decision": ...},
+"parsed": ..., "parsing_error": ...}` with only the stages used by the schema.
+Native spans, probabilities and usage remain in `raw`. Parsing or Pydantic
+validation failures return `parsed=None` plus the error; HTTP and transport
+failures still raise. Without `include_raw`, validation failures raise normally.
+
+Lists of objects, optional nested objects, dynamic dictionaries, recursive
+models, and unions other than a supported type plus `None` are rejected before
+inference. Raw JSON Schema dictionaries are not accepted by this wrapper.
+The announcement schema's variable lists still use the explicit combined example
+above. This API does not add `create_agent(response_format=...)` support to the
+native models. The `/native-structured` Worker example covers extraction-only,
+decision-only, and mixed fixed schemas through the same wrapper.
+
 ## Decision Models (Clef)
 
 `CloudflareWorkersAIDecisionModel` supports

@@ -53,6 +53,10 @@ from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 from tests.decision_helpers import assert_decision_result
 from tests.extraction_helpers import assert_extraction_result, assert_system_one_result
+from tests.native_structured_helpers import (
+    NATIVE_STRUCTURED_CASES,
+    assert_native_structured_result,
+)
 from tests.press_release_examples import PRESS_RELEASE_EXAMPLES, PRESS_RELEASE_TEXTS
 from tests.vision_helpers import (
     create_labeled_test_image_base64,
@@ -735,6 +739,47 @@ class TestToolStrategyJsonSchema:
         if isinstance(result, dict):
             structured = result.get("structured_response", result)
             assert structured is not None
+
+
+# MARK: - Native Pydantic Structured Output
+
+
+class TestNativePydanticStructuredOutput:
+    """Supported Pydantic schemas through existing sync and async REST calls."""
+
+    @pytest.mark.parametrize("case_name", NATIVE_STRUCTURED_CASES)
+    @pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+    async def test_native_structured(
+        self, case_name, asynchronous, account_id, api_token
+    ):
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+        case = NATIVE_STRUCTURED_CASES[case_name]
+        extraction = CloudflareWorkersAIExtractionModel(
+            account_id=account_id, api_token=api_token, ai_gateway=None
+        )
+        decision = CloudflareWorkersAIDecisionModel(
+            account_id=account_id, api_token=api_token, ai_gateway=None
+        )
+        if case_name == "decision":
+            structured = decision.with_structured_output(
+                case["schema"], include_raw=True
+            )
+        else:
+            structured = extraction.with_structured_output(
+                case["schema"],
+                decision_model=decision if case_name == "mixed" else None,
+                include_raw=True,
+            )
+        result = (
+            await structured.ainvoke(case["state"])
+            if asynchronous
+            else structured.invoke(case["state"])
+        )
+        assert isinstance(result["parsed"], case["schema"]), result
+        assert_native_structured_result(
+            {**result, "parsed": result["parsed"].model_dump(mode="json")}, case
+        )
 
 
 # MARK: - Combined System One Tests

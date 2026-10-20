@@ -30,7 +30,25 @@ import requests
 from langchain_cloudflare.decision_models import DECISION_MODELS
 from tests.decision_helpers import assert_decision_result
 from tests.extraction_helpers import assert_extraction_result, assert_system_one_result
+from tests.native_structured_helpers import (
+    NATIVE_STRUCTURED_CASES,
+    assert_native_structured_result,
+)
 from tests.press_release_examples import PRESS_RELEASE_EXAMPLES, PRESS_RELEASE_TEXTS
+
+
+# MARK: - Native Pydantic Structured Output
+class TestWorkerNativePydanticStructuredOutput:
+    @pytest.mark.parametrize("case_name", NATIVE_STRUCTURED_CASES)
+    def test_native_structured(self, case_name, dev_server):
+        case = NATIVE_STRUCTURED_CASES[case_name]
+        response = requests.post(
+            f"http://localhost:{dev_server}/native-structured",
+            json={"case": case_name, "state": case["state"]},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_native_structured_result(response.json(), case)
 
 
 # MARK: - Combined System One Tests

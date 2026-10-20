@@ -18,7 +18,7 @@ which Workers AI model to use. Defaults to Qwen if not specified.
 """
 
 from langchain_core.messages import HumanMessage, ToolMessage
-from models import Data
+from models import Data, NativeInvoice, NativeInvoiceReview, NativeSupportDecision
 from system_one import extract_announcements
 from tools import ALL_TOOLS, get_stock_price, get_weather
 from workers import Response, WorkerEntrypoint
@@ -140,6 +140,8 @@ class Default(WorkerEntrypoint):
                 return await self.handle_rerank(request)
             elif path == "structured-system-one":
                 return await self.handle_structured_system_one(request)
+            elif path == "native-structured":
+                return await self.handle_native_structured(request)
             elif path == "extraction":
                 return await self.handle_extraction(request)
             elif path == "decision":
@@ -233,6 +235,7 @@ class Default(WorkerEntrypoint):
                     "/structured-system-one": (
                         "Clairic and Clef combined into nested announcement data"
                     ),
+                    "/native-structured": "Native Pydantic structured-output examples",
                     "/browser-run": (
                         "Run a Browser Run Quick Action via the browser "
                         "binding (markdown/json/links/screenshot/pdf/"
@@ -1162,6 +1165,46 @@ Return JSON with an "announcements" array. Each announcement should have:
                     }
                     for doc in docs
                 ],
+            }
+        )
+
+    # MARK: - Native Structured Output Handler
+
+    async def handle_native_structured(self, request):
+        """Run fixed public Pydantic examples through the existing AI binding."""
+        data = await request.json()
+        schemas = {
+            "invoice": NativeInvoice,
+            "decision": NativeSupportDecision,
+            "mixed": NativeInvoiceReview,
+        }
+        case = data["case"]
+        extraction = CloudflareWorkersAIExtractionModel(
+            binding=self.env.AI, ai_gateway=None
+        )
+        decision = CloudflareWorkersAIDecisionModel(
+            binding=self.env.AI, ai_gateway=None
+        )
+        if case == "decision":
+            structured = decision.with_structured_output(
+                schemas[case], include_raw=True
+            )
+        else:
+            structured = extraction.with_structured_output(
+                schemas[case],
+                decision_model=decision if case == "mixed" else None,
+                include_raw=True,
+            )
+        result = await structured.ainvoke(data["state"])
+        return Response.json(
+            {
+                "parsed": result["parsed"].model_dump(mode="json")
+                if result["parsed"] is not None
+                else None,
+                "raw": result["raw"],
+                "parsing_error": str(result["parsing_error"])
+                if result["parsing_error"] is not None
+                else None,
             }
         )
 
