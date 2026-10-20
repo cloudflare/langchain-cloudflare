@@ -1,6 +1,6 @@
 """Pydantic models for structured output."""
 
-from datetime import date
+from datetime import date as Date
 from enum import Enum
 from typing import List, Literal, Optional
 
@@ -45,7 +45,7 @@ class NativeInvoice(BaseModel):
     """Invoice facts extracted from the source."""
 
     invoice_number: str = Field(description="Invoice number")
-    due_date: date = Field(description="Issue date plus the net payment days")
+    due_date: Date = Field(description="Issue date plus the net payment days")
     total: float = Field(description="Amount due including shipping, in USD")
     contacts: List[str] = Field(description="Full names of the contact people")
     po_number: Optional[str] = Field(default=None, description="Purchase order number")
@@ -73,3 +73,11 @@ class NativeInvoiceReview(BaseModel):
     department: Literal["billing", "technical"] = Field(
         description="Which department should handle this invoice?"
     )
+
+
+class NativeImageFacts(BaseModel):
+    """Facts printed in the attached image."""
+
+    ticker: str = Field(description="Ticker printed under TICKER")
+    timeframe: str = Field(description="Timeframe printed under TIMEFRAME")
+    date: Date = Field(description="Date printed under DATE")

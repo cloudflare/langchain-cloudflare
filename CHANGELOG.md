@@ -8,10 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
-### [0.4.3] - 2026-10-19
+### [0.4.3] - 2026-10-20
 
 #### Added
 
+- **Native structured agents**: Pass Clef or Clairic directly to
+  `create_agent(model=..., response_format=MySchema)` and receive a validated
+  Pydantic instance in `structured_response`. Automatic, provider-format, and
+  single-schema tool-format strategies reuse the existing native pipeline,
+  including mixed models, embedded images, sync/async and batch execution.
+  Native evidence and token usage remain on the returned chat message. Tests
+  cover REST and the existing Python Worker runtime.
 - **Native Pydantic structured output**: Clef and Clairic expose
   `with_structured_output()` with LangChain Runnable sync/async/batch methods.
   Supported ordinary Pydantic schemas map extraction fields to Clairic and

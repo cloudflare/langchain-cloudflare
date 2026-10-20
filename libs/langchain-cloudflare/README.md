@@ -233,9 +233,54 @@ Lists of objects, optional nested objects, dynamic dictionaries, recursive
 models, and unions other than a supported type plus `None` are rejected before
 inference. Raw JSON Schema dictionaries are not accepted by this wrapper.
 The announcement schema's variable lists still use the explicit combined example
-above. This API does not add `create_agent(response_format=...)` support to the
-native models. The `/native-structured` Worker example covers extraction-only,
+above. The `/native-structured` Worker example covers extraction-only,
 decision-only, and mixed fixed schemas through the same wrapper.
+
+### Agent-level structured output
+
+Both native classes can also be passed directly to LangChain's `create_agent`.
+Configure the companion model in the constructor for mixed schemas, and pass the
+ordinary Pydantic class as `response_format`:
+
+```python
+from langchain.agents import create_agent
+
+clef = CloudflareWorkersAIDecisionModel()
+model = CloudflareWorkersAIExtractionModel(decision_model=clef)
+agent = create_agent(model=model, tools=[], response_format=InvoiceReview)
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Invoice INV-2291 totals $1080. Payment is pending.",
+            }
+        ]
+    }
+)
+review = result["structured_response"]  # InvoiceReview instance
+```
+
+Decision-only schemas work with a Clef instance directly. A Clef instance with
+`extraction_model=clairic` also supports mixed schemas. The agent's `invoke`,
+`ainvoke`, `batch`, and `abatch` methods use the same native operations; use async
+methods for Worker bindings. Text and embedded image messages are supported.
+System messages supply instructions rather than being treated as source facts.
+
+Automatic strategy selection, explicit `ProviderStrategy(MySchema)`, and
+`ToolStrategy(MySchema)` with one output schema are supported. The adapter
+translates the schema into native requests; LangChain validates the original
+Pydantic class and returns it in `structured_response`. Native evidence is kept
+in the model's `AIMessage.response_metadata["native"]`, with aggregate token
+usage in `usage_metadata`. ToolStrategy's validation feedback stays under
+LangChain's retry policy; the native adapters add no inference retry loop.
+
+These models provide structured extraction and decisions. Executable application
+tools, selection between multiple output schemas, and unsupported schema shapes
+are rejected before inference. Provider-side strict JSON-schema decoding is
+unavailable; Pydantic validation runs locally. Install `langchain` to use
+`create_agent`; the repository's test and notebook environments include it. The
+existing Worker example supports agent mode on `/native-structured`.
 
 ## Decision Models (Clef)
 

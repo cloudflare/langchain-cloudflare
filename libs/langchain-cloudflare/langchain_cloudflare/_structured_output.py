@@ -24,10 +24,17 @@ class NativeField:
     choices: Optional[Dict[str, Any]] = None
 
 
-def _compile_schema(schema: Type[BaseModel]) -> List[NativeField]:
-    if not isinstance(schema, type) or not issubclass(schema, BaseModel):
-        raise TypeError("schema must be a Pydantic BaseModel class")
-    document = schema.model_json_schema(mode="validation")
+def _compile_schema(
+    schema: Union[Type[BaseModel], Dict[str, Any]],
+) -> List[NativeField]:
+    if isinstance(schema, dict):
+        document = schema
+        schema_name = document.get("title", "structured output")
+    elif isinstance(schema, type) and issubclass(schema, BaseModel):
+        document = schema.model_json_schema(mode="validation")
+        schema_name = schema.__name__
+    else:
+        raise TypeError("schema must be a Pydantic BaseModel class or JSON schema")
     fields: List[NativeField] = []
 
     def visit(
@@ -36,7 +43,7 @@ def _compile_schema(schema: Type[BaseModel]) -> List[NativeField]:
         references: Tuple[str, ...] = (),
         descriptions: Tuple[str, ...] = (),
     ) -> None:
-        label = ".".join(path) or schema.__name__
+        label = ".".join(path) or schema_name
 
         def unsupported(reason: str) -> NoReturn:
             raise ValueError(f"Unsupported structured-output field {label!r}: {reason}")
@@ -146,7 +153,7 @@ def _compile_schema(schema: Type[BaseModel]) -> List[NativeField]:
 # MARK: - RUNNABLE CONSTRUCTION
 def native_structured_output(
     model: Any,
-    schema: Type[BaseModel],
+    schema: Union[Type[BaseModel], Dict[str, Any]],
     *,
     extraction_model: Optional[CloudflareWorkersAIExtractionModel],
     decision_model: Optional[CloudflareWorkersAIDecisionModel],
@@ -234,7 +241,7 @@ def native_structured_output(
         }
         return extraction_input, decision_input
 
-    def parse(raw: Dict[str, Any]) -> BaseModel:
+    def parse(raw: Dict[str, Any]) -> Any:
         values: Dict[str, Any] = {}
         for stage, expected in (
             ("extraction", extraction_fields),
@@ -271,7 +278,7 @@ def native_structured_output(
             for part in field.path[:-1]:
                 target = target.setdefault(part, {})
             target[field.path[-1]] = value
-        return schema.model_validate(values)
+        return values if isinstance(schema, dict) else schema.model_validate(values)
 
     def finish(raw: Dict[str, Any]) -> Any:
         try:
@@ -320,5 +327,7 @@ def native_structured_output(
         return finish(raw)
 
     return RunnableLambda(
-        invoke, afunc=ainvoke, name=f"NativeStructuredOutput[{schema.__name__}]"
-    ).with_types(output_type=dict if include_raw else schema)
+        invoke, afunc=ainvoke, name="NativeStructuredOutput"
+    ).with_types(
+        output_type=dict if include_raw or isinstance(schema, dict) else schema
+    )

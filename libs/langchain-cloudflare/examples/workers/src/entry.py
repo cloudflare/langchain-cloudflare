@@ -17,8 +17,14 @@ All endpoints accept an optional "model" parameter in the request body to specif
 which Workers AI model to use. Defaults to Qwen if not specified.
 """
 
-from langchain_core.messages import HumanMessage, ToolMessage
-from models import Data, NativeInvoice, NativeInvoiceReview, NativeSupportDecision
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from models import (
+    Data,
+    NativeImageFacts,
+    NativeInvoice,
+    NativeInvoiceReview,
+    NativeSupportDecision,
+)
 from system_one import extract_announcements
 from tools import ALL_TOOLS, get_stock_price, get_weather
 from workers import Response, WorkerEntrypoint
@@ -1177,14 +1183,65 @@ Return JSON with an "announcements" array. Each announcement should have:
             "invoice": NativeInvoice,
             "decision": NativeSupportDecision,
             "mixed": NativeInvoiceReview,
+            "image_data_url": NativeImageFacts,
+            "image_base64": NativeImageFacts,
         }
         case = data["case"]
-        extraction = CloudflareWorkersAIExtractionModel(
-            binding=self.env.AI, ai_gateway=None
-        )
         decision = CloudflareWorkersAIDecisionModel(
             binding=self.env.AI, ai_gateway=None
         )
+        extraction = CloudflareWorkersAIExtractionModel(
+            binding=self.env.AI,
+            ai_gateway=None,
+            decision_model=decision if case == "mixed" else None,
+        )
+        if data.get("agent"):
+            from langchain.agents.structured_output import (
+                ProviderStrategy,
+                ToolStrategy,
+            )
+
+            schema = schemas[case]
+            strategy = data.get("strategy", "auto")
+            response_format = (
+                ProviderStrategy(schema)
+                if strategy == "provider"
+                else ToolStrategy(schema, handle_errors=False)
+                if strategy == "tool"
+                else schema
+            )
+            agent = create_agent(
+                model=decision if case == "decision" else extraction,
+                tools=[],
+                response_format=response_format,
+            )
+            inputs = {"messages": data["messages"]}
+            results = (
+                await agent.abatch(
+                    [inputs, inputs],
+                    config={"max_concurrency": 1, "recursion_limit": 2},
+                )
+                if data.get("batch")
+                else [await agent.ainvoke(inputs, config={"recursion_limit": 2})]
+            )
+            outputs = []
+            for result in results:
+                parsed = result["structured_response"]
+                if not isinstance(parsed, schema):
+                    raise TypeError("Agent did not return the requested Pydantic type")
+                message = next(
+                    message
+                    for message in reversed(result["messages"])
+                    if isinstance(message, AIMessage)
+                )
+                outputs.append(
+                    {
+                        "structured_response": parsed.model_dump(mode="json"),
+                        "schema_type": type(parsed).__name__,
+                        "raw": message.response_metadata["native"],
+                    }
+                )
+            return Response.json(outputs if data.get("batch") else outputs[0])
         if case == "decision":
             structured = decision.with_structured_output(
                 schemas[case], include_raw=True

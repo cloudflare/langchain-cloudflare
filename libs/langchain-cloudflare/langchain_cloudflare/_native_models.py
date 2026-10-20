@@ -1,10 +1,28 @@
 """Shared transport for native Workers AI decision and extraction models."""
 
 # MARK: - IMPORTS
-from typing import TYPE_CHECKING, Any, Dict, Optional, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Sequence,
+    Type,
+    Union,
+)
 
 import requests
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
 from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
@@ -22,8 +40,8 @@ if TYPE_CHECKING:
 
 
 # MARK: - NATIVE MODEL TRANSPORT
-class WorkersAINativeModel(BaseModel):
-    """Reuse authentication and native result handling across typed model APIs."""
+class WorkersAINativeModel(BaseChatModel):
+    """Native typed APIs plus LangChain's schema-bound chat-model contract."""
 
     model_name: str
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
@@ -33,25 +51,32 @@ class WorkersAINativeModel(BaseModel):
     api_token: SecretStr = Field(
         default_factory=secret_from_env("CF_AI_API_TOKEN", default="")
     )
-    binding: Any = Field(default=None, exclude=True)
+    binding: Any = Field(default=None, exclude=True, repr=False)
     ai_gateway: Optional[str] = Field(
         default_factory=from_env("AI_GATEWAY", default=None)
     )
     reject_if_busy: Optional[bool] = None
     timeout: float = 60.0
-    headers: Dict[str, str] = Field(default_factory=dict)
+    headers: Dict[str, str] = Field(default_factory=dict, exclude=True, repr=False)
+    extraction_model: Any = Field(default=None, exclude=True, repr=False)
+    decision_model: Any = Field(default=None, exclude=True, repr=False)
+    boolean_threshold: float = Field(default=0.5, ge=0, le=1)
+    profile: Any = Field(
+        default_factory=lambda: {"structured_output": True, "tool_calling": False}
+    )
 
     _inference_url: str = PrivateAttr(default="")
 
     # MARK: - STRUCTURED OUTPUT
     def with_structured_output(
         self,
-        schema: Type[BaseModel],
+        schema: Optional[Union[Dict[str, Any], Type[BaseModel]]] = None,
         *,
         include_raw: bool = False,
         extraction_model: Optional["CloudflareWorkersAIExtractionModel"] = None,
         decision_model: Optional["CloudflareWorkersAIDecisionModel"] = None,
-        boolean_threshold: float = 0.5,
+        boolean_threshold: Optional[float] = None,
+        **kwargs: Any,
     ) -> Runnable[Any, Any]:
         """Return validated Pydantic output through native model operations.
 
@@ -68,18 +93,92 @@ class WorkersAINativeModel(BaseModel):
         strictly greater than boolean_threshold; optional booleans use a
         three-way choice including absence. include_raw returns raw stage
         results, parsed, and parsing_error; HTTP failures still propagate.
-        This wrapper does not implement create_agent(response_format=...).
+        For create_agent(response_format=...), pass this model directly and
+        configure any required companion in its constructor.
         """
         from ._structured_output import native_structured_output
 
+        if kwargs:
+            raise ValueError(
+                f"Unsupported structured-output arguments: {sorted(kwargs)}"
+            )
+        if not isinstance(schema, type) or not issubclass(schema, BaseModel):
+            raise TypeError("schema must be a Pydantic BaseModel class")
         return native_structured_output(
             self,
             schema,
-            extraction_model=extraction_model,
-            decision_model=decision_model,
+            extraction_model=extraction_model
+            if extraction_model is not None
+            else self.extraction_model,
+            decision_model=decision_model
+            if decision_model is not None
+            else self.decision_model,
             include_raw=include_raw,
-            boolean_threshold=boolean_threshold,
+            boolean_threshold=self.boolean_threshold
+            if boolean_threshold is None
+            else boolean_threshold,
         )
+
+    # MARK: - AGENT CHAT INTERFACE
+    @property
+    def _llm_type(self) -> str:
+        return "cloudflare-workers-ai-native"
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {
+            "model_name": self.model_name,
+            "extraction_model": getattr(self.extraction_model, "model_name", None),
+            "decision_model": getattr(self.decision_model, "model_name", None),
+            "boolean_threshold": self.boolean_threshold,
+        }
+
+    def bind_tools(
+        self,
+        tools: Sequence[Union[Dict[str, Any], type, Callable[..., Any], BaseTool]],
+        *,
+        tool_choice: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Runnable[Any, AIMessage]:
+        """Bind provider-format output or one declarative structured-output tool.
+
+        Executable application tools and schema selection between multiple
+        tools are unsupported and rejected before inference.
+        """
+        from ._native_chat import bind_native_tools
+
+        return bind_native_tools(self, tools, tool_choice=tool_choice, **kwargs)
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        from ._native_chat import native_chat_request, native_chat_result
+
+        structured, payload, tool_name = native_chat_request(
+            self, messages, stop, kwargs
+        )
+        return native_chat_result(
+            structured.invoke(payload), self.model_name, tool_name
+        )
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        from ._native_chat import native_chat_request, native_chat_result
+
+        structured, payload, tool_name = native_chat_request(
+            self, messages, stop, kwargs
+        )
+        result = await structured.ainvoke(payload)
+        return native_chat_result(result, self.model_name, tool_name)
 
     # MARK: - INITIALIZATION
     def __init__(self, **kwargs: Any) -> None:

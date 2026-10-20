@@ -232,16 +232,6 @@ def get_stock_price(ticker: str) -> str:
 
 # Test fixtures
 @pytest.fixture
-def account_id():
-    return os.environ.get("CF_ACCOUNT_ID")
-
-
-@pytest.fixture
-def api_token():
-    return os.environ.get("CF_AI_API_TOKEN")
-
-
-@pytest.fixture
 def ai_gateway():
     return os.environ.get("AI_GATEWAY", None)
 

@@ -73,6 +73,19 @@ else:
     if _integration_env.exists():
         load_dotenv(_integration_env)
 
+# MARK: - REST Credentials
+
+
+@pytest.fixture
+def account_id():
+    return os.environ.get("CF_ACCOUNT_ID")
+
+
+@pytest.fixture
+def api_token():
+    return os.environ.get("CF_AI_API_TOKEN")
+
+
 # MARK: - Extraction Fixtures
 
 

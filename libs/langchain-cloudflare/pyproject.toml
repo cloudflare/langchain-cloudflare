@@ -43,6 +43,7 @@ test = [
     "langchain-tests>=0.3.17",
     "python-dotenv>=1.0.0",
     "greenlet>=3.0.0",
+    "langchain>=1.1,<2.0.0",
 ]
 
 [tool.hatch.build.targets.wheel]
