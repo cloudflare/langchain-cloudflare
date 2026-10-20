@@ -1,6 +1,7 @@
 """Shared native extraction inputs and assertions for REST and Worker tests."""
 
 # MARK: - IMPORTS
+from examples.workers.src.system_one import group_list_spans
 from tests.press_release_examples import PRESS_RELEASE_EXAMPLES
 from tests.vision_helpers import create_labeled_test_image_base64
 
@@ -181,12 +182,14 @@ def assert_extraction_result(result: dict, payload: dict, expected: dict) -> Non
             threshold = field.get("null_threshold", 0.5)
             assert (answer["value"] is None) == (answer["p_null"] > threshold)
         if field["type"] == "list":
-            assert isinstance(answer["value"], list)
-            assert all(isinstance(value, str) for value in answer["value"])
-            assert len(answer["spans"]) == len(answer["value"])
-            for value, (start, end) in zip(answer["value"], answer["spans"]):
-                assert 0 <= start < end <= len(payload["state"])
-                assert payload["state"][start:end] == value
+            try:
+                group_list_spans(
+                    text=payload["state"],
+                    values=answer["value"],
+                    spans=answer["spans"],
+                )
+            except ValueError as error:
+                raise AssertionError(str(error)) from error
         elif answer["value"] is not None and field["type"] == "text":
             assert isinstance(answer["value"], str)
             if answer.get("source") == "image":

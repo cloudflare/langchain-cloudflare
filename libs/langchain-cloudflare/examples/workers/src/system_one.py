@@ -34,6 +34,40 @@ ANNOUNCEMENT_TYPES = {
 }
 
 
+# MARK: - SOURCE EVIDENCE
+def group_list_spans(
+    *, text: str, values: list[str], spans: list[list[int]]
+) -> dict[str, list[list[int]]]:
+    """Anchor every occurrence by exact substring, preserving value order.
+
+    Native list values and occurrence spans need not have equal lengths or
+    matching order. Reject spans outside the source or absent from the values,
+    and values without any matching occurrence. Do not infer or repair names.
+    """
+    if not isinstance(values, list) or not all(isinstance(v, str) for v in values):
+        raise ValueError("List values must be strings")
+    if not isinstance(spans, list):
+        raise ValueError("List spans must be a list")
+    grouped: dict[str, list[list[int]]] = {value: [] for value in values}
+    for span in spans:
+        if (
+            not isinstance(span, list)
+            or len(span) != 2
+            or not all(type(offset) is int for offset in span)
+        ):
+            raise ValueError("Each source span must contain two integer offsets")
+        start, end = span
+        if not 0 <= start < end <= len(text):
+            raise ValueError("Source span is outside the input text")
+        value = text[start:end]
+        if value not in grouped:
+            raise ValueError("Source span does not match any list value")
+        grouped[value].append(span)
+    if any(not occurrences for occurrences in grouped.values()):
+        raise ValueError("List value has no matching source span")
+    return grouped
+
+
 # MARK: - COMBINED EXAMPLE
 async def extract_announcements(
     *,
@@ -63,13 +97,10 @@ async def extract_announcements(
         },
     )
     mentions = candidates_result["answers"]["companies"]
-    names = mentions["value"]
-    if not isinstance(names, list) or len(names) != len(mentions["spans"]):
-        raise ValueError("Company candidates must have one source span per value")
-    for name, (start, end) in zip(names, mentions["spans"]):
-        if not isinstance(name, str) or text[start:end] != name:
-            raise ValueError("Company candidate does not match its source span")
-    candidates = list(dict.fromkeys(names))
+    occurrences = group_list_spans(
+        text=text, values=mentions["value"], spans=mentions["spans"]
+    )
+    candidates = list(occurrences)
     if len(candidates) > 61:
         raise ValueError("This example supports at most 61 candidate mentions")
 

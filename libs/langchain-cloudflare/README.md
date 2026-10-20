@@ -147,10 +147,17 @@ The [combined press-release example](examples/workers/src/system_one.py) produce
 the existing nested `Data` structure without a generative chat model:
 
 1. Clairic extracts candidate company mentions from the source.
-2. Clef decides eligibility, announcement type, each candidate's role or exclusion,
-   and which source line supplies the announcement context.
+2. Python builds questions about those extracted candidates. Clef evaluates
+   eligibility, announcement type, each candidate's role or exclusion, and which
+   source line supplies the announcement context.
 3. Clairic extracts printed tickers for the selected company names. Python
    assembles and validates `Data → announcements[] → entities[]` with Pydantic.
+
+This explicitly implements **Clairic extracts candidates → build questions about
+those candidates → Clef evaluates**. Each occurrence span is associated with its
+exact source substring and grouped under the matching candidate value. A unique
+value can have multiple spans; values and spans are not paired by position. The
+example rejects unsupported spans and values with no matching source occurrence.
 
 The function returns `extracted` plus native `stages` containing candidate spans,
 probabilities and token usage. Both REST tests and the Worker endpoint
@@ -174,6 +181,14 @@ Pydantic v2 `BaseModel` classes. Clairic supplies extracted values; Clef supplie
 boolean and categorical decisions. Supply the other model explicitly when a
 schema needs both. The wrapper calls the existing native adapters and returns a
 LangChain Runnable with `invoke`, `ainvoke`, `batch`, and `abatch`.
+
+For mixed schemas, both models receive the original input with predefined,
+schema-derived extraction fields and decision questions. Clef does not
+automatically inspect or validate Clairic's extracted values. Pydantic validates
+the assembled result's types and declared constraints; that does not establish
+that the extracted facts are correct. To qualify extracted candidates, use the
+explicit dependent pipeline in the [combined example](examples/workers/src/system_one.py):
+extract candidates first, build questions about those candidates, then call Clef.
 
 ```python
 from pydantic import BaseModel, Field
@@ -239,6 +254,7 @@ decision-only, and mixed fixed schemas through the same wrapper.
 ### Agent-level structured output
 
 Both native classes can also be passed directly to LangChain's `create_agent`.
+Mixed schemas have the same independent-stage behavior described above.
 Configure the companion model in the constructor for mixed schemas, and pass the
 ordinary Pydantic class as `response_format`:
 

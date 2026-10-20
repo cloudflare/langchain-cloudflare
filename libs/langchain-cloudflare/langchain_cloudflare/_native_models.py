@@ -87,6 +87,11 @@ class WorkersAINativeModel(BaseChatModel):
         Field descriptions become instructions, and Pydantic validates all
         returned values and constraints. Native nulls are not replaced by defaults.
 
+        Mixed schemas send the original input to both models with predefined
+        fields/questions. Clef does not automatically validate Clairic's values.
+        To qualify extracted candidates, extract them first, build questions
+        about those candidates, then call Clef explicitly.
+
         The Runnable accepts text or a native input dictionary (state, images,
         reference_date/options for extraction, audio/videos for decision-only
         schemas). Use ainvoke/abatch with bindings. Booleans use probability
