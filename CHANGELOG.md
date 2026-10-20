@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Python Workers AI bindings. It accepts native field definitions, reference
   dates, and extraction options, preserving answers, source spans, confidence,
   truncation, and token usage.
+- **Clairic notebook**: `docs/extraction_models.ipynb` demonstrates invoice
+  extraction, image-only extraction, native result metadata, and the shared
+  Clairic/Clef example using the existing notebook environment.
 - **Image extraction**: Embedded PNG/JPEG/WebP inputs accept data URLs or
   `content_type`/`base64` objects, including image-only requests. Shared REST and
   Worker tests reuse the chat structured-vision fixture and preserve native
