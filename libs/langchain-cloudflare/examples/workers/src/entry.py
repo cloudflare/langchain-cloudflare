@@ -19,6 +19,7 @@ which Workers AI model to use. Defaults to Qwen if not specified.
 
 from langchain_core.messages import HumanMessage, ToolMessage
 from models import Data
+from system_one import extract_announcements
 from tools import ALL_TOOLS, get_stock_price, get_weather
 from workers import Response, WorkerEntrypoint
 
@@ -29,9 +30,11 @@ from langchain_cloudflare import (
     CloudflareBrowserRunTool,
     CloudflareVectorize,
     CloudflareWorkersAIDecisionModel,
+    CloudflareWorkersAIExtractionModel,
 )
 from langchain_cloudflare.decision_models import DECISION_MODELS
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
+from langchain_cloudflare.extraction_models import EXTRACTION_MODELS
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
 # MARK: - Models
@@ -135,6 +138,10 @@ class Default(WorkerEntrypoint):
             # Reranker endpoint
             elif path == "rerank":
                 return await self.handle_rerank(request)
+            elif path == "structured-system-one":
+                return await self.handle_structured_system_one(request)
+            elif path == "extraction":
+                return await self.handle_extraction(request)
             elif path == "decision":
                 return await self.handle_decision(request)
             # Browser Run endpoint (quickAction() binding)
@@ -200,6 +207,7 @@ class Default(WorkerEntrypoint):
                 "browser_available": browser_available,
                 "supported_models": SUPPORTED_MODELS,
                 "decision_models": DECISION_MODELS,
+                "extraction_models": EXTRACTION_MODELS,
                 "default_model": DEFAULT_MODEL,
                 "embedding_model": EMBEDDING_MODEL,
                 "endpoints": {
@@ -221,6 +229,10 @@ class Default(WorkerEntrypoint):
                     "/ai-search": "Search AI Search via binding",
                     "/rerank": "Rerank documents by query relevance",
                     "/decision": "Clef decisions with per-option probabilities",
+                    "/extraction": "Clairic typed values with source spans",
+                    "/structured-system-one": (
+                        "Clairic and Clef combined into nested announcement data"
+                    ),
                     "/browser-run": (
                         "Run a Browser Run Quick Action via the browser "
                         "binding (markdown/json/links/screenshot/pdf/"
@@ -1152,6 +1164,42 @@ Return JSON with an "announcements" array. Each announcement should have:
                 ],
             }
         )
+
+    # MARK: - Combined System One Handler
+
+    async def handle_structured_system_one(self, request):
+        """Run the shared example through native AI bindings and return evidence."""
+        data = await request.json()
+        result = await extract_announcements(
+            text=data["text"],
+            extraction_model=CloudflareWorkersAIExtractionModel(
+                binding=self.env.AI, ai_gateway=data.get("ai_gateway")
+            ),
+            decision_model=CloudflareWorkersAIDecisionModel(
+                binding=self.env.AI, ai_gateway=data.get("ai_gateway")
+            ),
+        )
+        return Response.json(result)
+
+    # MARK: - Extraction Handler
+
+    async def handle_extraction(self, request):
+        """Extract Clairic's native state/fields input through the AI binding."""
+        data = await request.json()
+        model = CloudflareWorkersAIExtractionModel(
+            model_name=data.get("model", EXTRACTION_MODELS[0]),
+            binding=self.env.AI,
+            ai_gateway=data.get("ai_gateway"),
+            reject_if_busy=data.get("reject_if_busy"),
+        )
+        result = await model.aextract(
+            state=data.get("state", ""),
+            fields=data["fields"],
+            images=data.get("images"),
+            reference_date=data.get("reference_date"),
+            options=data.get("options"),
+        )
+        return Response.json(result)
 
     # MARK: - Decision Handler
 

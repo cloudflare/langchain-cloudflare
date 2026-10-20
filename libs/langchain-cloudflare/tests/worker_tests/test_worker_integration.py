@@ -29,7 +29,42 @@ import requests
 
 from langchain_cloudflare.decision_models import DECISION_MODELS
 from tests.decision_helpers import assert_decision_result
-from tests.press_release_examples import PRESS_RELEASE_TEXTS
+from tests.extraction_helpers import assert_extraction_result, assert_system_one_result
+from tests.press_release_examples import PRESS_RELEASE_EXAMPLES, PRESS_RELEASE_TEXTS
+
+
+# MARK: - Combined System One Tests
+class TestWorkerSystemOneStructuredOutput:
+    """The shared combined example with production AI-binding model instances."""
+
+    @pytest.mark.parametrize("case", PRESS_RELEASE_EXAMPLES)
+    def test_extract_announcements(self, case, dev_server):
+        example = PRESS_RELEASE_EXAMPLES[case]
+        response = requests.post(
+            f"http://localhost:{dev_server}/structured-system-one",
+            json={"text": example["text"]},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_system_one_result(response.json(), example)
+
+
+# MARK: - Extraction Model Tests
+class TestWorkerExtractionModels:
+    """Clairic extraction through the Python Worker AI binding."""
+
+    @pytest.mark.parametrize(
+        "reject_if_busy", [None, True], ids=["default", "reject_busy"]
+    )
+    def test_extract(self, dev_server, extraction_case, reject_if_busy):
+        payload, expected = extraction_case
+        response = requests.post(
+            f"http://localhost:{dev_server}/extraction",
+            json={"reject_if_busy": reject_if_busy, **payload},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_extraction_result(response.json(), payload, expected)
 
 
 # MARK: - Decision Model Tests

@@ -61,7 +61,7 @@ async def test_rest_transport(model, asynchronous, decision_input):
             assert client_type.call_args.kwargs["timeout"] == 45
     else:
         with patch(
-            "langchain_cloudflare.decision_models.requests.post", return_value=response
+            "langchain_cloudflare._native_models.requests.post", return_value=response
         ) as post:
             result = decision_model.evaluate(**decision_input)
             kwargs = post.call_args.kwargs
@@ -144,7 +144,7 @@ async def test_media_rejected_before_transport(model, field, transport):
         ai_gateway=None,
     )
     with (
-        patch("langchain_cloudflare.decision_models.requests.post") as post,
+        patch("langchain_cloudflare._native_models.requests.post") as post,
         patch("httpx.AsyncClient") as client,
     ):
         with pytest.raises(ValueError, match="require @cf/cloudflare/clef-omni"):
@@ -183,7 +183,7 @@ def test_rest_http_error_propagates():
     response.raise_for_status.side_effect = requests.HTTPError("Invalid questions")
     with (
         patch(
-            "langchain_cloudflare.decision_models.requests.post", return_value=response
+            "langchain_cloudflare._native_models.requests.post", return_value=response
         ),
         pytest.raises(requests.HTTPError, match="Invalid questions"),
     ):

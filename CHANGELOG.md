@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.4.3] - 2026-10-19
+
+#### Added
+
+- **Clairic extraction**: `CloudflareWorkersAIExtractionModel` supports
+  `@cf/cloudflare/clairic` through synchronous REST, asynchronous REST, and
+  Python Workers AI bindings. It accepts native field definitions, reference
+  dates, and extraction options, preserving answers, source spans, confidence,
+  truncation, and token usage.
+- **Image extraction**: Embedded PNG/JPEG/WebP inputs accept data URLs or
+  `content_type`/`base64` objects, including image-only requests. Shared REST and
+  Worker tests reuse the chat structured-vision fixture and preserve native
+  image-source metadata.
+- **Combined Clairic/Clef example**: A shared press-release example extracts
+  candidate names with Clairic, classifies and filters them with Clef, then
+  extracts printed tickers and validates the existing nested Pydantic schema.
+  REST tests and `/structured-system-one` use the same function. The example
+  handles one primary announcement with source-line context candidates.
+- **Worker extraction endpoint**: `/extraction` forwards native text/image
+  extraction requests through the existing AI binding.
+
+#### Changed
+
+- Decision and extraction models share the existing native authentication,
+  REST, and AI binding transport without changing the decision-model API.
+- Updated the main package's locked `urllib3` dependency from 2.7.0 to 2.8.0
+  (#88). Sibling-package lockfile updates (#87 and #89) are also merged; they
+  do not change this package's declared dependencies.
+
+#### Known limitations
+
+- Clairic still returns extra names in the standalone company-list fixture
+  and a partial answer in the full-sentence fixture. Tests retain the exact
+  expected answers as strict quality expected-failures; transport, malformed
+  response, and invalid source-span errors remain failures.
+- The combined example passes the partnership and earnings fixtures through
+  REST and Python Workers, but cannot recover names omitted by Clairic. It is
+  not an arbitrary Pydantic-schema converter or a multi-announcement parser.
+
+---
+
 ### [0.4.2] - 2026-10-11
 
 #### Added

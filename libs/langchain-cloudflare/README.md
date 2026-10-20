@@ -68,6 +68,105 @@ For chat dynamic routes (`model="dynamic/<route name>"`), message
 provider does not report a model, `model_name` is `None`. Each message preserves
 its model identity when a batch uses different fallback models.
 
+## Extraction Models (Clairic)
+
+`CloudflareWorkersAIExtractionModel` supports the preview
+[`@cf/cloudflare/clairic`](https://developers.cloudflare.com/workers-ai/models/clairic/)
+model. It returns typed values with source spans, confidence scores and token
+usage. Fields accept Cloudflare's native `text`, `number`, `date`, `time`,
+`datetime`, `duration`, `list`, `estimate` and `forecast` definitions.
+
+```python
+from langchain_cloudflare import CloudflareWorkersAIExtractionModel
+
+model = CloudflareWorkersAIExtractionModel()
+fields = {
+    "invoice_number": {"type": "text"},
+    "total": {"type": "number", "unit": "USD", "decimals": 2},
+    "po_number": {"type": "text", "instructions": "Purchase order number"},
+}
+result = model.extract(state="Invoice INV-2291 totals $1080.", fields=fields)
+print(result["answers"]["total"]["value"])
+
+# Async REST accepts the same fields.
+result = await model.aextract(state="Invoice INV-2291 totals $1080.", fields=fields)
+
+# Python Workers use the existing AI binding without REST credentials.
+model = CloudflareWorkersAIExtractionModel(binding=self.env.AI)
+result = await model.aextract(state="Invoice INV-2291 totals $1080.", fields=fields)
+```
+
+REST credentials use `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`; `ai_gateway` selects
+an optional AI Gateway. Results preserve the native `model`, `answers`,
+`truncated`, optional `state_text`, and `usage` fields. Missing single-value
+answers can be `None`; lists can be empty. Typed output and confidence scores
+do not guarantee correctness. Text read from the input state includes source
+spans. Text read from image pixels can instead have `source: "image"`,
+`span: null` and `spell_confidence`; the adapter preserves these native fields.
+
+Pass `reference_date="2026-10-19"` to anchor dates without a year. Native
+`options` supports `include_quantiles` and `return_state_text`. Optional `images`
+accepts embedded PNG/JPEG/WebP data URLs or `{ "content_type": "image/png",
+"base64": "..." }` objects, up to four images; remote URLs are unsupported.
+The Worker example exposes this operation at `/extraction`. Image-only input can
+use an empty `state`; put the image in `images` and define the desired native
+fields. Image fixtures reuse the same labeled PNG and expected ticker (`ACME`),
+timeframe (`Q4`) and date (`2026-06-21`) as the OpenAI-compatible structured-vision
+test. Tests cover data URLs and base64 objects through sync/async REST and Python
+Worker bindings, with no answer text supplied in the state.
+
+In the existing public partnership and earnings fixtures, separate `text`
+fields for the announcing company and its partner pass, including source spans,
+printed tickers and null answers for absent partners or tickers. For those
+fixtures and field definitions, company-list extraction also returns exchange
+names, ticker symbols and possessive references, and sentence extraction returns
+a company name. These are observed failures, not documented restrictions on
+`list` or `text`: the API supports matching lists and source-text spans.
+
+The earnings sentence experiment also asks the model to decide whether an
+announcement qualifies before extracting it. That combines classification with
+extraction; it is distinct from asking for a missing fact such as a tracking
+number. The documented support-email example passes through this adapter,
+including its damage list, computed amount and duration, and missing tracking
+number. The native field option `null_threshold` controls when a guess becomes
+`None`. Setting it to `0.01` makes the earnings-only sentence fixture return
+`None`; the default `0.5` did not. This threshold was selected using these two
+synthetic inputs, and a lower threshold can also reject valid extractions.
+Choose a threshold using representative examples; these fixtures do not establish
+general calibration. The change does not fix the full-sentence extraction case.
+Confidence scores do not guarantee that an answer is correct.
+
+The integration suites retain the original company-list and sentence expectations
+as explicit preview-model quality checks. Only a well-formed but incorrect value
+is an expected failure; HTTP errors, invalid spans and malformed responses fail.
+These checks fail on an unexpected pass so model improvements trigger revalidation.
+
+### Combining Clairic and Clef
+
+The [combined press-release example](examples/workers/src/system_one.py) produces
+the existing nested `Data` structure without a generative chat model:
+
+1. Clairic extracts candidate company mentions from the source.
+2. Clef decides eligibility, announcement type, each candidate's role or exclusion,
+   and which source line supplies the announcement context.
+3. Clairic extracts printed tickers for the selected company names. Python
+   assembles and validates `Data → announcements[] → entities[]` with Pydantic.
+
+The function returns `extracted` plus native `stages` containing candidate spans,
+probabilities and token usage. Both REST tests and the Worker endpoint
+`POST /structured-system-one` invoke this same function. The public partnership
+fixture requires exactly Acme Corp and TechGiant Inc, their roles/tickers and the
+complete source sentence; the earnings-only fixture requires no announcements.
+No expected company names are supplied to the example. Positive results use three
+native calls; rejected releases use two. A company omitted from Clairic's
+candidates cannot be recovered by Clef's filtering in this example.
+
+This is a focused example for one primary announcement, with each candidate
+context sentence on its own input line and at most 61 candidate company mentions.
+It does not implement arbitrary Pydantic-schema conversion, multi-event grouping,
+or generated summaries. The earlier standalone extraction failures remain
+separate checks of Clairic's native answers.
+
 ## Decision Models (Clef)
 
 `CloudflareWorkersAIDecisionModel` supports
