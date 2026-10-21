@@ -73,6 +73,10 @@ JupyterLab. Open a notebook under [`docs/`](docs/), such as
 [`browser_run.ipynb`](docs/browser_run.ipynb), and run it manually. Stop the
 JupyterLab process with `Ctrl-C`.
 
+For native Workers AI models, see the [decision-model notebook](docs/decision_models.ipynb)
+and [Clairic extraction notebook](docs/extraction_models.ipynb), including text,
+vision, and a combined Clairic/Clef example.
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).

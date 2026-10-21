@@ -29,7 +29,118 @@ import requests
 
 from langchain_cloudflare.decision_models import DECISION_MODELS
 from tests.decision_helpers import assert_decision_result
-from tests.press_release_examples import PRESS_RELEASE_TEXTS
+from tests.extraction_helpers import assert_extraction_result, assert_system_one_result
+from tests.native_structured_helpers import (
+    NATIVE_AGENT_CASES,
+    NATIVE_STRUCTURED_CASES,
+    assert_native_agent_result,
+    assert_native_structured_result,
+)
+from tests.press_release_examples import PRESS_RELEASE_EXAMPLES, PRESS_RELEASE_TEXTS
+
+
+# MARK: - Native Pydantic Structured Output
+class TestWorkerNativeAgents:
+    @pytest.mark.parametrize(
+        "case_name,strategy",
+        [
+            ("invoice", "auto"),
+            ("decision", "auto"),
+            ("mixed", "auto"),
+            ("mixed", "provider"),
+            ("mixed", "tool"),
+            ("image_data_url", "auto"),
+            ("image_base64", "auto"),
+        ],
+        ids=[
+            "invoice",
+            "decision",
+            "mixed",
+            "mixed-provider",
+            "mixed-tool",
+            "image-url",
+            "image-base64",
+        ],
+    )
+    def test_native_agent(self, case_name, strategy, dev_server):
+        case = NATIVE_AGENT_CASES[case_name]
+        response = requests.post(
+            f"http://localhost:{dev_server}/native-structured",
+            json={
+                "agent": True,
+                "case": case_name,
+                "strategy": strategy,
+                "messages": case["messages"],
+            },
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_native_agent_result(response.json(), case)
+
+    def test_native_agent_batch(self, dev_server):
+        case = NATIVE_AGENT_CASES["invoice"]
+        response = requests.post(
+            f"http://localhost:{dev_server}/native-structured",
+            json={
+                "agent": True,
+                "batch": True,
+                "case": "invoice",
+                "messages": case["messages"],
+            },
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        results = response.json()
+        assert len(results) == 2
+        for result in results:
+            assert_native_agent_result(result, case)
+
+
+class TestWorkerNativePydanticStructuredOutput:
+    @pytest.mark.parametrize("case_name", NATIVE_STRUCTURED_CASES)
+    def test_native_structured(self, case_name, dev_server):
+        case = NATIVE_STRUCTURED_CASES[case_name]
+        response = requests.post(
+            f"http://localhost:{dev_server}/native-structured",
+            json={"case": case_name, "state": case["state"]},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_native_structured_result(response.json(), case)
+
+
+# MARK: - Combined System One Tests
+class TestWorkerSystemOneStructuredOutput:
+    """The shared combined example with production AI-binding model instances."""
+
+    @pytest.mark.parametrize("case", PRESS_RELEASE_EXAMPLES)
+    def test_extract_announcements(self, case, dev_server):
+        example = PRESS_RELEASE_EXAMPLES[case]
+        response = requests.post(
+            f"http://localhost:{dev_server}/structured-system-one",
+            json={"text": example["text"]},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_system_one_result(response.json(), example)
+
+
+# MARK: - Extraction Model Tests
+class TestWorkerExtractionModels:
+    """Clairic extraction through the Python Worker AI binding."""
+
+    @pytest.mark.parametrize(
+        "reject_if_busy", [None, True], ids=["default", "reject_busy"]
+    )
+    def test_extract(self, dev_server, extraction_case, reject_if_busy):
+        payload, expected = extraction_case
+        response = requests.post(
+            f"http://localhost:{dev_server}/extraction",
+            json={"reject_if_busy": reject_if_busy, **payload},
+            timeout=90,
+        )
+        assert response.status_code == 200, response.text
+        assert_extraction_result(response.json(), payload, expected)
 
 
 # MARK: - Decision Model Tests

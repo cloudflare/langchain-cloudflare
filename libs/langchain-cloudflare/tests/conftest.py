@@ -21,6 +21,8 @@ from tests.decision_helpers import (
     RED_IMAGE,
     decision_media_case,
 )
+from tests.extraction_helpers import ExtractionQualityError
+from tests.extraction_helpers import extraction_case as build_extraction_case
 from tests.press_release_examples import PRESS_RELEASE_EXAMPLES
 
 # MARK: - Collection Hooks
@@ -70,6 +72,52 @@ else:
     _integration_env = Path(__file__).parent / "integration_tests" / ".env"
     if _integration_env.exists():
         load_dotenv(_integration_env)
+
+# MARK: - REST Credentials
+
+
+@pytest.fixture
+def account_id():
+    return os.environ.get("CF_ACCOUNT_ID")
+
+
+@pytest.fixture
+def api_token():
+    return os.environ.get("CF_AI_API_TOKEN")
+
+
+# MARK: - Extraction Fixtures
+
+
+@pytest.fixture(
+    params=[
+        "invoice",
+        "image_data_url",
+        "image_base64",
+        *PRESS_RELEASE_EXAMPLES,
+        pytest.param(
+            "press_release_partnership_sentence",
+            marks=pytest.mark.xfail(
+                raises=ExtractionQualityError,
+                strict=True,
+                reason="Clairic preview returns a company name for a full sentence",
+            ),
+        ),
+        "press_release_earnings_sentence",
+        pytest.param(
+            "press_release_company_list",
+            marks=pytest.mark.xfail(
+                raises=ExtractionQualityError,
+                strict=True,
+                reason="Clairic preview over-extracts company-list source spans",
+            ),
+        ),
+    ]
+)
+def extraction_case(request):
+    """Native Clairic inputs shared by REST and Worker binding tests."""
+    return build_extraction_case(request.param)
+
 
 # MARK: - Decision Fixtures
 

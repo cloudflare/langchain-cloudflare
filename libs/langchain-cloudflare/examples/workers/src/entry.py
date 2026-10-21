@@ -17,8 +17,15 @@ All endpoints accept an optional "model" parameter in the request body to specif
 which Workers AI model to use. Defaults to Qwen if not specified.
 """
 
-from langchain_core.messages import HumanMessage, ToolMessage
-from models import Data
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from models import (
+    Data,
+    NativeImageFacts,
+    NativeInvoice,
+    NativeInvoiceReview,
+    NativeSupportDecision,
+)
+from system_one import extract_announcements
 from tools import ALL_TOOLS, get_stock_price, get_weather
 from workers import Response, WorkerEntrypoint
 
@@ -29,9 +36,11 @@ from langchain_cloudflare import (
     CloudflareBrowserRunTool,
     CloudflareVectorize,
     CloudflareWorkersAIDecisionModel,
+    CloudflareWorkersAIExtractionModel,
 )
 from langchain_cloudflare.decision_models import DECISION_MODELS
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
+from langchain_cloudflare.extraction_models import EXTRACTION_MODELS
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 
 # MARK: - Models
@@ -135,6 +144,12 @@ class Default(WorkerEntrypoint):
             # Reranker endpoint
             elif path == "rerank":
                 return await self.handle_rerank(request)
+            elif path == "structured-system-one":
+                return await self.handle_structured_system_one(request)
+            elif path == "native-structured":
+                return await self.handle_native_structured(request)
+            elif path == "extraction":
+                return await self.handle_extraction(request)
             elif path == "decision":
                 return await self.handle_decision(request)
             # Browser Run endpoint (quickAction() binding)
@@ -200,6 +215,7 @@ class Default(WorkerEntrypoint):
                 "browser_available": browser_available,
                 "supported_models": SUPPORTED_MODELS,
                 "decision_models": DECISION_MODELS,
+                "extraction_models": EXTRACTION_MODELS,
                 "default_model": DEFAULT_MODEL,
                 "embedding_model": EMBEDDING_MODEL,
                 "endpoints": {
@@ -221,6 +237,11 @@ class Default(WorkerEntrypoint):
                     "/ai-search": "Search AI Search via binding",
                     "/rerank": "Rerank documents by query relevance",
                     "/decision": "Clef decisions with per-option probabilities",
+                    "/extraction": "Clairic typed values with source spans",
+                    "/structured-system-one": (
+                        "Clairic and Clef combined into nested announcement data"
+                    ),
+                    "/native-structured": "Native Pydantic structured-output examples",
                     "/browser-run": (
                         "Run a Browser Run Quick Action via the browser "
                         "binding (markdown/json/links/screenshot/pdf/"
@@ -1152,6 +1173,133 @@ Return JSON with an "announcements" array. Each announcement should have:
                 ],
             }
         )
+
+    # MARK: - Native Structured Output Handler
+
+    async def handle_native_structured(self, request):
+        """Run fixed public Pydantic examples through the existing AI binding."""
+        data = await request.json()
+        schemas = {
+            "invoice": NativeInvoice,
+            "decision": NativeSupportDecision,
+            "mixed": NativeInvoiceReview,
+            "image_data_url": NativeImageFacts,
+            "image_base64": NativeImageFacts,
+        }
+        case = data["case"]
+        decision = CloudflareWorkersAIDecisionModel(
+            binding=self.env.AI, ai_gateway=None
+        )
+        extraction = CloudflareWorkersAIExtractionModel(
+            binding=self.env.AI,
+            ai_gateway=None,
+            decision_model=decision if case == "mixed" else None,
+        )
+        if data.get("agent"):
+            from langchain.agents.structured_output import (
+                ProviderStrategy,
+                ToolStrategy,
+            )
+
+            schema = schemas[case]
+            strategy = data.get("strategy", "auto")
+            response_format = (
+                ProviderStrategy(schema)
+                if strategy == "provider"
+                else ToolStrategy(schema, handle_errors=False)
+                if strategy == "tool"
+                else schema
+            )
+            agent = create_agent(
+                model=decision if case == "decision" else extraction,
+                tools=[],
+                response_format=response_format,
+            )
+            inputs = {"messages": data["messages"]}
+            results = (
+                await agent.abatch(
+                    [inputs, inputs],
+                    config={"max_concurrency": 1, "recursion_limit": 2},
+                )
+                if data.get("batch")
+                else [await agent.ainvoke(inputs, config={"recursion_limit": 2})]
+            )
+            outputs = []
+            for result in results:
+                parsed = result["structured_response"]
+                if not isinstance(parsed, schema):
+                    raise TypeError("Agent did not return the requested Pydantic type")
+                message = next(
+                    message
+                    for message in reversed(result["messages"])
+                    if isinstance(message, AIMessage)
+                )
+                outputs.append(
+                    {
+                        "structured_response": parsed.model_dump(mode="json"),
+                        "schema_type": type(parsed).__name__,
+                        "raw": message.response_metadata["native"],
+                    }
+                )
+            return Response.json(outputs if data.get("batch") else outputs[0])
+        if case == "decision":
+            structured = decision.with_structured_output(
+                schemas[case], include_raw=True
+            )
+        else:
+            structured = extraction.with_structured_output(
+                schemas[case],
+                decision_model=decision if case == "mixed" else None,
+                include_raw=True,
+            )
+        result = await structured.ainvoke(data["state"])
+        return Response.json(
+            {
+                "parsed": result["parsed"].model_dump(mode="json")
+                if result["parsed"] is not None
+                else None,
+                "raw": result["raw"],
+                "parsing_error": str(result["parsing_error"])
+                if result["parsing_error"] is not None
+                else None,
+            }
+        )
+
+    # MARK: - Combined System One Handler
+
+    async def handle_structured_system_one(self, request):
+        """Run the shared example through native AI bindings and return evidence."""
+        data = await request.json()
+        result = await extract_announcements(
+            text=data["text"],
+            extraction_model=CloudflareWorkersAIExtractionModel(
+                binding=self.env.AI, ai_gateway=data.get("ai_gateway")
+            ),
+            decision_model=CloudflareWorkersAIDecisionModel(
+                binding=self.env.AI, ai_gateway=data.get("ai_gateway")
+            ),
+        )
+        return Response.json(result)
+
+    # MARK: - Extraction Handler
+
+    async def handle_extraction(self, request):
+        """Extract Clairic's native state/fields input through the AI binding."""
+        data = await request.json()
+        model = CloudflareWorkersAIExtractionModel(
+            model_name=data.get("model", EXTRACTION_MODELS[0]),
+            binding=self.env.AI,
+            ai_gateway=data.get("ai_gateway"),
+            reject_if_busy=data.get("reject_if_busy"),
+        )
+        result = await model.aextract(
+            state=data.get("state", ""),
+            fields=data["fields"],
+            images=data.get("images"),
+            reference_date=data.get("reference_date"),
+            options=data.get("options"),
+        )
+        return Response.json(result)
 
     # MARK: - Decision Handler
 

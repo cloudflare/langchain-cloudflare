@@ -68,6 +68,236 @@ For chat dynamic routes (`model="dynamic/<route name>"`), message
 provider does not report a model, `model_name` is `None`. Each message preserves
 its model identity when a batch uses different fallback models.
 
+## Extraction Models (Clairic)
+
+`CloudflareWorkersAIExtractionModel` supports the preview
+[`@cf/cloudflare/clairic`](https://developers.cloudflare.com/workers-ai/models/clairic/)
+model. It returns typed values with source spans, confidence scores and token
+usage. Fields accept Cloudflare's native `text`, `number`, `date`, `time`,
+`datetime`, `duration`, `list`, `estimate` and `forecast` definitions.
+
+```python
+from langchain_cloudflare import CloudflareWorkersAIExtractionModel
+
+model = CloudflareWorkersAIExtractionModel()
+fields = {
+    "invoice_number": {"type": "text"},
+    "total": {"type": "number", "unit": "USD", "decimals": 2},
+    "po_number": {"type": "text", "instructions": "Purchase order number"},
+}
+result = model.extract(state="Invoice INV-2291 totals $1080.", fields=fields)
+print(result["answers"]["total"]["value"])
+
+# Async REST accepts the same fields.
+result = await model.aextract(state="Invoice INV-2291 totals $1080.", fields=fields)
+
+# Python Workers use the existing AI binding without REST credentials.
+model = CloudflareWorkersAIExtractionModel(binding=self.env.AI)
+result = await model.aextract(state="Invoice INV-2291 totals $1080.", fields=fields)
+```
+
+REST credentials use `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`; `ai_gateway` selects
+an optional AI Gateway. Results preserve the native `model`, `answers`,
+`truncated`, optional `state_text`, and `usage` fields. Missing single-value
+answers can be `None`; lists can be empty. Typed output and confidence scores
+do not guarantee correctness. Text read from the input state includes source
+spans. Text read from image pixels can instead have `source: "image"`,
+`span: null` and `spell_confidence`; the adapter preserves these native fields.
+
+Pass `reference_date="2026-10-19"` to anchor dates without a year. Native
+`options` supports `include_quantiles` and `return_state_text`. Optional `images`
+accepts embedded PNG/JPEG/WebP data URLs or `{ "content_type": "image/png",
+"base64": "..." }` objects, up to four images; remote URLs are unsupported.
+The Worker example exposes this operation at `/extraction`. Image-only input can
+use an empty `state`; put the image in `images` and define the desired native
+fields. Image fixtures reuse the same labeled PNG and expected ticker (`ACME`),
+timeframe (`Q4`) and date (`2026-06-21`) as the OpenAI-compatible structured-vision
+test. Tests cover data URLs and base64 objects through sync/async REST and Python
+Worker bindings, with no answer text supplied in the state.
+
+In the existing public partnership and earnings fixtures, separate `text`
+fields for the announcing company and its partner pass, including source spans,
+printed tickers and null answers for absent partners or tickers. For those
+fixtures and field definitions, company-list extraction also returns exchange
+names, ticker symbols and possessive references, and sentence extraction returns
+a company name. These are observed failures, not documented restrictions on
+`list` or `text`: the API supports matching lists and source-text spans.
+
+The earnings sentence experiment also asks the model to decide whether an
+announcement qualifies before extracting it. That combines classification with
+extraction; it is distinct from asking for a missing fact such as a tracking
+number. The documented support-email example passes through this adapter,
+including its damage list, computed amount and duration, and missing tracking
+number. The native field option `null_threshold` controls when a guess becomes
+`None`. Setting it to `0.01` makes the earnings-only sentence fixture return
+`None`; the default `0.5` did not. This threshold was selected using these two
+synthetic inputs, and a lower threshold can also reject valid extractions.
+Choose a threshold using representative examples; these fixtures do not establish
+general calibration. The change does not fix the full-sentence extraction case.
+Confidence scores do not guarantee that an answer is correct.
+
+The integration suites retain the original company-list and sentence expectations
+as explicit preview-model quality checks. Only a well-formed but incorrect value
+is an expected failure; HTTP errors, invalid spans and malformed responses fail.
+These checks fail on an unexpected pass so model improvements trigger revalidation.
+
+### Combining Clairic and Clef
+
+The [combined press-release example](examples/workers/src/system_one.py) produces
+the existing nested `Data` structure without a generative chat model:
+
+1. Clairic extracts candidate company mentions from the source.
+2. Python builds questions about those extracted candidates. Clef evaluates
+   eligibility, announcement type, each candidate's role or exclusion, and which
+   source line supplies the announcement context.
+3. Clairic extracts printed tickers for the selected company names. Python
+   assembles and validates `Data → announcements[] → entities[]` with Pydantic.
+
+This explicitly implements **Clairic extracts candidates → build questions about
+those candidates → Clef evaluates**. Each occurrence span is associated with its
+exact source substring and grouped under the matching candidate value. A unique
+value can have multiple spans; values and spans are not paired by position. The
+example rejects unsupported spans and values with no matching source occurrence.
+
+The function returns `extracted` plus native `stages` containing candidate spans,
+probabilities and token usage. Both REST tests and the Worker endpoint
+`POST /structured-system-one` invoke this same function. The public partnership
+fixture requires exactly Acme Corp and TechGiant Inc, their roles/tickers and the
+complete source sentence; the earnings-only fixture requires no announcements.
+No expected company names are supplied to the example. Positive results use three
+native calls; rejected releases use two. A company omitted from Clairic's
+candidates cannot be recovered by Clef's filtering in this example.
+
+This is a focused example for one primary announcement, with each candidate
+context sentence on its own input line and at most 61 candidate company mentions.
+It does not implement arbitrary Pydantic-schema conversion, multi-event grouping,
+or generated summaries. The earlier standalone extraction failures remain
+separate checks of Clairic's native answers.
+
+### Pydantic structured output for Clairic and Clef
+
+Both native model classes expose `with_structured_output()` using ordinary
+Pydantic v2 `BaseModel` classes. Clairic supplies extracted values; Clef supplies
+boolean and categorical decisions. Supply the other model explicitly when a
+schema needs both. The wrapper calls the existing native adapters and returns a
+LangChain Runnable with `invoke`, `ainvoke`, `batch`, and `abatch`.
+
+For mixed schemas, both models receive the original input with predefined,
+schema-derived extraction fields and decision questions. Clef does not
+automatically inspect or validate Clairic's extracted values. Pydantic validates
+the assembled result's types and declared constraints; that does not establish
+that the extracted facts are correct. To qualify extracted candidates, use the
+explicit dependent pipeline in the [combined example](examples/workers/src/system_one.py):
+extract candidates first, build questions about those candidates, then call Clef.
+
+```python
+from pydantic import BaseModel, Field
+from langchain_cloudflare import (
+    CloudflareWorkersAIDecisionModel,
+    CloudflareWorkersAIExtractionModel,
+)
+
+
+class InvoiceReview(BaseModel):
+    invoice_number: str = Field(description="Invoice number")
+    total: float = Field(description="Amount due including shipping, in USD")
+    paid: bool = Field(
+        description="Does the source explicitly say payment is completed?"
+    )
+
+
+clairic = CloudflareWorkersAIExtractionModel()
+clef = CloudflareWorkersAIDecisionModel()
+structured = clairic.with_structured_output(InvoiceReview, decision_model=clef)
+review = structured.invoke("Invoice INV-2291 totals $1080. Payment is pending.")
+print(review.model_dump())
+
+# The same schema works from the decision-model side.
+structured = clef.with_structured_output(InvoiceReview, extraction_model=clairic)
+review = await structured.ainvoke("Invoice INV-2291 totals $1080. Payment is pending.")
+```
+
+Extraction-only schemas need only Clairic; boolean/Enum/Literal-only schemas need
+only Clef. Field names, paths, and `Field(description=...)` supply instructions.
+Supported extraction fields are `str`, `int`, `float`, `date`, `time`, `datetime`,
+and `list[str]`, including nullable scalar fields. Enum/Literal choices require
+at least two scalar alternatives. Fixed nested models are flattened into native
+fields and rebuilt before Pydantic validation; aliases, constraints, and custom
+validators apply to the result. Missing native values remain `None`, so an
+incompatible field fails validation even if it declares a default.
+
+Non-nullable booleans use Clef's yes/no probability strictly greater than
+`boolean_threshold` (default `0.5`). Nullable booleans and nullable choices add an
+explicit absence choice. This is a conversion policy, not a guarantee of model
+accuracy. No automatic inference retries, output repair, or chat-model fallback
+are added.
+
+Pass text directly, or a dictionary containing native inputs such as
+`{"state": "", "images": [...]}` for image-only extraction. Extraction fields
+also accept `reference_date` and native `options`; audio/video inputs are
+supported for decision-only schemas with an appropriate Clef model. Worker
+instances use their existing bindings and require `ainvoke` or `abatch`.
+
+`include_raw=True` returns `{"raw": {"extraction": ..., "decision": ...},
+"parsed": ..., "parsing_error": ...}` with only the stages used by the schema.
+Native spans, probabilities and usage remain in `raw`. Parsing or Pydantic
+validation failures return `parsed=None` plus the error; HTTP and transport
+failures still raise. Without `include_raw`, validation failures raise normally.
+
+Lists of objects, optional nested objects, dynamic dictionaries, recursive
+models, and unions other than a supported type plus `None` are rejected before
+inference. Raw JSON Schema dictionaries are not accepted by this wrapper.
+The announcement schema's variable lists still use the explicit combined example
+above. The `/native-structured` Worker example covers extraction-only,
+decision-only, and mixed fixed schemas through the same wrapper.
+
+### Agent-level structured output
+
+Both native classes can also be passed directly to LangChain's `create_agent`.
+Mixed schemas have the same independent-stage behavior described above.
+Configure the companion model in the constructor for mixed schemas, and pass the
+ordinary Pydantic class as `response_format`:
+
+```python
+from langchain.agents import create_agent
+
+clef = CloudflareWorkersAIDecisionModel()
+model = CloudflareWorkersAIExtractionModel(decision_model=clef)
+agent = create_agent(model=model, tools=[], response_format=InvoiceReview)
+result = agent.invoke(
+    {
+        "messages": [
+            {
+                "role": "user",
+                "content": "Invoice INV-2291 totals $1080. Payment is pending.",
+            }
+        ]
+    }
+)
+review = result["structured_response"]  # InvoiceReview instance
+```
+
+Decision-only schemas work with a Clef instance directly. A Clef instance with
+`extraction_model=clairic` also supports mixed schemas. The agent's `invoke`,
+`ainvoke`, `batch`, and `abatch` methods use the same native operations; use async
+methods for Worker bindings. Text and embedded image messages are supported.
+System messages supply instructions rather than being treated as source facts.
+
+Automatic strategy selection, explicit `ProviderStrategy(MySchema)`, and
+`ToolStrategy(MySchema)` with one output schema are supported. The adapter
+translates the schema into native requests; LangChain validates the original
+Pydantic class and returns it in `structured_response`. Native evidence is kept
+in the model's `AIMessage.response_metadata["native"]`, with aggregate token
+usage in `usage_metadata`. ToolStrategy's validation feedback stays under
+LangChain's retry policy; the native adapters add no inference retry loop.
+
+These models provide structured extraction and decisions. Executable application
+tools, selection between multiple output schemas, and unsupported schema shapes
+are rejected before inference. Provider-side strict JSON-schema decoding is
+unavailable; Pydantic validation runs locally. Install `langchain` to use
+`create_agent`; the repository's test and notebook environments include it. The
+existing Worker example supports agent mode on `/native-structured`.
+
 ## Decision Models (Clef)
 
 `CloudflareWorkersAIDecisionModel` supports
