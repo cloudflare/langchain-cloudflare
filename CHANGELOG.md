@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## langchain-cloudflare
 
+### [0.4.4] - 2026-11-15
+
+#### Added
+
+- **`@cf/deepseek-ai/deepseek-v4.1-flash-1017`**: DeepSeek V4.1 Flash with
+  reasoning content, tool calling, structured output and vision, through REST
+  and Python Worker bindings. Uses the existing DeepSeek model behavior.
+- **`@cf/thinkingmachines/inkling-2-small`**: Inkling 2 Small with reasoning
+  content, tool calling, structured output and vision, through REST and Python
+  Worker bindings.
+
+#### Fixed
+
+- **Inkling forced tool choice**: Inkling returns a server error for any forced
+  `tool_choice` (`"required"` or a named function), so `tool_choice` is omitted
+  for this model. `create_agent` with `ToolStrategy` structured output works;
+  the model still calls the bound tool.
+
 ### [0.4.3] - 2026-10-20
 
 #### Added

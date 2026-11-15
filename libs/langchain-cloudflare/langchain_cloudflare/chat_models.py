@@ -253,6 +253,14 @@ MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
         use_json_object_for_structured_output=True,
     ),
     "deepseek": _REASONING_BEHAVIOR,
+    # Inkling returns 502 AiError 8005 for any forced tool_choice ("required"
+    # or a named function), 5/5 live, while "auto" still calls the tool.
+    # Dropping tool_choice lets create_agent's ToolStrategy work.
+    "inkling": ModelBehavior(
+        embed_tool_calls_in_content=False,
+        unsupported_params=("tool_choice",),
+        supports_reasoning_content=True,
+    ),
     "kimi": _REASONING_BEHAVIOR,
     "llama": ModelBehavior(embed_tool_calls_in_content=True),
     "mistral": ModelBehavior(

@@ -524,6 +524,17 @@ class TestReasoningContent:
         assert translated["tool_choice"] == "required"
         assert translated["temperature"] == 0.7
 
+    def test_inkling_drops_tool_choice(self):
+        """Inkling drops tool_choice and keeps the other sampling params."""
+        llm = self._create_llm("@cf/thinkingmachines/inkling-2-small")
+
+        translated = llm._translate_params_for_model(dict(self.SAMPLING_PARAMS))
+
+        assert "tool_choice" not in translated
+        assert translated["max_tokens"] == 100
+        assert translated["top_k"] == 50
+        assert translated["temperature"] == 0.7
+
     @pytest.mark.parametrize(
         "model",
         ["@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"],
@@ -573,6 +584,8 @@ class TestGetModelBehavior:
         "@cf/google/gemma-4-26b-a4b-it": "gemma",
         "@cf/openai/gpt-oss-120b": "gpt-oss",
         "@cf/deepseek-ai/deepseek-v4-pro-0813": "deepseek",
+        "@cf/deepseek-ai/deepseek-v4.1-flash-1017": "deepseek",
+        "@cf/thinkingmachines/inkling-2-small": "inkling",
         "@cf/moonshotai/kimi-k2.6": "kimi",
         "@cf/meta/llama-3.3-70b-instruct-fp8-fast": "llama",
         "@cf/mistralai/mistral-small-3.1-24b-instruct": "mistral",

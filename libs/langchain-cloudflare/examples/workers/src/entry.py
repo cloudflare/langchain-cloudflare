@@ -60,6 +60,8 @@ SUPPORTED_MODELS = [
     "@cf/moonshotai/kimi-k2.6",
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
     "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+    "@cf/thinkingmachines/inkling-2-small",
     "@cf/google/gemma-4-26b-a4b-it",
 ]
 
