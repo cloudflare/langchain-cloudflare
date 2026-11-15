@@ -15,6 +15,7 @@ from typing import (
     Iterable,
     List,
     Literal,
+    Mapping,
     Optional,
     Tuple,
     TypeVar,
@@ -442,7 +443,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
         self,
         namespace: tuple[str, ...],
         key: str,
-        value: dict[str, Any],
+        value: Mapping[str, Any],
         index: Literal[False] | list[str] | None = None,
         *,
         ttl: float | NotProvided | None = NOT_PROVIDED,
@@ -467,7 +468,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
             existing_item = self.get(namespace, key)
 
             # Create document
-            text, metadata = self._create_document(namespace, key, value, index)
+            text, metadata = self._create_document(namespace, key, dict(value), index)
 
             # Preserve created_at if item exists
             if existing_item:
@@ -727,7 +728,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
         self,
         namespace: tuple[str, ...],
         key: str,
-        value: dict[str, Any],
+        value: Mapping[str, Any],
         index: Literal[False] | list[str] | None = None,
         *,
         ttl: float | NotProvided | None = NOT_PROVIDED,
@@ -747,7 +748,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
         try:
             existing_item = await self.aget(namespace, key)
 
-            text, metadata = self._create_document(namespace, key, value, index)
+            text, metadata = self._create_document(namespace, key, dict(value), index)
 
             if existing_item:
                 metadata["created_at"] = existing_item.created_at.isoformat()
