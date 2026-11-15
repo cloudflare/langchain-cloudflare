@@ -150,6 +150,8 @@ MODELS = [
     "@cf/moonshotai/kimi-k2.6",
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
     "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+    "@cf/thinkingmachines/inkling-2-small",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
 
@@ -163,13 +165,15 @@ JSON_SCHEMA_MODELS = [
 ]
 
 # Models confirmed to support vision (image input). Per CF docs and live testing.
-# deepseek-v4-flash is text/audio only (no vision), per its model card -- only
-# deepseek-v4-pro is included here.
+# deepseek-v4-flash-0731 is text/audio only (no vision), per its model card;
+# deepseek-v4-pro and deepseek-v4.1-flash accept images.
 VISION_MODELS = [
     "@cf/moonshotai/kimi-k2.6",
     "@cf/qwen/qwen3.8-27b",
     "@cf/zai-org/glm-5.3-flash",
     "@cf/deepseek-ai/deepseek-v4-pro-0813",
+    "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+    "@cf/thinkingmachines/inkling-2-small",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
 ]
 
@@ -1103,6 +1107,8 @@ class TestReasoningContent:
         "@cf/nvidia/nemotron-3-120b-a12b",
         "@cf/deepseek-ai/deepseek-v4-pro-0813",
         "@cf/deepseek-ai/deepseek-v4-flash-0731",
+        "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
+        "@cf/thinkingmachines/inkling-2-small",
     ]
 
     @staticmethod
