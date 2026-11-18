@@ -240,7 +240,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
             cf_vectorize.create_index(
                 index_name=index_name,
                 description=description,
-                dimensions=768,
+                dimensions=dimensions,
                 wait=True,
             )
 
