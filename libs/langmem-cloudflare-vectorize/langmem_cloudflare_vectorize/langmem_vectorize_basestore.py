@@ -544,8 +544,6 @@ class CloudflareVectorizeBaseStore(BaseStore):
                 )
             )
         try:
-            namespace_prefix_str = "/".join(namespace_prefix)
-
             # Build filter for namespace prefix
             search_filter = filter.copy() if filter else {}
 
@@ -558,10 +556,10 @@ class CloudflareVectorizeBaseStore(BaseStore):
                 )
             else:
                 # No query: fetch candidates with a dummy query and rely on the
-                # namespace-prefix filtering below. An empty namespace_prefix_str
+                # namespace-prefix filtering below. An empty namespace_prefix
                 # is a valid "search everything" request (every namespace starts
-                # with ""), so this must run regardless of whether a prefix was
-                # given -- not just when namespace_prefix_str is truthy.
+                # with ()), so this must run regardless of whether a prefix was
+                # given -- not just when namespace_prefix is non-empty.
                 docs_with_scores = self.vectorstore.similarity_search_with_score(
                     query=" ",  # Dummy query to get all results
                     k=limit + offset,
@@ -570,7 +568,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
             docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
 
             return self._to_search_items(
-                docs_and_scores, namespace_prefix_str, limit, offset
+                docs_and_scores, tuple(namespace_prefix), limit, offset
             )
 
         except Exception as e:
@@ -580,14 +578,16 @@ class CloudflareVectorizeBaseStore(BaseStore):
     def _to_search_items(
         self,
         docs_and_scores: list[tuple[Any, float]],
-        namespace_prefix_str: str,
+        namespace_prefix: tuple[str, ...],
         limit: int,
         offset: int,
     ) -> list[SearchItem]:
         """Filter (doc, score) pairs by namespace prefix and apply pagination.
 
         Shared by search() and asearch() so the filtering logic only lives
-        in one place.
+        in one place. The prefix is matched label by label, as LangGraph's
+        BaseStore defines it: ("memories", "1") covers ("memories", "1", ...)
+        but not ("memories", "12").
         """
         results = []
         processed_count = 0
@@ -597,9 +597,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
                 self._extract_item_from_document(doc)
             )
 
-            # Check if namespace matches prefix
-            namespace_str = "/".join(namespace_tuple)
-            if namespace_str.startswith(namespace_prefix_str):
+            if namespace_tuple[: len(namespace_prefix)] == namespace_prefix:
                 if processed_count >= offset:
                     results.append(
                         SearchItem(
@@ -806,7 +804,6 @@ class CloudflareVectorizeBaseStore(BaseStore):
             RuntimeError: If search operation fails
         """
         try:
-            namespace_prefix_str = "/".join(namespace_prefix)
             search_filter = filter.copy() if filter else {}
 
             docs_with_scores = await self.vectorstore.asimilarity_search_with_score(
@@ -823,7 +820,7 @@ class CloudflareVectorizeBaseStore(BaseStore):
             docs_and_scores = [(doc, score) for doc, score in docs_with_scores]
 
             return self._to_search_items(
-                docs_and_scores, namespace_prefix_str, limit, offset
+                docs_and_scores, tuple(namespace_prefix), limit, offset
             )
 
         except Exception as e:
