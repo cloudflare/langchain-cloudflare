@@ -189,3 +189,38 @@ class TestCloudflareVectorizeBaseStoreAsync:
 
         gone = await _apoll_until(_check_gone)
         assert gone is True
+
+
+# MARK: - Index Creation
+
+
+class TestCloudflareVectorizeBaseStoreIndexCreation:
+    """with_cloudflare_embeddings() creates a missing index sized to the
+    embedding model, not a fixed 768."""
+
+    def test_new_index_uses_embedding_model_dimensions(
+        self, vectorize_credentials: tuple
+    ) -> None:
+        account_id, ai_api_token, vectorize_api_token = vectorize_credentials
+        index_name = f"lgmem-vec-dims-{uuid.uuid4().hex[:16]}"
+
+        store = CloudflareVectorizeBaseStore.with_cloudflare_embeddings(
+            account_id=account_id,
+            index_name=index_name,
+            workers_ai_token=ai_api_token,
+            vectorize_api_token=vectorize_api_token,
+            embedding_model="@cf/baai/bge-small-en-v1.5",
+        )
+        try:
+            index = store.vectorstore.get_index()
+            assert index["config"]["dimensions"] == 384
+            assert store.dimensions == 384
+
+            # A 384-dim vector is only accepted by a 384-dim index.
+            namespace = ("integration-dims", uuid.uuid4().hex)
+            store.put(namespace, "note", {"text": "small model memory"})
+            item = _poll_until(lambda: store.get(namespace, "note"))
+            assert item is not None
+            assert item.value == {"text": "small model memory"}
+        finally:
+            store.vectorstore.delete_index()
