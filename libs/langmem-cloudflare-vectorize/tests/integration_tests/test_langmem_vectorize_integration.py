@@ -117,6 +117,31 @@ class TestCloudflareVectorizeBaseStoreSync:
         finally:
             store.delete(namespace, key)
 
+    def test_search_prefix_matches_whole_namespace_labels(
+        self, store: CloudflareVectorizeBaseStore
+    ) -> None:
+        """A search under (..., "1") must not return items stored under
+        (..., "12")."""
+        base = ("integration-sync-prefix", uuid.uuid4().hex)
+        own, sibling = (*base, "1"), (*base, "12")
+
+        store.put(own, "own", {"text": "prefix memory"})
+        store.put(sibling, "sibling", {"text": "prefix memory"})
+        try:
+            # Wait until both items are searchable, so the narrower search
+            # cannot pass only because the sibling was not indexed yet.
+            indexed = _poll_until(
+                lambda: {r.key for r in store.search(base)} >= {"own", "sibling"},
+                timeout_seconds=_SEARCH_POLL_TIMEOUT_SECONDS,
+            )
+            assert indexed, "search never found both items"
+
+            results = store.search(own)
+            assert [(r.namespace, r.key) for r in results] == [(own, "own")]
+        finally:
+            store.delete(own, "own")
+            store.delete(sibling, "sibling")
+
     def test_delete_removes_item(self, store: CloudflareVectorizeBaseStore) -> None:
         namespace = ("integration-sync-delete", uuid.uuid4().hex)
         key = "note"
@@ -172,6 +197,35 @@ class TestCloudflareVectorizeBaseStoreAsync:
             assert any(r.key == key for r in results)
         finally:
             await store.adelete(namespace, key)
+
+    async def test_asearch_prefix_matches_whole_namespace_labels(
+        self, store: CloudflareVectorizeBaseStore
+    ) -> None:
+        """A search under (..., "1") must not return items stored under
+        (..., "12")."""
+        base = ("integration-async-prefix", uuid.uuid4().hex)
+        own, sibling = (*base, "1"), (*base, "12")
+
+        await store.aput(own, "own", {"text": "async prefix memory"})
+        await store.aput(sibling, "sibling", {"text": "async prefix memory"})
+        try:
+
+            async def _both_indexed():
+                keys = {r.key for r in await store.asearch(base)}
+                return keys >= {"own", "sibling"}
+
+            # Wait until both items are searchable, so the narrower search
+            # cannot pass only because the sibling was not indexed yet.
+            indexed = await _apoll_until(
+                _both_indexed, timeout_seconds=_SEARCH_POLL_TIMEOUT_SECONDS
+            )
+            assert indexed, "asearch never found both items"
+
+            results = await store.asearch(own)
+            assert [(r.namespace, r.key) for r in results] == [(own, "own")]
+        finally:
+            await store.adelete(own, "own")
+            await store.adelete(sibling, "sibling")
 
     async def test_adelete_removes_item(
         self, store: CloudflareVectorizeBaseStore

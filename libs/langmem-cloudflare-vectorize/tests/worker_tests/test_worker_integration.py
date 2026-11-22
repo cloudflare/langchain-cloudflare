@@ -158,6 +158,46 @@ class _WorkerStoreCrudBase:
         finally:
             self._post(port, "/store-delete", {"namespace": namespace, "key": key})
 
+    def test_search_prefix_matches_whole_namespace_labels(
+        self, dev_server, namespace: list
+    ) -> None:
+        """A search under [..., "1"] must not return items stored under
+        [..., "12"]."""
+        port = dev_server
+        own, sibling = [*namespace, "1"], [*namespace, "12"]
+        # The Worker index is shared, so query with this test's unique text
+        # to rank both items ahead of unrelated vectors.
+        text = f"prefix memory {namespace[-1]}"
+
+        for ns, key in ((own, "own"), (sibling, "sibling")):
+            self._post(
+                port,
+                "/store-put",
+                {"namespace": ns, "key": key, "value": {"text": text}},
+            )
+
+        def _search(prefix: list) -> list:
+            res = self._post(
+                port,
+                "/store-search",
+                {"namespace_prefix": prefix, "query": text, "limit": 10},
+            )
+            return [(r["namespace"], r["key"]) for r in res.json()["results"]]
+
+        try:
+            # Wait until both items are searchable, so the narrower search
+            # cannot pass only because the sibling was not indexed yet.
+            indexed = _poll_until(
+                lambda: {key for _, key in _search(namespace)} >= {"own", "sibling"},
+                timeout_seconds=_SEARCH_POLL_TIMEOUT_SECONDS,
+            )
+            assert indexed, "search never found both items"
+
+            assert _search(own) == [(own, "own")]
+        finally:
+            self._post(port, "/store-delete", {"namespace": own, "key": "own"})
+            self._post(port, "/store-delete", {"namespace": sibling, "key": "sibling"})
+
     def test_delete_removes_item(self, dev_server, namespace: list) -> None:
         port = dev_server
         key = "note"
