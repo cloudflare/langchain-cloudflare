@@ -401,6 +401,30 @@ embeddings = CloudflareWorkersAIEmbeddings(model_name="@cf/baai/bge-base-en-v1.5
 embeddings.embed_query("What is the meaning of life?")
 ```
 
+EmbeddingGemma 2 uses the same interface, including the asynchronous methods and
+Python Workers AI binding (`binding=env.AI`):
+
+```python
+embeddings = CloudflareWorkersAIEmbeddings(
+    model_name="@cf/google/embeddinggemma-2",
+    dimensions=256,  # optional; the model defaults to 768
+)
+query = embeddings.embed_query("task: search result | query: waterproof shoes")
+documents = embeddings.embed_documents(
+    [
+        "title: Trail shoes | text: Waterproof shoes for running.",
+    ]
+)
+```
+
+The integration handles the model's `input` request and embedding-object response
+format. Task prefixes are supplied by the caller, so classification, clustering,
+and retrieval can use their appropriate instructions. Use the same model and
+output dimensions for documents and queries. See the
+[model documentation](https://developers.cloudflare.com/workers-ai/models/embeddinggemma-2/)
+for supported dimensions and task prefixes.
+
+
 ## VectorStores
 `CloudflareVectorize` class exposes vectorstores from Cloudflare [Vectorize](https://developers.cloudflare.com/vectorize/).
 

@@ -29,6 +29,7 @@ import requests
 
 from langchain_cloudflare.decision_models import DECISION_MODELS
 from tests.decision_helpers import assert_decision_result
+from tests.embedding_helpers import EMBEDDING_CASES, assert_embeddings
 from tests.extraction_helpers import assert_extraction_result, assert_system_one_result
 from tests.native_structured_helpers import (
     NATIVE_AGENT_CASES,
@@ -845,6 +846,44 @@ class TestWorkerAISearch:
 
 
 # MARK: - Error Handling Tests
+
+
+# MARK: - Embeddings Binding Tests
+
+
+class TestWorkerEmbeddings:
+    """Test CloudflareWorkersAIEmbeddings via the AI binding."""
+
+    @pytest.mark.parametrize(
+        "model,dimensions,expected_dimensions,query,documents", EMBEDDING_CASES
+    )
+    def test_embed_query_and_documents(
+        self, dev_server, model, dimensions, expected_dimensions, query, documents
+    ):
+        """POST /embeddings returns vectors of the model's size."""
+        port = dev_server
+
+        response = requests.post(
+            f"http://localhost:{port}/embeddings",
+            json={
+                "model": model,
+                "dimensions": dimensions,
+                "query": query,
+                "documents": documents,
+            },
+            headers={"Content-Type": "application/json"},
+        )
+
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["success"] is True
+        assert data["model"] == model
+        assert_embeddings(
+            data["query_vector"],
+            data["document_vectors"],
+            expected_dimensions,
+            documents,
+        )
 
 
 # MARK: - Reranker Binding Tests

@@ -52,6 +52,7 @@ from langchain_cloudflare.decision_models import DECISION_MODELS
 from langchain_cloudflare.embeddings import CloudflareWorkersAIEmbeddings
 from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 from tests.decision_helpers import assert_decision_result
+from tests.embedding_helpers import EMBEDDING_CASES, assert_embeddings
 from tests.extraction_helpers import assert_extraction_result, assert_system_one_result
 from tests.native_structured_helpers import (
     NATIVE_STRUCTURED_CASES,
@@ -875,6 +876,65 @@ class TestDecisionModels:
         )
         result = await decision_model.aevaluate(**decision_request)
         assert_decision_result(result, model, decision_request, decision_expected)
+
+
+# MARK: - Embedding Tests
+
+
+@pytest.mark.parametrize(
+    "model,dimensions,expected_dimensions,query,documents", EMBEDDING_CASES
+)
+class TestEmbeddings:
+    """Test CloudflareWorkersAIEmbeddings via REST API."""
+
+    def _embeddings(self, account_id, api_token, model, dimensions):
+        if not account_id or not api_token:
+            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
+        return CloudflareWorkersAIEmbeddings(
+            account_id=account_id,
+            api_token=api_token,
+            model_name=model,
+            dimensions=dimensions,
+        )
+
+    def test_embed_query_and_documents(
+        self,
+        account_id,
+        api_token,
+        model,
+        dimensions,
+        expected_dimensions,
+        query,
+        documents,
+    ):
+        embeddings = self._embeddings(account_id, api_token, model, dimensions)
+
+        assert_embeddings(
+            embeddings.embed_query(query),
+            embeddings.embed_documents(documents),
+            expected_dimensions,
+            documents,
+        )
+
+    @pytest.mark.asyncio
+    async def test_aembed_query_and_documents(
+        self,
+        account_id,
+        api_token,
+        model,
+        dimensions,
+        expected_dimensions,
+        query,
+        documents,
+    ):
+        embeddings = self._embeddings(account_id, api_token, model, dimensions)
+
+        assert_embeddings(
+            await embeddings.aembed_query(query),
+            await embeddings.aembed_documents(documents),
+            expected_dimensions,
+            documents,
+        )
 
 
 # MARK: - Reranker Tests

@@ -112,6 +112,8 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         default_factory=secret_from_env("CF_AI_API_TOKEN", default="")
     )
     model_name: str = DEFAULT_MODEL_NAME
+    dimensions: Optional[int] = Field(default=None, gt=0)
+    """Output dimensions for EmbeddingGemma 2 (defaults to 768)."""
     batch_size: int = 50
     strip_new_lines: bool = True
     headers: Dict[str, str] = {"Authorization": "Bearer "}
@@ -168,7 +170,25 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
     # MARK: - Request Payload
     def _embed_payload(self, texts: List[str]) -> Dict[str, Any]:
         """Build the request body for an embedding batch."""
-        return apply_reject_if_busy({"text": texts}, self.reject_if_busy)
+        payload = self._model_payload(texts)
+        return apply_reject_if_busy(payload, self.reject_if_busy)
+
+    def _model_payload(self, texts: List[str]) -> Dict[str, Any]:
+        """Keep model inputs shared between REST and binding transports."""
+        if self.model_name == "@cf/google/embeddinggemma-2":
+            payload: Dict[str, Any] = {"input": texts, "encoding_format": "float"}
+            if self.dimensions is not None:
+                payload["dimensions"] = self.dimensions
+        else:
+            payload = {"text": texts}
+        return payload
+
+    def _extract_embeddings(self, response: Any) -> List[List[float]]:
+        """Normalize model output without changing input order."""
+        data = response["data"] if isinstance(response, dict) else response
+        if self.model_name == "@cf/google/embeddinggemma-2":
+            return [item["embedding"] for item in data]
+        return data
 
     # MARK: - Embed Documents
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
@@ -196,7 +216,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
                 json=self._embed_payload(batch),
             )
             response.raise_for_status()
-            embeddings.extend(response.json()["result"]["data"])
+            embeddings.extend(self._extract_embeddings(response.json()["result"]))
 
         return embeddings
 
@@ -233,7 +253,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
                     json=self._embed_payload(batch),
                 )
                 response.raise_for_status()
-                embeddings.extend(response.json()["result"]["data"])
+                embeddings.extend(self._extract_embeddings(response.json()["result"]))
 
         return embeddings
 
@@ -264,7 +284,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
         )
 
         for batch in batches:
-            js_payload = convert_payload_for_binding({"text": batch})
+            js_payload = convert_payload_for_binding(self._model_payload(batch))
 
             # Call the binding with optional options
             if run_options is not None:
@@ -279,10 +299,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
                 response = response.to_py()
 
             # Extract embeddings from response
-            if isinstance(response, dict) and "data" in response:
-                embeddings.extend(response["data"])
-            elif isinstance(response, list):
-                embeddings.extend(response)
+            embeddings.extend(self._extract_embeddings(response))
 
         return embeddings
 
@@ -303,7 +320,7 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             json=self._embed_payload([text]),
         )
         response.raise_for_status()
-        return response.json()["result"]["data"][0]
+        return self._extract_embeddings(response.json()["result"])[0]
 
     async def aembed_query(self, text: str) -> List[float]:
         """Asynchronously compute query embeddings using Cloudflare Workers AI.
@@ -331,4 +348,4 @@ class CloudflareWorkersAIEmbeddings(BaseModel, Embeddings):
             )
             response.raise_for_status()
 
-        return response.json()["result"]["data"][0]
+        return self._extract_embeddings(response.json()["result"])[0]

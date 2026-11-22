@@ -146,6 +146,8 @@ class Default(WorkerEntrypoint):
             # Reranker endpoint
             elif path == "rerank":
                 return await self.handle_rerank(request)
+            elif path == "embeddings":
+                return await self.handle_embeddings(request)
             elif path == "structured-system-one":
                 return await self.handle_structured_system_one(request)
             elif path == "native-structured":
@@ -238,6 +240,7 @@ class Default(WorkerEntrypoint):
                     "/vectorize-info": "Get Vectorize index info",
                     "/ai-search": "Search AI Search via binding",
                     "/rerank": "Rerank documents by query relevance",
+                    "/embeddings": "Embed a query and documents with any model",
                     "/decision": "Clef decisions with per-option probabilities",
                     "/extraction": "Clairic typed values with source spans",
                     "/structured-system-one": (
@@ -1322,6 +1325,36 @@ Return JSON with an "announcements" array. Each announcement should have:
             videos=data.get("videos"),
         )
         return Response.json(result)
+
+    # MARK: - Embeddings Handler
+
+    async def handle_embeddings(self, request):
+        """Embed a query and documents over the AI binding.
+
+        Body: model (default EMBEDDING_MODEL), optional dimensions (used by
+        EmbeddingGemma 2), query and documents.
+        """
+        data = await request.json()
+        model = data.get("model", EMBEDDING_MODEL)
+
+        embeddings = CloudflareWorkersAIEmbeddings(
+            model_name=model,
+            dimensions=data.get("dimensions"),
+            binding=self.env.AI,
+        )
+        query_vector = await embeddings.aembed_query(data.get("query", "Hello world"))
+        document_vectors = await embeddings.aembed_documents(
+            data.get("documents", ["Hello world"])
+        )
+
+        return Response.json(
+            {
+                "success": True,
+                "model": model,
+                "query_vector": query_vector,
+                "document_vectors": document_vectors,
+            }
+        )
 
     # MARK: - Reranker Handler
 
