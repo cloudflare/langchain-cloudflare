@@ -410,9 +410,11 @@ embeddings = CloudflareWorkersAIEmbeddings(
     dimensions=256,  # optional; the model defaults to 768
 )
 query = embeddings.embed_query("task: search result | query: waterproof shoes")
-documents = embeddings.embed_documents([
-    "title: Trail shoes | text: Waterproof shoes for running.",
-])
+documents = embeddings.embed_documents(
+    [
+        "title: Trail shoes | text: Waterproof shoes for running.",
+    ]
+)
 ```
 
 The integration handles the model's `input` request and embedding-object response
