@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`@cf/thinkingmachines/inkling-2-small`**: Inkling 2 Small with reasoning
   content, tool calling, structured output and vision, through REST and Python
   Worker bindings.
+- **`@cf/google/embeddinggemma-2`**: `CloudflareWorkersAIEmbeddings` sends this
+  model's `input` request and reads its embedding-object response, through REST
+  and Python Worker bindings. New optional `dimensions` sets its output size
+  (default 768). Task prefixes are left to the caller. Contributed by
+  [@yukiharada1228](https://github.com/yukiharada1228).
 
 #### Fixed
 
@@ -587,6 +592,8 @@ Originally proposed as a REST-only integration in [PR #41](https://github.com/cl
 #### Fixed
 
 - **`search()` crashed on an empty namespace prefix with no query**: `store.search(())` -- a documented valid LangGraph `BaseStore` usage for listing everything -- raised `UnboundLocalError` because the dummy-query fetch only ran when either `query` or `namespace_prefix_str` was truthy. Contributed by [@mittalpk](https://github.com/mittalpk).
+- **`search()`/`asearch()` matched namespace prefixes as strings**: a search under `("memories", "1")` also returned items stored under `("memories", "12")` or `("memories-archive", ...)`. Prefixes now match whole namespace labels, as LangGraph's `BaseStore` defines them. Contributed by [@arka6fx](https://github.com/arka6fx).
+- **`with_cloudflare_embeddings()` created every new index with 768 dimensions**: models such as `bge-small-en-v1.5` (384) or `bge-m3` (1024) got a mismatched index that rejected every insert. New indexes now use the model's (or the caller's) dimensions. Contributed by [@arka6fx](https://github.com/arka6fx).
 - **`with_cloudflare_embeddings()` not propagating `index_name`**: The constructed `CloudflareVectorize` instance never had `index_name` set, so any method relying on the instance default (e.g. `aget_by_ids`, `similarity_search`) failed with "index_name must be provided" outside of explicit per-call arguments.
 
 ### [0.1.1]
