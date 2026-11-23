@@ -128,7 +128,8 @@ class TestBrowserRunLoader:
         loader = CloudflareBrowserRunLoader(
             urls=[TEST_URL],
             mode="scrape",
-            elements=[{"selector": "h1"}, {"selector": "a"}],
+            # example.com no longer has an <h1>; its text is in <p> elements.
+            elements=[{"selector": "p"}, {"selector": "a"}],
             account_id=account_id,
             api_token=api_token,
         )
@@ -142,7 +143,7 @@ class TestBrowserRunLoader:
 
         assert len(docs) >= 1
         selectors = [d.metadata.get("selector") for d in docs]
-        assert "h1" in selectors
+        assert "p" in selectors
 
     def test_crawl_basic(self, account_id, api_token):
         """Crawl a small site."""

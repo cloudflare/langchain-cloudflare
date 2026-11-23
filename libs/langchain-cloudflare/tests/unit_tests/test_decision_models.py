@@ -47,7 +47,6 @@ async def test_rest_transport(model, asynchronous, decision_input):
         account_id="account",
         api_token="token",
         ai_gateway="gateway",
-        reject_if_busy=True,
         timeout=45,
     )
     response = MagicMock()
@@ -78,8 +77,19 @@ async def test_rest_transport(model, asynchronous, decision_input):
     assert kwargs["json"] == {
         **decision_input,
         "model": model.rsplit("/", 1)[-1],
-        "options": {"rejectIfBusy": True},
     }
+
+
+@pytest.mark.parametrize("model", DECISION_MODELS)
+def test_rest_rejects_reject_if_busy(model):
+    """Clef's REST validator rejects options.rejectIfBusy, so fail up front."""
+    with pytest.raises(ValueError, match="reject_if_busy needs a Workers AI binding"):
+        CloudflareWorkersAIDecisionModel(
+            model_name=model,
+            account_id="account",
+            api_token="token",
+            reject_if_busy=True,
+        )
 
 
 # MARK: - BINDING CONTRACT

@@ -133,24 +133,15 @@ def _model_str(model: object) -> str:
     return values[0] if values is not None else model  # type: ignore[return-value]
 
 
-# Test models. kimi-k2.5 was removed: it's deprecated
-# (planned_deprecation_date 2026-05-30, already past) and superseded by
-# kimi-k2.6, which is already in this list and supports the same features
-# (both report "per M cached input tokens" pricing, so k2.6 covers the
-# prompt-caching session-affinity tests k2.5 used to be needed for).
+# Workers AI retired qwen3-30b-a3b-fp8, glm-5.2, glm-5.3-flash, kimi-k2.6,
+# nemotron-3-120b-a12b, deepseek-v4-pro-0813 and deepseek-v4-flash-0731 on
+# 2026-11-20 (requests now return AiError 5028), so they are not tested.
 MODELS = [
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
-    "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/qwen/qwen3.8-27b",
-    "@cf/zai-org/glm-4.7-flash",
-    "@cf/zai-org/glm-5.2",
-    "@cf/zai-org/glm-5.3-flash",
+    "@cf/zai-org/glm-5.3",
     _model_param("@cf/openai/gpt-oss-120b"),
     _model_param("@cf/openai/gpt-oss-20b"),
-    "@cf/nvidia/nemotron-3-120b-a12b",
-    "@cf/moonshotai/kimi-k2.6",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
-    "@cf/deepseek-ai/deepseek-v4-flash-0731",
     "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
     "@cf/thinkingmachines/inkling-2-small",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
@@ -166,13 +157,9 @@ JSON_SCHEMA_MODELS = [
 ]
 
 # Models confirmed to support vision (image input). Per CF docs and live testing.
-# deepseek-v4-flash-0731 is text/audio only (no vision), per its model card;
-# deepseek-v4-pro and deepseek-v4.1-flash accept images.
+# deepseek-v4.1-flash accepts images.
 VISION_MODELS = [
-    "@cf/moonshotai/kimi-k2.6",
     "@cf/qwen/qwen3.8-27b",
-    "@cf/zai-org/glm-5.3-flash",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
     "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
     "@cf/thinkingmachines/inkling-2-small",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
@@ -181,7 +168,7 @@ VISION_MODELS = [
 # Focused models for endpoint-format parity tests. Keep this small so adding
 # OpenAI-compatible coverage does not double the full integration matrix.
 OPENAI_COMPAT_MODELS = [
-    "@cf/moonshotai/kimi-k2.6",
+    "@cf/qwen/qwen3.8-27b",
 ]
 
 
@@ -825,12 +812,13 @@ class TestExtractionModels:
 
 
 class TestDecisionModels:
-    """Clef decisions, including Omni audio/video, through sync and async REST."""
+    """Clef decisions, including Omni audio/video, through sync and async REST.
+
+    reject_if_busy is covered by the Worker binding tests: Clef's REST
+    validator rejects options.rejectIfBusy, so the adapter refuses it there.
+    """
 
     @pytest.mark.parametrize("model", DECISION_MODELS)
-    @pytest.mark.parametrize(
-        "reject_if_busy", [None, True], ids=["default", "reject_busy"]
-    )
     def test_evaluate(
         self,
         model,
@@ -838,7 +826,6 @@ class TestDecisionModels:
         api_token,
         decision_request,
         decision_expected,
-        reject_if_busy,
     ):
         if not account_id or not api_token:
             pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
@@ -847,15 +834,11 @@ class TestDecisionModels:
             account_id=account_id,
             api_token=api_token,
             ai_gateway=None,
-            reject_if_busy=reject_if_busy,
         )
         result = decision_model.evaluate(**decision_request)
         assert_decision_result(result, model, decision_request, decision_expected)
 
     @pytest.mark.parametrize("model", DECISION_MODELS)
-    @pytest.mark.parametrize(
-        "reject_if_busy", [None, True], ids=["default", "reject_busy"]
-    )
     async def test_aevaluate(
         self,
         model,
@@ -863,7 +846,6 @@ class TestDecisionModels:
         api_token,
         decision_request,
         decision_expected,
-        reject_if_busy,
     ):
         if not account_id or not api_token:
             pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
@@ -872,7 +854,6 @@ class TestDecisionModels:
             account_id=account_id,
             api_token=api_token,
             ai_gateway=None,
-            reject_if_busy=reject_if_busy,
         )
         result = await decision_model.aevaluate(**decision_request)
         assert_decision_result(result, model, decision_request, decision_expected)
@@ -1060,21 +1041,17 @@ class TestBasicInvoke:
 # (model, param, value) combinations the GLM registry entries must now let
 # through. Each one used to be silently popped before the request was sent.
 GLM_PASSTHROUGH_PARAMS = [
-    ("@cf/zai-org/glm-5.2", "top_k", 20),
-    ("@cf/zai-org/glm-5.2", "repetition_penalty", 1.05),
-    ("@cf/zai-org/glm-5.3-flash", "top_k", 20),
-    ("@cf/zai-org/glm-5.3-flash", "repetition_penalty", 1.05),
-    ("@cf/zai-org/glm-4.7-flash", "top_k", 20),
+    ("@cf/zai-org/glm-5.3", "top_k", 20),
+    ("@cf/zai-org/glm-5.3", "repetition_penalty", 1.05),
 ]
 
 
 class TestGlmSamplingParams:
     """Live coverage for the params GLM models actually accept.
 
-    The registry used to strip top_k / repetition_penalty from every GLM
-    model and tool_choice from glm-4.7-flash. Each test both asserts the
-    param survives request translation and confirms the live model accepts
-    it, so a regression in either the registry or the model is caught.
+    Each test both asserts the param survives request translation and
+    confirms the live model accepts it, so a regression in either the
+    registry or the model is caught.
     """
 
     @pytest.mark.parametrize(
@@ -1100,53 +1077,6 @@ class TestGlmSamplingParams:
         print(f"\n[{model}] {param}={value}: {text[:200]}")
         assert text.strip(), f"Empty content for {model} with {param}={value}"
 
-    def test_glm_4_7_flash_tool_choice_forces_tool_call(
-        self, account_id, api_token, ai_gateway
-    ):
-        """tool_choice should be sent to glm-4.7-flash and force a tool call."""
-        if not account_id or not api_token:
-            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
-
-        model = "@cf/zai-org/glm-4.7-flash"
-        llm = create_llm(model, account_id, api_token, ai_gateway)
-        llm_with_tools = llm.bind_tools([get_weather], tool_choice="get_weather")
-
-        assert llm_with_tools.kwargs["tool_choice"] == {
-            "type": "function",
-            "function": {"name": "get_weather"},
-        }
-
-        result = llm_with_tools.invoke("What's the weather in San Francisco?")
-
-        print(f"\n[{model}] tool_choice tool_calls: {result.tool_calls}")
-        assert result.tool_calls, f"tool_choice did not force a tool call for {model}"
-        assert result.tool_calls[0]["name"] == "get_weather"
-
-    @pytest.mark.parametrize("param", ["max_tokens", "repetition_penalty"])
-    def test_glm_4_7_flash_still_strips_broken_params(
-        self, param, account_id, api_token, ai_gateway
-    ):
-        """max_tokens (null content) and repetition_penalty (timeout) stay stripped.
-
-        Setting either one live must still produce a normal response, which
-        only holds while the registry drops them before the request is sent.
-        """
-        if not account_id or not api_token:
-            pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
-
-        model = "@cf/zai-org/glm-4.7-flash"
-        value = 64 if param == "max_tokens" else 1.05
-        llm = create_llm(model, account_id, api_token, ai_gateway, **{param: value})
-
-        translated = llm._translate_params_for_model(dict(llm._default_params))
-        assert param not in translated, f"{param} should still be stripped for {model}"
-
-        result = llm.invoke("Say 'Hello World' and nothing else.")
-
-        text = get_text_content(result.content)
-        print(f"\n[{model}] {param}={value} (stripped): {text[:200]}")
-        assert text.strip(), f"Empty content for {model} with {param}={value}"
-
 
 # MARK: - Reasoning Content Tests
 
@@ -1155,18 +1085,11 @@ class TestReasoningContent:
     """Test reasoning_content extraction from models that support it."""
 
     REASONING_MODELS = [
-        "@cf/qwen/qwen3-30b-a3b-fp8",
         "@cf/qwen/qwen3.8-27b",
-        "@cf/zai-org/glm-4.7-flash",
-        "@cf/zai-org/glm-5.2",
-        "@cf/zai-org/glm-5.3-flash",
+        "@cf/zai-org/glm-5.3",
         _model_param("@cf/openai/gpt-oss-120b"),
         _model_param("@cf/openai/gpt-oss-20b"),
-        "@cf/moonshotai/kimi-k2.6",
         _model_param("@cf/google/gemma-4-26b-a4b-it"),
-        "@cf/nvidia/nemotron-3-120b-a12b",
-        "@cf/deepseek-ai/deepseek-v4-pro-0813",
-        "@cf/deepseek-ai/deepseek-v4-flash-0731",
         "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
         "@cf/thinkingmachines/inkling-2-small",
     ]
@@ -1435,7 +1358,7 @@ class TestOpenAICompatibleEndpoint:
         if not account_id or not api_token:
             pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
 
-        model = "@cf/moonshotai/kimi-k2.6"
+        model = "@cf/qwen/qwen3.8-27b"
         llm = create_llm(
             model,
             account_id,
@@ -1739,11 +1662,11 @@ if __name__ == "__main__":
 class TestSessionAffinity:
     """Test prompt caching via x-session-affinity header.
 
-    kimi-k2.6 is known to support prompt caching (both it and kimi-k2.5,
-    now removed as deprecated, report "per M cached input tokens" pricing).
+    qwen3.8-27b supports prompt caching (it reports "per M cached input
+    tokens" pricing).
     """
 
-    @pytest.mark.parametrize("model", ["@cf/moonshotai/kimi-k2.6"])
+    @pytest.mark.parametrize("model", ["@cf/qwen/qwen3.8-27b"])
     def test_session_affinity_basic_invoke(self, model: str):
         """Verify that requests with session_id succeed and produce responses."""
         llm = ChatCloudflareWorkersAI(
@@ -1754,7 +1677,7 @@ class TestSessionAffinity:
         text = get_text_content(result)
         assert text, f"Empty response from {model} with session_id"
 
-    @pytest.mark.parametrize("model", ["@cf/moonshotai/kimi-k2.6"])
+    @pytest.mark.parametrize("model", ["@cf/qwen/qwen3.8-27b"])
     def test_session_affinity_cached_tokens(self, model: str):
         """Two calls with same session_id should succeed; cache hits are best-effort.
 
@@ -1794,7 +1717,7 @@ class TestSessionAffinity:
         else:
             print("  Cache MISS: caching is best-effort, not guaranteed")
 
-    @pytest.mark.parametrize("model", ["@cf/moonshotai/kimi-k2.6"])
+    @pytest.mark.parametrize("model", ["@cf/qwen/qwen3.8-27b"])
     @pytest.mark.asyncio
     async def test_session_affinity_cached_tokens_async(self, model: str):
         """Async variant: two calls with same session_id should succeed."""
@@ -1837,7 +1760,7 @@ class TestAIGatewayHeaders:
     def test_aig_timeout_invoke(self):
         """Request with AI Gateway timeout header should succeed."""
         llm = ChatCloudflareWorkersAI(
-            model="@cf/qwen/qwen3-30b-a3b-fp8",
+            model="@cf/qwen/qwen3.8-27b",
             ai_gateway=os.environ["AI_GATEWAY"],
             aig_request_timeout=30000,
         )
@@ -1848,7 +1771,7 @@ class TestAIGatewayHeaders:
     def test_aig_retries_invoke(self):
         """Request with AI Gateway retry headers should succeed."""
         llm = ChatCloudflareWorkersAI(
-            model="@cf/qwen/qwen3-30b-a3b-fp8",
+            model="@cf/qwen/qwen3.8-27b",
             ai_gateway=os.environ["AI_GATEWAY"],
             aig_max_attempts=2,
             aig_retry_delay=1000,
@@ -1861,7 +1784,7 @@ class TestAIGatewayHeaders:
     def test_aig_timeout_with_session_id(self):
         """AI Gateway headers and session_id should work together."""
         llm = ChatCloudflareWorkersAI(
-            model="@cf/moonshotai/kimi-k2.6",
+            model="@cf/qwen/qwen3.8-27b",
             ai_gateway=os.environ["AI_GATEWAY"],
             session_id="test-aig-session",
             aig_request_timeout=30000,
@@ -1876,7 +1799,7 @@ class TestAIGatewayHeaders:
 
 AUTO_ROUTER_WORKERS_AI_MODELS = [
     "@cf/qwen/qwen3.8-27b",
-    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
 ]
 
 
@@ -2231,7 +2154,7 @@ class TestRejectIfBusy:
 
         for endpoint_format in ("workers_ai", "openai_compatible"):
             llm = create_llm(
-                "@cf/qwen/qwen3-30b-a3b-fp8",
+                "@cf/qwen/qwen3.8-27b",
                 account_id,
                 api_token,
                 ai_gateway,
@@ -2259,9 +2182,7 @@ class TestRejectIfBusy:
         if not account_id or not api_token:
             pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
 
-        llm = create_llm(
-            "@cf/qwen/qwen3-30b-a3b-fp8", account_id, api_token, ai_gateway
-        )
+        llm = create_llm("@cf/qwen/qwen3.8-27b", account_id, api_token, ai_gateway)
         body = llm._rest_body(
             llm._create_request_payload(
                 [{"role": "user", "content": "hi"}],
@@ -2278,7 +2199,7 @@ class TestRejectIfBusy:
             pytest.skip("Missing CF_ACCOUNT_ID or CF_AI_API_TOKEN")
 
         llm = create_llm(
-            "@cf/qwen/qwen3-30b-a3b-fp8",
+            "@cf/qwen/qwen3.8-27b",
             account_id,
             api_token,
             ai_gateway,

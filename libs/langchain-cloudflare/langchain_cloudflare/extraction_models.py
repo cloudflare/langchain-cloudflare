@@ -73,10 +73,11 @@ class CloudflareWorkersAIExtractionModel(WorkersAINativeModel):
         """Extract typed values through synchronous REST.
 
         ``fields`` contains native Clairic field specs. Text read from
-        ``state`` includes source spans. Image-derived text can instead have
-        ``source="image"``, a null span and ``spell_confidence``. These native
-        fields are preserved unchanged. Optional images must be PNG/JPEG/WebP
-        data URLs or ``{content_type, base64}`` objects, not remote URLs.
+        ``state`` includes source spans. Image-derived text has a null span
+        (earlier Clairic versions also returned ``source="image"`` and
+        ``spell_confidence``). These native fields are preserved unchanged.
+        Optional images must be PNG/JPEG/WebP data URLs or
+        ``{content_type, base64}`` objects, not remote URLs.
         ``reference_date`` anchors dates without a year. Native ``options``
         can request quantiles or returned state text. Use :meth:`aextract`
         with a Worker binding.

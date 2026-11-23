@@ -537,7 +537,7 @@ class TestReasoningContent:
 
     @pytest.mark.parametrize(
         "model",
-        ["@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"],
+        ["@cf/zai-org/glm-5.3"],
     )
     def test_modern_glm_preserves_supported_params(self, model):
         """Modern GLM models should keep every parameter their schemas accept."""
@@ -555,18 +555,135 @@ class TestReasoningContent:
         through the glm-4.7-flash restrictions.
         """
         families = list(MODEL_BEHAVIORS)
-        assert families.index("glm-5.3-flash") < families.index("glm")
-        assert families.index("glm-5.2") < families.index("glm")
+        assert families.index("glm-5.3") < families.index("glm")
 
         legacy = MODEL_BEHAVIORS["glm"]
         assert legacy.unsupported_params == ("max_tokens", "repetition_penalty")
 
-        for model in ("@cf/zai-org/glm-5.2", "@cf/zai-org/glm-5.3-flash"):
+        for model in ("@cf/zai-org/glm-5.3",):
             behavior = get_model_behavior(model)
             assert behavior is not legacy
             assert behavior.unsupported_params == ()
 
         assert get_model_behavior("@cf/zai-org/glm-4.7-flash") is legacy
+
+
+# MARK: - Forced Tool Choice Emulation Tests
+
+
+class _Facts(PydanticBaseModel):
+    """Structured output schema used as the single forced tool."""
+
+    company: str
+
+
+class _Other(PydanticBaseModel):
+    """A second tool, so "required" no longer names one tool."""
+
+    city: str
+
+
+class TestForcedToolChoiceEmulation:
+    """Models that cannot force tool_choice answer it with JSON text instead.
+
+    create_agent's structured output forces its single tool; Mistral drops
+    tool_choice and replies with the arguments as text. Reading that text as
+    the forced call avoids LangChain re-calling the model with the assistant
+    message last, which Mistral's chat template rejects.
+    """
+
+    MISTRAL = "@cf/mistralai/mistral-small-3.1-24b-instruct"
+
+    def _params(self, model: str, tools: list, tool_choice: Any) -> tuple:
+        llm = ChatCloudflareWorkersAI(
+            account_id="test_account", api_token="test_token", model=model
+        )
+        bound = llm.bind_tools(tools, tool_choice=tool_choice)
+        return llm, dict(bound.kwargs)  # type: ignore[attr-defined]
+
+    def _result(self, llm: ChatCloudflareWorkersAI, content: str):
+        return llm._create_chat_result(
+            {
+                "result": {
+                    "choices": [{"message": {"role": "assistant", "content": content}}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                }
+            }
+        )
+
+    @pytest.mark.parametrize("tool_choice", ["any", "required", "_Facts"])
+    def test_forced_single_tool_is_identified(self, tool_choice):
+        llm, params = self._params(self.MISTRAL, [_Facts], tool_choice)
+        assert llm._stripped_forced_tool(params) == "_Facts"
+
+    def test_ambiguous_or_supported_choices_are_not_emulated(self):
+        llm, params = self._params(self.MISTRAL, [_Facts, _Other], "required")
+        assert llm._stripped_forced_tool(params) is None
+        llm, params = self._params(self.MISTRAL, [_Facts], "auto")
+        assert llm._stripped_forced_tool(params) is None
+        # Models that honor tool_choice are left to the provider.
+        llm, params = self._params("@cf/qwen/qwen3.8-27b", [_Facts], "required")
+        assert llm._stripped_forced_tool(params) is None
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            '{"company": "Apple Inc"}',
+            '```json\n{"company": "Apple Inc"}\n```',
+            '[{"company": "Apple Inc"}]',
+        ],
+        ids=["object", "fenced", "one_element_list"],
+    )
+    def test_json_text_becomes_forced_tool_call(self, content):
+        llm, _ = self._params(self.MISTRAL, [_Facts], "required")
+        result = self._result(llm, content)
+        llm._apply_forced_tool_call(result, "_Facts")
+
+        message = result.generations[0].message
+        assert message.content == ""
+        assert [(c["name"], c["args"]) for c in message.tool_calls] == [
+            ("_Facts", {"company": "Apple Inc"})
+        ]
+
+    @pytest.mark.parametrize(
+        "content", ["Apple Inc.", '["a", "b"]', "42"], ids=["prose", "list", "number"]
+    )
+    def test_non_object_text_is_unchanged(self, content):
+        llm, _ = self._params(self.MISTRAL, [_Facts], "required")
+        result = self._result(llm, content)
+        llm._apply_forced_tool_call(result, "_Facts")
+
+        message = result.generations[0].message
+        assert message.content == content
+        assert message.tool_calls == []
+
+    def test_agenerate_applies_emulation_end_to_end(self):
+        """The stripped choice is detected before translation drops it."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        llm, params = self._params(self.MISTRAL, [_Facts], "required")
+        response = MagicMock()
+        response.json.return_value = {
+            "result": {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": '```json\n{"company": "Apple Inc"}\n```',
+                        }
+                    }
+                ]
+            }
+        }
+        response.headers = {}
+        llm.async_client.post = AsyncMock(return_value=response)  # type: ignore[method-assign]
+
+        result = asyncio.run(llm._agenerate([HumanMessage("hi")], **params))
+
+        sent = llm.async_client.post.call_args.kwargs["json"]
+        assert "tool_choice" not in sent
+        assert result.generations[0].message.tool_calls[0]["name"] == "_Facts"
 
 
 # MARK: - Model Behavior Lookup Tests
@@ -578,8 +695,7 @@ class TestGetModelBehavior:
     # One representative model id per registry family, so a family that stops
     # resolving is caught here rather than in a live suite.
     FAMILY_MODELS = {
-        "@cf/zai-org/glm-5.3-flash": "glm-5.3-flash",
-        "@cf/zai-org/glm-5.2": "glm-5.2",
+        "@cf/zai-org/glm-5.3": "glm-5.3",
         "@cf/zai-org/glm-4.7-flash": "glm",
         "@cf/google/gemma-4-26b-a4b-it": "gemma",
         "@cf/openai/gpt-oss-120b": "gpt-oss",
@@ -1674,7 +1790,7 @@ class TestDynamicRouteEndpointFormatValidation:
         "model",
         [
             "@cf/qwen/qwen3-30b-a3b-fp8",
-            "@cf/zai-org/glm-5.2",
+            "@cf/zai-org/glm-5.3",
             "@cf/my-org/dynamic-sounding-model",
         ],
         ids=["qwen", "glm", "dynamic-substring-not-prefix"],

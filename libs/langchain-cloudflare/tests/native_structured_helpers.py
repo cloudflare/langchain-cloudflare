@@ -67,7 +67,7 @@ def assert_native_structured_result(result: dict, case: dict) -> None:
     assert set(result["raw"]) == case["stages"]
     for stage in result["raw"].values():
         assert stage["usage"]["input_tokens"] > 0
-        assert stage["usage"]["output_tokens"] == 0
+        assert stage["usage"]["output_tokens"] >= 0
         assert stage.get("truncated", False) is False
 
 

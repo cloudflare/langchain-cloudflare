@@ -32,13 +32,11 @@ RESULT = {
 
 # MARK: - REST CONTRACT
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("reject_if_busy", [None, True])
-async def test_rest_transport(asynchronous, reject_if_busy):
+async def test_rest_transport(asynchronous):
     model = CloudflareWorkersAIExtractionModel(
         account_id="account",
         api_token="token",
         ai_gateway="gateway",
-        reject_if_busy=reject_if_busy,
         timeout=45,
     )
     response = MagicMock()
@@ -67,14 +65,19 @@ async def test_rest_transport(asynchronous, reject_if_busy):
         "Authorization": "Bearer token",
         "cf-aig-gateway-id": "gateway",
     }
-    options = {**INPUT["options"]}
-    if reject_if_busy:
-        options["rejectIfBusy"] = True
-    assert kwargs["json"] == {**INPUT, "model": "clairic", "options": options}
+    assert kwargs["json"] == {**INPUT, "model": "clairic"}
     assert INPUT["options"] == {
         "include_quantiles": True,
         "return_state_text": True,
     }
+
+
+def test_rest_rejects_reject_if_busy():
+    """Clairic's REST validator rejects options.rejectIfBusy, so fail up front."""
+    with pytest.raises(ValueError, match="reject_if_busy needs a Workers AI binding"):
+        CloudflareWorkersAIExtractionModel(
+            account_id="account", api_token="token", reject_if_busy=True
+        )
 
 
 # MARK: - BINDING CONTRACT
@@ -198,7 +201,7 @@ def test_malformed_list_is_not_model_quality_failure(value):
 
 @pytest.mark.parametrize(
     "value,p_null",
-    [(None, 0.001), ("Acme Corp", 0.1)],
+    [(None, 0.001), ("Acme Corp", 0.6)],
     ids=["null_below_threshold", "value_above_threshold"],
 )
 def test_null_policy_violation_is_not_model_quality_failure(value, p_null):
@@ -224,9 +227,15 @@ def test_null_policy_violation_is_not_model_quality_failure(value, p_null):
 
 
 # MARK: - IMAGE-SOURCE ANSWERS
-@pytest.mark.parametrize("invalid_part", [None, "images", "span", "spell_confidence"])
+@pytest.mark.parametrize(
+    "invalid_part", [None, "untagged", "images", "span", "spell_confidence"]
+)
 def test_image_text_has_explicit_source_and_no_state_span(invalid_part):
-    """Image text is valid without a character span only for image inputs."""
+    """Image text is valid without a character span only for image inputs.
+
+    "untagged" is clairic-27b's shape: a null span with no source tag or
+    spell_confidence, a versioned model name and counted output tokens.
+    """
     payload = {
         "state": "",
         "images": ["data:image/png;base64,fixture"],
@@ -252,13 +261,18 @@ def test_image_text_has_explicit_source_and_no_state_span(invalid_part):
             "state_tokens": 0,
         },
     }
-    if invalid_part == "images":
+    if invalid_part == "untagged":
+        answer.pop("source")
+        answer.pop("spell_confidence")
+        result["model"] = "clairic-27b"
+        result["usage"]["output_tokens"] = 23
+    elif invalid_part == "images":
         payload.pop("images")
     elif invalid_part == "span":
         answer["span"] = [0, 4]
     elif invalid_part == "spell_confidence":
         answer["spell_confidence"] = 1.1
-    if invalid_part is None:
+    if invalid_part in (None, "untagged"):
         assert_extraction_result(result, payload, {"ticker": "ACME"})
     else:
         with pytest.raises(AssertionError) as error:

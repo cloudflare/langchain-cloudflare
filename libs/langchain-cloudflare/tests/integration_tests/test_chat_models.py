@@ -21,7 +21,7 @@ class TestChatCloudflareWorkersAI(ChatModelIntegrationTests):
     def chat_model_params(self) -> dict:
         """Get the parameters to initialize the chat model."""
         return {
-            "model": "@cf/qwen/qwen3-30b-a3b-fp8",
+            "model": "@cf/qwen/qwen3.8-27b",
             "temperature": 0.7,
         }
 
@@ -42,6 +42,15 @@ class TestChatCloudflareWorkersAI(ChatModelIntegrationTests):
     @property
     def returns_usage_metadata(self) -> bool:
         return False
+
+    @pytest.mark.xfail(
+        reason=(
+            "qwen3.8-27b's chat template rejects a second system message "
+            "('System message must be at the beginning.')."
+        )
+    )
+    def test_double_messages_conversation(self, model: BaseChatModel) -> None:
+        super().test_double_messages_conversation(model)
 
     @pytest.mark.xfail(reason=("Does not support tool_choice."))
     def test_tool_calling(self, model: BaseChatModel) -> None:

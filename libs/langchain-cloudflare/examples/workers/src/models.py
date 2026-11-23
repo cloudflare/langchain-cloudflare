@@ -45,7 +45,7 @@ class NativeInvoice(BaseModel):
     """Invoice facts extracted from the source."""
 
     invoice_number: str = Field(description="Invoice number")
-    due_date: Date = Field(description="Issue date plus the net payment days")
+    due_date: Date = Field(description="Payment due date")
     total: float = Field(description="Amount due including shipping, in USD")
     contacts: List[str] = Field(description="Full names of the contact people")
     po_number: Optional[str] = Field(default=None, description="Purchase order number")
