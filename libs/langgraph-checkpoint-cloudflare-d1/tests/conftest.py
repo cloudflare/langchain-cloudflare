@@ -58,10 +58,10 @@ def _get_nvm_node_bin() -> str | None:
 def sync_package_to_python_modules(project_dir: Path) -> None:
     """Copy the latest package source to python_modules for Workers.
 
-    pywrangler ignores the [tool.uv.sources] local-path override in
-    examples/workers/pyproject.toml and resolves langgraph-checkpoint-cloudflare-d1
-    from PyPI instead, so we manually copy the source files under test after
-    every sync (same workaround langchain-cloudflare's example uses).
+    examples/workers/pyproject.toml pins an older PyPI release of
+    langgraph-checkpoint-cloudflare-d1 so pywrangler can resolve it, so we
+    manually copy the source files under test after every sync (same
+    workaround langchain-cloudflare's example uses).
     """
     src_dir = project_dir.parent.parent / "langgraph_checkpoint_cloudflare_d1"
     dest_dir = project_dir / "python_modules" / "langgraph_checkpoint_cloudflare_d1"
