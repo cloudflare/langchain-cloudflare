@@ -378,7 +378,7 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                 for write_row in results:
                     task_id = write_row.get("task_id")
                     channel = write_row.get("channel")
-                    type_ = write_row.get("type")
+                    write_type = write_row.get("type")
                     value = write_row.get("value")
 
                     # Skip NULL/None values
@@ -393,11 +393,13 @@ class CloudflareD1Saver(BaseCheckpointSaver[str]):
                             continue
 
                     # Cast types to satisfy type checker
-                    type_str = cast(str, type_)
+                    write_type_str = cast(str, write_type)
                     value_bytes = cast(bytes, value)
 
                     # First get the serialized value
-                    serialized_value = self.serde.loads_typed((type_str, value_bytes))
+                    serialized_value = self.serde.loads_typed(
+                        (write_type_str, value_bytes)
+                    )
 
                     # Properly cast the task_id and channel to ensure type correctness
                     task_id_str = cast(str, task_id)
