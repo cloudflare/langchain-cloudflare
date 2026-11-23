@@ -21,7 +21,6 @@ from tests.decision_helpers import (
     RED_IMAGE,
     decision_media_case,
 )
-from tests.extraction_helpers import ExtractionQualityError
 from tests.extraction_helpers import extraction_case as build_extraction_case
 from tests.press_release_examples import PRESS_RELEASE_EXAMPLES
 
@@ -95,23 +94,9 @@ def api_token():
         "image_data_url",
         "image_base64",
         *PRESS_RELEASE_EXAMPLES,
-        pytest.param(
-            "press_release_partnership_sentence",
-            marks=pytest.mark.xfail(
-                raises=ExtractionQualityError,
-                strict=True,
-                reason="Clairic preview returns a company name for a full sentence",
-            ),
-        ),
+        "press_release_partnership_sentence",
         "press_release_earnings_sentence",
-        pytest.param(
-            "press_release_company_list",
-            marks=pytest.mark.xfail(
-                raises=ExtractionQualityError,
-                strict=True,
-                reason="Clairic preview over-extracts company-list source spans",
-            ),
-        ),
+        "press_release_company_list",
     ]
 )
 def extraction_case(request):

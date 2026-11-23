@@ -220,13 +220,12 @@ _REASONING_BEHAVIOR = ModelBehavior(
 )
 
 MODEL_BEHAVIORS: Dict[str, ModelBehavior] = {
-    # GLM 5.x accepts every sampling param the legacy "glm" entry strips
-    # (top_k and repetition_penalty both verified live, 3/3), so these keys
-    # need no unsupported_params of their own. They must stay ahead of the
-    # "glm" key: get_model_behavior() returns the first substring match in
-    # insertion order, and "glm" matches the 5.x model names too.
-    "glm-5.3-flash": _REASONING_BEHAVIOR,
-    "glm-5.2": _REASONING_BEHAVIOR,
+    # GLM 5.3 accepts every sampling param the legacy "glm" entry strips
+    # (top_k, repetition_penalty, max_tokens and forced tool_choice all
+    # verified live, 3/3), so it needs no unsupported_params of its own. It
+    # must stay ahead of the "glm" key: get_model_behavior() returns the first
+    # substring match in insertion order, and "glm" matches glm-5.3 too.
+    "glm-5.3": _REASONING_BEHAVIOR,
     # glm-4.7-flash only. Verified live, 3/3 each: max_tokens returns null
     # content and repetition_penalty times out, while top_k and tool_choice
     # both work and so are passed through.
@@ -777,6 +776,67 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             ls_params["ls_stop"] = ls_stop if isinstance(ls_stop, list) else [ls_stop]
         return ls_params
 
+    # MARK: - Forced Tool Choice Emulation
+    def _stripped_forced_tool(self, params: Dict[str, Any]) -> Optional[str]:
+        """Return the tool a forced ``tool_choice`` names when it will be stripped.
+
+        Models with ``tool_choice`` in ``unsupported_params`` cannot be forced
+        to call a tool, so they sometimes answer a forced request (for example
+        create_agent's structured-output tool) with the arguments as JSON text.
+        Only a choice that names one tool, or ``"required"`` with exactly one
+        tool bound, identifies which tool that text belongs to.
+        """
+        if "tool_choice" not in self._model_behavior.unsupported_params:
+            return None
+        tool_choice = params.get("tool_choice")
+        names = [
+            tool.get("function", {}).get("name")
+            for tool in params.get("tools") or []
+            if isinstance(tool, dict)
+        ]
+        if isinstance(tool_choice, dict):
+            name = tool_choice.get("function", {}).get("name")
+            return name if name in names else None
+        if tool_choice == "required" and len(names) == 1:
+            return names[0]
+        return None
+
+    @staticmethod
+    def _apply_forced_tool_call(result: ChatResult, tool_name: Optional[str]) -> None:
+        """Turn a JSON text answer into a call to the forced tool, in place.
+
+        Accepts a JSON object, optionally fenced as a ```json block or wrapped
+        in a one-element list. Anything else is left unchanged.
+        """
+        if not tool_name or not result.generations:
+            return
+        message = result.generations[0].message
+        if not isinstance(message, AIMessage) or message.tool_calls:
+            return
+        if not isinstance(message.content, str):
+            return
+        text = message.content.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1] if "\n" in text else ""
+            text = text.rsplit("```", 1)[0].strip()
+        try:
+            args = json.loads(text)
+        except ValueError:
+            return
+        if isinstance(args, list) and len(args) == 1:
+            args = args[0]
+        if not isinstance(args, dict):
+            return
+        message.tool_calls = [
+            {
+                "name": tool_name,
+                "args": args,
+                "id": f"call_{uuid.uuid4()}",
+                "type": "tool_call",
+            }
+        ]
+        message.content = ""
+
     # MARK: - Tool Call Extraction
     def _extract_tool_calls_from_content(self, content: str) -> List[Dict[str, Any]]:
         """Extract tool calls from content if it appears to be a JSON tool call."""
@@ -1130,6 +1190,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             **params,
             **kwargs,
         }
+        forced_tool = self._stripped_forced_tool(params)
 
         # Translate parameters for model-specific differences
         params = self._translate_params_for_model(params)
@@ -1160,12 +1221,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             response.raise_for_status()
             response_data = response.json()
 
-        return self._create_chat_result(
+        result = self._create_chat_result(
             response_data,
             response_headers=(
                 response.headers if self.binding is None else binding_headers
             ),
         )
+        self._apply_forced_tool_call(result, forced_tool)
+        return result
 
     async def _agenerate(  # type: ignore
         self,
@@ -1178,6 +1241,7 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             **params,
             **kwargs,
         }
+        forced_tool = self._stripped_forced_tool(params)
         params = self._translate_params_for_model(params)
 
         # Create the request payload
@@ -1197,12 +1261,14 @@ class ChatCloudflareWorkersAI(BaseChatModel):
             response.raise_for_status()
             response_data = response.json()
 
-        return self._create_chat_result(
+        result = self._create_chat_result(
             response_data,
             response_headers=(
                 response.headers if self.binding is None else binding_headers
             ),
         )
+        self._apply_forced_tool_call(result, forced_tool)
+        return result
 
     # MARK: - Streaming
     def _stream(

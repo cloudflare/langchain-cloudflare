@@ -27,7 +27,6 @@ from langchain_core.utils import from_env, secret_from_env
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
 from ._errors import TokenErrors
-from ._options import apply_reject_if_busy
 from .bindings import (
     convert_binding_response_to_rest_format,
     convert_payload_for_binding,
@@ -190,6 +189,15 @@ class WorkersAINativeModel(BaseChatModel):
         super().__init__(**kwargs)
         if self.binding is not None:
             return
+        if self.reject_if_busy:
+            # Workers AI documents options.rejectIfBusy in the REST body, but
+            # the Clef and Clairic validators reject it (HTTP 422, "Extra
+            # inputs are not permitted"). Fail at construction rather than on
+            # every request; the binding passes it as run options instead.
+            raise ValueError(
+                "reject_if_busy needs a Workers AI binding for Clef and Clairic: "
+                "their REST endpoints reject options.rejectIfBusy."
+            )
         if not self.account_id:
             raise ValueError(TokenErrors.NO_ACCOUNT_ID_SET)
         if not self.api_token.get_secret_value():
@@ -209,7 +217,7 @@ class WorkersAINativeModel(BaseChatModel):
         response = requests.post(
             url=self._inference_url,
             headers=self.headers,
-            json=apply_reject_if_busy(payload, self.reject_if_busy),
+            json=payload,
             timeout=self.timeout,
         )
         response.raise_for_status()
@@ -237,7 +245,7 @@ class WorkersAINativeModel(BaseChatModel):
             response = await client.post(
                 url=self._inference_url,
                 headers=self.headers,
-                json=apply_reject_if_busy(payload, self.reject_if_busy),
+                json=payload,
             )
             response.raise_for_status()
             return response.json()["result"]  # type: ignore[no-any-return]

@@ -48,24 +48,16 @@ from langchain_cloudflare.rerankers import CloudflareWorkersAIReranker
 # Supported Workers AI models for this example
 SUPPORTED_MODELS = [
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
-    "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/qwen/qwen3.8-27b",
-    "@cf/zai-org/glm-4.7-flash",
-    "@cf/zai-org/glm-5.2",
-    "@cf/zai-org/glm-5.3-flash",
+    "@cf/zai-org/glm-5.3",
     "@cf/openai/gpt-oss-120b",
     "@cf/openai/gpt-oss-20b",
-    "@cf/nvidia/nemotron-3-120b-a12b",
-    "@cf/moonshotai/kimi-k2.5",
-    "@cf/moonshotai/kimi-k2.6",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
-    "@cf/deepseek-ai/deepseek-v4-flash-0731",
     "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
     "@cf/thinkingmachines/inkling-2-small",
     "@cf/google/gemma-4-26b-a4b-it",
 ]
 
-DEFAULT_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8"
+DEFAULT_MODEL = "@cf/qwen/qwen3.8-27b"
 
 # Embedding model for Vectorize
 EMBEDDING_MODEL = "@cf/baai/bge-base-en-v1.5"
@@ -1823,12 +1815,12 @@ Return JSON with an "announcements" array. Each announcement should have:
         x-session-affinity routing to the same model instance.
 
         Request body:
-            - model: Workers AI model name (optional, defaults to kimi-k2.5)
+            - model: Workers AI model name (optional, defaults to DEFAULT_MODEL)
             - message: User message text
             - session_id: Session identifier for prompt caching
         """
         data = await request.json()
-        model = data.get("model", "@cf/moonshotai/kimi-k2.5")
+        model = data.get("model", DEFAULT_MODEL)
         message = data.get("message", "Hello!")
         session_id = data.get("session_id", "test-session")
 

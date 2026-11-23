@@ -43,7 +43,7 @@ By default, `ChatCloudflareWorkersAI` uses the native Workers AI run endpoint:
 
 ```python
 llm = ChatCloudflareWorkersAI(
-    model="@cf/moonshotai/kimi-k2.6",
+    model="@cf/qwen/qwen3.8-27b",
     endpoint_format="workers_ai",  # default
 )
 ```
@@ -53,7 +53,7 @@ set `endpoint_format="openai_compatible"`:
 
 ```python
 llm = ChatCloudflareWorkersAI(
-    model="@cf/moonshotai/kimi-k2.6",
+    model="@cf/qwen/qwen3.8-27b",
     endpoint_format="openai_compatible",
 )
 ```
@@ -101,8 +101,10 @@ an optional AI Gateway. Results preserve the native `model`, `answers`,
 `truncated`, optional `state_text`, and `usage` fields. Missing single-value
 answers can be `None`; lists can be empty. Typed output and confidence scores
 do not guarantee correctness. Text read from the input state includes source
-spans. Text read from image pixels can instead have `source: "image"`,
-`span: null` and `spell_confidence`; the adapter preserves these native fields.
+spans. Text read from image pixels has `span: null` (earlier Clairic versions
+also returned `source: "image"` and `spell_confidence`); the adapter preserves
+these native fields. The response `model` is the versioned name, such as
+`clairic-27b`.
 
 Pass `reference_date="2026-10-19"` to anchor dates without a year. Native
 `options` supports `include_quantiles` and `return_state_text`. Optional `images`
@@ -115,31 +117,17 @@ timeframe (`Q4`) and date (`2026-06-21`) as the OpenAI-compatible structured-vis
 test. Tests cover data URLs and base64 objects through sync/async REST and Python
 Worker bindings, with no answer text supplied in the state.
 
-In the existing public partnership and earnings fixtures, separate `text`
-fields for the announcing company and its partner pass, including source spans,
-printed tickers and null answers for absent partners or tickers. For those
-fixtures and field definitions, company-list extraction also returns exchange
-names, ticker symbols and possessive references, and sentence extraction returns
-a company name. These are observed failures, not documented restrictions on
-`list` or `text`: the API supports matching lists and source-text spans.
-
-The earnings sentence experiment also asks the model to decide whether an
-announcement qualifies before extracting it. That combines classification with
-extraction; it is distinct from asking for a missing fact such as a tracking
-number. The documented support-email example passes through this adapter,
-including its damage list, computed amount and duration, and missing tracking
-number. The native field option `null_threshold` controls when a guess becomes
-`None`. Setting it to `0.01` makes the earnings-only sentence fixture return
-`None`; the default `0.5` did not. This threshold was selected using these two
-synthetic inputs, and a lower threshold can also reject valid extractions.
-Choose a threshold using representative examples; these fixtures do not establish
-general calibration. The change does not fix the full-sentence extraction case.
-Confidence scores do not guarantee that an answer is correct.
-
-The integration suites retain the original company-list and sentence expectations
-as explicit preview-model quality checks. Only a well-formed but incorrect value
-is an expected failure; HTTP errors, invalid spans and malformed responses fail.
-These checks fail on an unexpected pass so model improvements trigger revalidation.
+In the public partnership and earnings fixtures, separate `text` fields for the
+announcing company and its partner pass, including source spans, printed
+tickers and null answers for absent partners or tickers. Company-list extraction
+returns each company once, and the full-sentence field returns the announcement
+sentence, or `None` for the earnings-only release. The earnings case asks the
+model to decide whether an announcement qualifies before extracting it, which
+combines classification with extraction. The native field option
+`null_threshold` (compute, date, time, datetime and duration fields only)
+controls when a guess becomes `None`; Clairic rejects it on other field types.
+These two synthetic inputs do not establish general calibration, and confidence
+scores do not guarantee that an answer is correct.
 
 ### Combining Clairic and Clef
 
@@ -344,9 +332,9 @@ result = await model.aevaluate(state="Checkout is down.", questions=questions)
 ```
 
 REST credentials use `CF_ACCOUNT_ID` and `CF_AI_API_TOKEN`. Configure
-`ai_gateway` to use an AI Gateway. `reject_if_busy=True` passes live Clef Worker
-binding tests; Clef's REST validator currently rejects the documented `options`
-field with HTTP 422. Clef and Clef Flash are not currently supported through
+`ai_gateway` to use an AI Gateway. `reject_if_busy=True` requires a Worker
+binding: Clef's and Clairic's REST validators reject `options.rejectIfBusy`
+with HTTP 422, so REST construction with it raises `ValueError`. Clef and Clef Flash are not currently supported through
 dynamic routing. Results preserve `model`, `answers`,
 and `usage` fields. Pass optional `images` as embedded PNG/JPEG/WebP data URLs or
 `{"content_type": "image/png", "base64": "..."}` objects (up to four images).

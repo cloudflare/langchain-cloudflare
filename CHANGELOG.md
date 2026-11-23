@@ -12,12 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Added
 
+- **`@cf/zai-org/glm-5.3`**: GLM 5.3 with reasoning content, tool calling and
+  structured output, through REST and Python Worker bindings. It accepts the
+  sampling params the legacy GLM entry strips (`top_k`, `repetition_penalty`,
+  `max_tokens`) and forced `tool_choice`.
 - **`@cf/deepseek-ai/deepseek-v4.1-flash-1017`**: DeepSeek V4.1 Flash with
   reasoning content, tool calling, structured output and vision, through REST
   and Python Worker bindings. Uses the existing DeepSeek model behavior.
 - **`@cf/thinkingmachines/inkling-2-small`**: Inkling 2 Small with reasoning
   content, tool calling, structured output and vision, through REST and Python
   Worker bindings.
+- **`@cf/google/embeddinggemma-2`**: `CloudflareWorkersAIEmbeddings` sends this
+  model's `input` request and reads its embedding-object response, through REST
+  and Python Worker bindings. New optional `dimensions` sets its output size
+  (default 768). Task prefixes are left to the caller. Contributed by
+  [@yukiharada1228](https://github.com/yukiharada1228).
 
 #### Fixed
 
@@ -25,6 +34,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tool_choice` (`"required"` or a named function), so `tool_choice` is omitted
   for this model. `create_agent` with `ToolStrategy` structured output works;
   the model still calls the bound tool.
+- **Forced tool choice on models that drop `tool_choice`**: Mistral cannot be
+  forced to call a tool, so it sometimes answered `create_agent`'s
+  structured-output tool with the arguments as JSON text. LangChain then
+  re-called the model with that assistant message last, which Mistral's chat
+  template rejects (HTTP 400). When a stripped `tool_choice` names exactly one
+  tool and the reply is a JSON object (plain, fenced or in a one-element list),
+  it is now returned as a call to that tool, over REST and Worker bindings.
+
+#### Changed
+
+- **Clef and Clairic `reject_if_busy` over REST**: both REST validators reject
+  the documented `options.rejectIfBusy` (HTTP 422), so constructing a REST
+  decision or extraction model with `reject_if_busy=True` now raises
+  `ValueError` instead of failing every request. It still works through a
+  Worker binding.
+
+#### Removed
+
+- **Retired models**: Workers AI retired `@cf/qwen/qwen3-30b-a3b-fp8`,
+  `@cf/zai-org/glm-5.2`, `@cf/zai-org/glm-5.3-flash`,
+  `@cf/moonshotai/kimi-k2.5`, `@cf/moonshotai/kimi-k2.6`,
+  `@cf/nvidia/nemotron-3-120b-a12b`,
+  `@cf/deepseek-ai/deepseek-v4-pro-0813` and
+  `@cf/deepseek-ai/deepseek-v4-flash-0731` on 2026-11-20. They are removed from
+  the test matrices and the Worker example, whose default chat model is now
+  `@cf/qwen/qwen3.8-27b`. The `glm-5.2` and `glm-5.3-flash` model behavior
+  entries are replaced by one for `glm-5.3`.
+- **`@cf/zai-org/glm-4.7-flash` test coverage**: superseded by GLM 5.3, so it is
+  dropped from the test matrices and the Worker example. The model is still
+  available on Workers AI and keeps its model behavior entry.
 
 ### [0.4.3] - 2026-10-20
 
@@ -553,6 +592,8 @@ Originally proposed as a REST-only integration in [PR #41](https://github.com/cl
 #### Fixed
 
 - **`search()` crashed on an empty namespace prefix with no query**: `store.search(())` -- a documented valid LangGraph `BaseStore` usage for listing everything -- raised `UnboundLocalError` because the dummy-query fetch only ran when either `query` or `namespace_prefix_str` was truthy. Contributed by [@mittalpk](https://github.com/mittalpk).
+- **`search()`/`asearch()` matched namespace prefixes as strings**: a search under `("memories", "1")` also returned items stored under `("memories", "12")` or `("memories-archive", ...)`. Prefixes now match whole namespace labels, as LangGraph's `BaseStore` defines them. Contributed by [@arka6fx](https://github.com/arka6fx).
+- **`with_cloudflare_embeddings()` created every new index with 768 dimensions**: models such as `bge-small-en-v1.5` (384) or `bge-m3` (1024) got a mismatched index that rejected every insert. New indexes now use the model's (or the caller's) dimensions. Contributed by [@arka6fx](https://github.com/arka6fx).
 - **`with_cloudflare_embeddings()` not propagating `index_name`**: The constructed `CloudflareVectorize` instance never had `index_name` set, so any method relying on the instance default (e.g. `aget_by_ids`, `similarity_search`) failed with "index_name must be provided" outside of explicit per-call arguments.
 
 ### [0.1.1]

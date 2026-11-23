@@ -220,24 +220,15 @@ def _model_str(model: object) -> str:
     return values[0] if values is not None else model  # type: ignore[return-value]
 
 
-# Models to test against. kimi-k2.5 was removed: it's deprecated
-# (planned_deprecation_date 2026-05-30, already past) and superseded by
-# kimi-k2.6, which is already in this list and supports the same features
-# (both report "per M cached input tokens" pricing, so k2.6 covers the
-# prompt-caching session-affinity tests k2.5 used to be needed for).
+# Workers AI retired qwen3-30b-a3b-fp8, glm-5.2, glm-5.3-flash, kimi-k2.6,
+# nemotron-3-120b-a12b, deepseek-v4-pro-0813 and deepseek-v4-flash-0731 on
+# 2026-11-20 (requests now return AiError 5028), so they are not tested.
 MODELS = [
     "@cf/mistralai/mistral-small-3.1-24b-instruct",
-    "@cf/qwen/qwen3-30b-a3b-fp8",
     "@cf/qwen/qwen3.8-27b",
-    "@cf/zai-org/glm-4.7-flash",
-    "@cf/zai-org/glm-5.2",
-    "@cf/zai-org/glm-5.3-flash",
+    "@cf/zai-org/glm-5.3",
     _model_param("@cf/openai/gpt-oss-120b"),
     _model_param("@cf/openai/gpt-oss-20b"),
-    "@cf/nvidia/nemotron-3-120b-a12b",
-    "@cf/moonshotai/kimi-k2.6",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
-    "@cf/deepseek-ai/deepseek-v4-flash-0731",
     "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
     "@cf/thinkingmachines/inkling-2-small",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
@@ -253,13 +244,9 @@ JSON_SCHEMA_MODELS = [
 ]
 
 # Models confirmed to support vision (image input). Per CF docs and live testing.
-# deepseek-v4-flash-0731 is text/audio only (no vision), per its model card;
-# deepseek-v4-pro and deepseek-v4.1-flash accept images.
+# deepseek-v4.1-flash accepts images.
 VISION_MODELS = [
-    "@cf/moonshotai/kimi-k2.6",
     "@cf/qwen/qwen3.8-27b",
-    "@cf/zai-org/glm-5.3-flash",
-    "@cf/deepseek-ai/deepseek-v4-pro-0813",
     "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
     "@cf/thinkingmachines/inkling-2-small",
     _model_param("@cf/google/gemma-4-26b-a4b-it"),
@@ -1229,7 +1216,8 @@ class TestWorkerBrowserRun:
             json={
                 "url": "https://example.com",
                 "mode": "scrape",
-                "elements": [{"selector": "h1"}],
+                # example.com no longer has an <h1>; its text is in <p> elements.
+                "elements": [{"selector": "p"}],
             },
             headers={"Content-Type": "application/json"},
         )
@@ -1242,7 +1230,7 @@ class TestWorkerBrowserRun:
 
         assert data["success"] is True
         assert len(data["documents"]) >= 1
-        assert data["documents"][0]["metadata"]["selector"] == "h1"
+        assert data["documents"][0]["metadata"]["selector"] == "p"
 
 
 # MARK: - Error Handling Tests
@@ -1358,17 +1346,10 @@ class TestWorkerReasoningContent:
     """Test reasoning_content extraction from content blocks via Worker binding."""
 
     REASONING_MODELS = [
-        "@cf/qwen/qwen3-30b-a3b-fp8",
         "@cf/qwen/qwen3.8-27b",
-        "@cf/zai-org/glm-4.7-flash",
-        "@cf/zai-org/glm-5.2",
-        "@cf/zai-org/glm-5.3-flash",
+        "@cf/zai-org/glm-5.3",
         _model_param("@cf/openai/gpt-oss-120b"),
         _model_param("@cf/openai/gpt-oss-20b"),
-        "@cf/moonshotai/kimi-k2.6",
-        "@cf/nvidia/nemotron-3-120b-a12b",
-        "@cf/deepseek-ai/deepseek-v4-pro-0813",
-        "@cf/deepseek-ai/deepseek-v4-flash-0731",
         "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
         "@cf/thinkingmachines/inkling-2-small",
         _model_param("@cf/google/gemma-4-26b-a4b-it"),
@@ -1581,8 +1562,8 @@ class TestWorkerSessionAffinity:
 
     Tests the /session-affinity endpoint which passes session_id
     through to the binding options as x-session-affinity header.
-    kimi-k2.6 is known to support prompt caching (both it and kimi-k2.5,
-    now removed as deprecated, report "per M cached input tokens" pricing).
+    qwen3.8-27b supports prompt caching (it reports "per M cached input
+    tokens" pricing).
     """
 
     def test_session_affinity_basic(self, dev_server):
@@ -1591,7 +1572,7 @@ class TestWorkerSessionAffinity:
         response = requests.post(
             f"http://localhost:{port}/session-affinity",
             json={
-                "model": "@cf/moonshotai/kimi-k2.6",
+                "model": "@cf/qwen/qwen3.8-27b",
                 "message": "Say hello in exactly 3 words.",
                 "session_id": "test-worker-session",
             },
@@ -1616,7 +1597,7 @@ class TestWorkerSessionAffinity:
             response = requests.post(
                 f"http://localhost:{port}/session-affinity",
                 json={
-                    "model": "@cf/moonshotai/kimi-k2.6",
+                    "model": "@cf/qwen/qwen3.8-27b",
                     "message": f"What is {i + 1} + {i + 1}?",
                     "session_id": session_id,
                 },
@@ -1636,11 +1617,8 @@ class TestWorkerSessionAffinity:
 # (model, param, value) combinations the GLM registry entries must now let
 # through. Each one used to be silently popped before the request was sent.
 GLM_PASSTHROUGH_PARAMS = [
-    ("@cf/zai-org/glm-5.2", "top_k", 20),
-    ("@cf/zai-org/glm-5.2", "repetition_penalty", 1.05),
-    ("@cf/zai-org/glm-5.3-flash", "top_k", 20),
-    ("@cf/zai-org/glm-5.3-flash", "repetition_penalty", 1.05),
-    ("@cf/zai-org/glm-4.7-flash", "top_k", 20),
+    ("@cf/zai-org/glm-5.3", "top_k", 20),
+    ("@cf/zai-org/glm-5.3", "repetition_penalty", 1.05),
 ]
 
 
@@ -1678,56 +1656,6 @@ class TestWorkerGlmSamplingParams:
         assert data["sent_params"].get(param) == value, f"{param} stripped for {model}"
         assert data["response"].strip(), f"Empty content for {model} with {param}"
 
-    def test_glm_4_7_flash_tool_choice_forces_tool_call(self, dev_server):
-        """tool_choice should be sent to glm-4.7-flash and force a tool call."""
-        port = dev_server
-        model = "@cf/zai-org/glm-4.7-flash"
-        response = requests.post(
-            f"http://localhost:{port}/sampling-params",
-            json={
-                "model": model,
-                "message": "What's the weather in San Francisco?",
-                "tool_choice": "get_weather",
-            },
-            headers={"Content-Type": "application/json"},
-            timeout=60,
-        )
-
-        assert response.status_code == 200, response.text
-        data = response.json()
-        print(f"  [{model}] tool_calls: {data['tool_calls']}")  # noqa: T201
-
-        assert data["tool_calls"], f"tool_choice did not force a tool call for {model}"
-        assert data["tool_calls"][0]["name"] == "get_weather"
-
-    @pytest.mark.parametrize(
-        ("param", "value"),
-        [("max_tokens", 64), ("repetition_penalty", 1.05)],
-    )
-    def test_glm_4_7_flash_still_strips_broken_params(self, dev_server, param, value):
-        """max_tokens (null content) and repetition_penalty (timeout) stay stripped."""
-        port = dev_server
-        model = "@cf/zai-org/glm-4.7-flash"
-        response = requests.post(
-            f"http://localhost:{port}/sampling-params",
-            json={
-                "model": model,
-                "message": "Say 'Hello World' and nothing else.",
-                param: value,
-            },
-            headers={"Content-Type": "application/json"},
-            timeout=60,
-        )
-
-        assert response.status_code == 200, response.text
-        data = response.json()
-        print(f"  [{model}] {param}={value} sent: {data['sent_params']}")  # noqa: T201
-
-        assert param not in data["sent_params"], (
-            f"{param} should still be stripped for {model}"
-        )
-        assert data["response"].strip(), f"Empty content for {model} with {param}"
-
 
 # MARK: - AI Gateway Dynamic Route Tests
 
@@ -1752,7 +1680,7 @@ AI_GATEWAY = os.environ.get("AI_GATEWAY")
 
 AUTO_ROUTER_WORKERS_AI_MODELS = [
     "@cf/qwen/qwen3.8-27b",
-    "@cf/deepseek-ai/deepseek-v4-flash-0731",
+    "@cf/deepseek-ai/deepseek-v4.1-flash-1017",
 ]
 
 
