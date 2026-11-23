@@ -15,6 +15,8 @@ import uuid
 
 import pytest
 import requests
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
 
 # MARK: - Health
 
@@ -166,6 +168,49 @@ class _WorkerCheckpointerCrudBase:
         get_res = self._post(port, "/checkpointer-get-tuple", {"thread_id": thread_id})
         assert get_res.json()["found"] is False
 
+    def test_get_tuple_and_list_decode_checkpoint_after_null_write(
+        self, dev_server, thread_id: str
+    ) -> None:
+        # The input value, then a None branch trigger (type "null"), as
+        # LangGraph stores them for a run's input step. The checkpoint must
+        # still decode with its own type.
+        port = dev_server
+
+        put_res = self._post(
+            port,
+            "/checkpointer-put",
+            {"thread_id": thread_id, "metadata": {"source": "input", "step": -1}},
+        )
+        checkpoint_id = put_res.json()["checkpoint_id"]
+        self._post(
+            port,
+            "/checkpointer-put-writes",
+            {
+                "thread_id": thread_id,
+                "checkpoint_id": checkpoint_id,
+                "task_id": "task-1",
+                "writes": [
+                    {"channel": "n", "value": 1},
+                    {"channel": "branch:to:add_one", "value": None},
+                ],
+            },
+        )
+
+        try:
+            get_res = self._post(
+                port, "/checkpointer-get-tuple", {"thread_id": thread_id}
+            )
+            assert get_res.status_code == 200, get_res.text
+            assert get_res.json()["checkpoint_id"] == checkpoint_id
+
+            list_res = self._post(port, "/checkpointer-list", {"thread_id": thread_id})
+            assert list_res.status_code == 200, list_res.text
+            assert [c["checkpoint_id"] for c in list_res.json()["checkpoints"]] == [
+                checkpoint_id
+            ]
+        finally:
+            self._post(port, "/checkpointer-delete-thread", {"thread_id": thread_id})
+
 
 class TestWorkerCheckpointerCrud(_WorkerCheckpointerCrudBase):
     """Async path: aput/aget_tuple/aput_writes/alist/adelete_thread."""
@@ -187,6 +232,31 @@ class TestWorkerCheckpointerCrudSync(_WorkerCheckpointerCrudBase):
 # MARK: - Full Graph Demo
 
 
+def _expected_history(start_value: int) -> list:
+    """State history of the Worker's add_one graph under InMemorySaver."""
+
+    def add_one(state: int) -> int:
+        return state + 1
+
+    builder = StateGraph(int)
+    builder.add_node("add_one", add_one)
+    builder.add_edge(START, "add_one")
+    builder.add_edge("add_one", END)
+    graph = builder.compile(checkpointer=InMemorySaver())
+
+    config = {"configurable": {"thread_id": "expected"}}
+    graph.invoke(start_value, config)
+    return [
+        {
+            "source": s.metadata["source"],
+            "step": s.metadata["step"],
+            "values": s.values,
+            "next": list(s.next),
+        }
+        for s in graph.get_state_history(config)
+    ]
+
+
 class TestWorkerCheckpointerGraph:
     def test_graph_compiles_and_runs_with_worker_saver(self, dev_server) -> None:
         port = dev_server
@@ -204,6 +274,11 @@ class TestWorkerCheckpointerGraph:
         assert data["input"] == 3
         assert data["result"] == 4
         assert data["checkpoint_id"]
+
+        # Same history InMemorySaver gives for the same graph and input.
+        assert data["history"] == _expected_history(3)
+        assert data["input_next"] == ["__start__"]
+        assert data["replay_result"] == 4
 
         requests.post(
             f"http://localhost:{port}/checkpointer-delete-thread",

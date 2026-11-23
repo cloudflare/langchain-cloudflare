@@ -74,8 +74,9 @@ class Default(WorkerEntrypoint):
                     ),
                     "/checkpointer-graph": (
                         "POST - compile and run a StateGraph using the "
-                        "checkpointer (graph.ainvoke; graph.invoke can't run "
-                        "in a Worker with any checkpointer, see "
+                        "checkpointer, then read its state history and replay "
+                        "from the input checkpoint (graph.ainvoke; graph.invoke "
+                        "can't run in a Worker with any checkpointer, see "
                         "WorkerCloudflareD1Saver's docstring)"
                     ),
                 },
@@ -291,6 +292,13 @@ class Default(WorkerEntrypoint):
         result = await graph.ainvoke(start_value, config)
         state = await graph.aget_state(config)
 
+        # Read back every checkpoint of the run, then replay from the input
+        # checkpoint (step -1), as time travel / forking would.
+        history = [s async for s in graph.aget_state_history(config)]
+        input_config = next(s.config for s in history if s.metadata["step"] == -1)
+        input_state = await graph.aget_state(input_config)
+        replay_result = await graph.ainvoke(None, input_config)
+
         return Response.json(
             {
                 "success": True,
@@ -298,5 +306,16 @@ class Default(WorkerEntrypoint):
                 "input": start_value,
                 "result": result,
                 "checkpoint_id": state.config["configurable"]["checkpoint_id"],
+                "history": [
+                    {
+                        "source": s.metadata["source"],
+                        "step": s.metadata["step"],
+                        "values": s.values,
+                        "next": list(s.next),
+                    }
+                    for s in history
+                ],
+                "input_next": list(input_state.next),
+                "replay_result": replay_result,
             }
         )
